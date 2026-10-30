@@ -1,0 +1,413 @@
+{
+ "yes": {
+  "where": [
+   "here",
+   "keep"
+  ],
+  "model": null,
+  "effort": null
+ },
+ "option2": {
+  "where": [
+   "here",
+   "keep"
+  ],
+  "model": null,
+  "effort": null
+ },
+ "thanks": {
+  "where": [
+   "here",
+   "keep"
+  ],
+  "model": null,
+  "effort": null
+ },
+ "cz_yes": {
+  "where": [
+   "here",
+   "keep"
+  ],
+  "model": null,
+  "effort": null
+ },
+ "es_yes": {
+  "where": [
+   "here",
+   "keep"
+  ],
+  "model": null,
+  "effort": null
+ },
+ "hi": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low"
+  ]
+ },
+ "fact": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "why": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "de_why": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ],
+  "why_lang": "German"
+ },
+ "followfix": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "medium",
+   "high"
+  ]
+ },
+ "nextiter": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "runtests": {
+  "where": [
+   "subagent",
+   "here"
+  ],
+  "model": [
+   "haiku"
+  ],
+  "effort": [
+   "low"
+  ]
+ },
+ "cz_lint": {
+  "where": [
+   "subagent",
+   "here"
+  ],
+  "model": [
+   "haiku"
+  ],
+  "effort": [
+   "low"
+  ],
+  "why_lang": "Czech"
+ },
+ "findusage": {
+  "where": [
+   "subagent",
+   "here"
+  ],
+  "model": [
+   "haiku"
+  ],
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "readlog": {
+  "where": [
+   "subagent"
+  ],
+  "model": [
+   "haiku",
+   "sonnet"
+  ],
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "changelog": {
+  "where": [
+   "subagent",
+   "session",
+   "here"
+  ],
+  "model": [
+   "haiku",
+   "sonnet"
+  ],
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "newfeature": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus",
+   "sonnet"
+  ],
+  "effort": [
+   "medium",
+   "high"
+  ]
+ },
+ "cz_newfeature": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus",
+   "sonnet"
+  ],
+  "effort": [
+   "medium",
+   "high"
+  ],
+  "why_lang": "Czech"
+ },
+ "strings": {
+  "where": [
+   "session",
+   "subagent"
+  ],
+  "model": [
+   "sonnet",
+   "haiku"
+  ],
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "rename": {
+  "where": [
+   "session",
+   "subagent"
+  ],
+  "model": [
+   "sonnet",
+   "haiku"
+  ],
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "port": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "sonnet"
+  ],
+  "effort": [
+   "medium"
+  ]
+ },
+ "payreview": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus"
+  ],
+  "effort": [
+   "high"
+  ]
+ },
+ "migration": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus"
+  ],
+  "effort": [
+   "high"
+  ]
+ },
+ "bughunt": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus"
+  ],
+  "effort": [
+   "high"
+  ]
+ },
+ "auth": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus"
+  ],
+  "effort": [
+   "high"
+  ]
+ },
+ "b_follow": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "b_where": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "b_mobile": {
+  "where": [
+   "here",
+   "session"
+  ],
+  "model": [
+   "sonnet",
+   "opus"
+  ],
+  "effort": [
+   "medium"
+  ]
+ },
+ "b_thanks": {
+  "where": [
+   "here",
+   "keep"
+  ],
+  "model": null,
+  "effort": null
+ },
+ "b_e2e": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus",
+   "sonnet"
+  ],
+  "effort": [
+   "medium",
+   "high"
+  ]
+ },
+ "b_sync": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus"
+  ],
+  "effort": [
+   "high",
+   "xhigh"
+  ]
+ },
+ "b_fr_why": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ],
+  "why_lang": "French"
+ },
+ "p_copy": {
+  "where": [
+   "here",
+   "subagent",
+   "session"
+  ],
+  "model": [
+   "haiku"
+  ],
+  "effort": [
+   "low"
+  ]
+ },
+ "p_pay": {
+  "where": [
+   "session"
+  ],
+  "model": [
+   "opus"
+  ],
+  "effort": [
+   "high"
+  ]
+ },
+ "p_follow": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ]
+ },
+ "p_cz": {
+  "where": [
+   "session",
+   "here"
+  ],
+  "model": [
+   "opus"
+  ],
+  "effort": [
+   "high"
+  ],
+  "why_lang": "Czech"
+ },
+ "p_lang": {
+  "where": [
+   "here"
+  ],
+  "model": null,
+  "effort": [
+   "low",
+   "medium"
+  ],
+  "why_lang": "Czech"
+ }
+}

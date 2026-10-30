@@ -1,0 +1,468 @@
+[
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "yes",
+  "prompt": "yes, go on"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "option2",
+  "prompt": "option 2"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "thanks",
+  "prompt": "thanks!"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "cz_yes",
+  "prompt": "ano, pokračuj"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "es_yes",
+  "prompt": "sí, hazlo"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "hi",
+  "prompt": "hi"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "fact",
+  "prompt": "what's the difference between let and const?"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "why",
+  "prompt": "why did grouping by id fix it?"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "de_why",
+  "prompt": "Kannst du kurz erklären, warum die Suche jetzt schneller ist?"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "followfix",
+  "prompt": "the new test fails on an empty search, fix that too"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "nextiter",
+  "prompt": "now dedupe the results in the mobile search screen the same way"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "runtests",
+  "prompt": "run the whole test suite and tell me only what fails"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "cz_lint",
+  "prompt": "spusť lint a testy a napiš jen chyby"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "findusage",
+  "prompt": "find every place that still calls the old searchRecipes() function"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "readlog",
+  "prompt": "read the CI log in logs/build-4512.txt (6000 lines) and tell me why the build broke"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "changelog",
+  "prompt": "write a short changelog for the release from the last 20 commits"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "newfeature",
+  "prompt": "unrelated: add a shopping list where you can tick off a recipe's ingredients"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "cz_newfeature",
+  "prompt": "Úplně jiná věc: přidej do appky export receptů do PDF"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "strings",
+  "prompt": "move all hardcoded texts on the settings screen into the translation files"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "rename",
+  "prompt": "rename RecipeCard to RecipeTile across the whole codebase"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "port",
+  "prompt": "port the finished Android onboarding screen to the iOS app"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "payreview",
+  "prompt": "review the premium plan checkout and payment code before the release"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "migration",
+  "prompt": "write a database migration that splits the name column into first and last name for 2 million users"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "bughunt",
+  "prompt": "users say the cooking timer notification sometimes fires twice, find the cause"
+ },
+ {
+  "first": "The recipe search returns duplicates when a recipe has two tags, fix it",
+  "recent": [
+   "still duplicates with three tags",
+   "add a test for it"
+  ],
+  "reply": "Fixed: the search query now groups by recipe id, and search.test.ts covers recipes with two and three tags. All search tests pass.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 85000,
+  "id": "auth",
+  "prompt": "the login token refresh sometimes logs users out, investigate"
+ },
+ {
+  "first": "Add dark mode to the web app settings page",
+  "recent": [],
+  "reply": "I added a theme toggle to SettingsPage.tsx. Colors now come from CSS variables in theme.css, with a dark set under [data-theme=dark].",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 12000,
+  "id": "b_follow",
+  "prompt": "the toggle doesn't remember the choice after a reload"
+ },
+ {
+  "first": "Add dark mode to the web app settings page",
+  "recent": [],
+  "reply": "I added a theme toggle to SettingsPage.tsx. Colors now come from CSS variables in theme.css, with a dark set under [data-theme=dark].",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 12000,
+  "id": "b_where",
+  "prompt": "where do we define the color tokens?"
+ },
+ {
+  "first": "Add dark mode to the web app settings page",
+  "recent": [],
+  "reply": "I added a theme toggle to SettingsPage.tsx. Colors now come from CSS variables in theme.css, with a dark set under [data-theme=dark].",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 12000,
+  "id": "b_mobile",
+  "prompt": "add the same dark mode to the mobile app settings"
+ },
+ {
+  "first": "Add dark mode to the web app settings page",
+  "recent": [],
+  "reply": "I added a theme toggle to SettingsPage.tsx. Colors now come from CSS variables in theme.css, with a dark set under [data-theme=dark].",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 12000,
+  "id": "b_thanks",
+  "prompt": "thanks, looks great"
+ },
+ {
+  "first": "Add dark mode to the web app settings page",
+  "recent": [],
+  "reply": "I added a theme toggle to SettingsPage.tsx. Colors now come from CSS variables in theme.css, with a dark set under [data-theme=dark].",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 12000,
+  "id": "b_e2e",
+  "prompt": "unrelated: set up end-to-end tests with Playwright for the whole web app"
+ },
+ {
+  "first": "Add dark mode to the web app settings page",
+  "recent": [],
+  "reply": "I added a theme toggle to SettingsPage.tsx. Colors now come from CSS variables in theme.css, with a dark set under [data-theme=dark].",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 12000,
+  "id": "b_sync",
+  "prompt": "rewrite the whole sync engine for offline support, it's critical, take your time, I'll be away all day"
+ },
+ {
+  "first": "Add dark mode to the web app settings page",
+  "recent": [],
+  "reply": "I added a theme toggle to SettingsPage.tsx. Colors now come from CSS variables in theme.css, with a dark set under [data-theme=dark].",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 12000,
+  "id": "b_fr_why",
+  "prompt": "pourquoi as-tu utilisé des variables CSS ?"
+ },
+ {
+  "first": "The order history screen shows prices without the currency, fix it",
+  "recent": [
+   "also on the receipt screen"
+  ],
+  "reply": "Fixed: prices now go through formatMoney() on the order history and receipt screens.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 60000,
+  "project": "a Flutter food delivery app with a Node.js backend and a marketing website",
+  "rules": "Anything that touches the payment provider: opus, high. Copy changes on the marketing website: haiku, low.",
+  "id": "p_copy",
+  "prompt": "change the hero headline on the marketing website to 'Dinner in 20 minutes'"
+ },
+ {
+  "first": "The order history screen shows prices without the currency, fix it",
+  "recent": [
+   "also on the receipt screen"
+  ],
+  "reply": "Fixed: prices now go through formatMoney() on the order history and receipt screens.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 60000,
+  "project": "a Flutter food delivery app with a Node.js backend and a marketing website",
+  "rules": "Anything that touches the payment provider: opus, high. Copy changes on the marketing website: haiku, low.",
+  "id": "p_pay",
+  "prompt": "unrelated: add Apple Pay to the checkout"
+ },
+ {
+  "first": "The order history screen shows prices without the currency, fix it",
+  "recent": [
+   "also on the receipt screen"
+  ],
+  "reply": "Fixed: prices now go through formatMoney() on the order history and receipt screens.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 60000,
+  "project": "a Flutter food delivery app with a Node.js backend and a marketing website",
+  "rules": "Anything that touches the payment provider: opus, high. Copy changes on the marketing website: haiku, low.",
+  "id": "p_follow",
+  "prompt": "the price on the cart screen has the same problem"
+ },
+ {
+  "first": "The order history screen shows prices without the currency, fix it",
+  "recent": [
+   "also on the receipt screen"
+  ],
+  "reply": "Fixed: prices now go through formatMoney() on the order history and receipt screens.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 60000,
+  "project": "a Flutter food delivery app with a Node.js backend and a marketing website",
+  "rules": "Anything that touches the payment provider: opus, high. Copy changes on the marketing website: haiku, low.",
+  "id": "p_cz",
+  "prompt": "Prosím zkontroluj, jestli refundace přes platební bránu správně vrací peníze"
+ },
+ {
+  "first": "The order history screen shows prices without the currency, fix it",
+  "recent": [
+   "also on the receipt screen"
+  ],
+  "reply": "Fixed: prices now go through formatMoney() on the order history and receipt screens.",
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "tokens": 60000,
+  "project": "a Flutter food delivery app with a Node.js backend and a marketing website",
+  "rules": "Anything that touches the payment provider: opus, high. Copy changes on the marketing website: haiku, low.",
+  "language": "Czech",
+  "id": "p_lang",
+  "prompt": "the receipt PDF also shows the price without currency"
+ }
+]

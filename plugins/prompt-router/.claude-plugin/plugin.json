@@ -1,0 +1,42 @@
+{
+  "name": "prompt-router",
+  "version": "0.2.0",
+  "description": "Before each prompt, picks where it belongs (this chat, a subagent or a new session), which model and which effort, and offers it",
+  "author": { "name": "Viktor Kadeřábek" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "project": {
+      "type": "string",
+      "title": "Project",
+      "description": "What your chats are about, in a few words (e.g. a React and Django web app). Empty: a software project.",
+      "default": ""
+    },
+    "rules": {
+      "type": "string",
+      "title": "Extra rules",
+      "description": "Your own routing rules, appended to the classifier prompt and taking precedence (e.g. Database migrations: opus, high.)",
+      "default": ""
+    },
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language for the reason and for the questions Claude asks (e.g. English, Czech). auto: the language of each prompt.",
+      "default": "auto"
+    },
+    "classifier": {
+      "type": "string",
+      "title": "Classifier model",
+      "description": "The model that makes the routing call on each prompt. haiku is cheaper, sonnet is more accurate.",
+      "default": "sonnet",
+      "options": ["sonnet", "haiku"]
+    },
+    "effortMode": {
+      "type": "string",
+      "title": "Effort mode",
+      "description": "auto: the router sets effort in this chat by itself. ask: it only tells Claude to offer the switch.",
+      "default": "auto",
+      "options": ["auto", "ask"]
+    }
+  }
+}
