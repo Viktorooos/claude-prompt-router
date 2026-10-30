@@ -17,7 +17,7 @@ type Model = keyof typeof MODELS
 type Pick = { where: Where; model: Model; effort: Level; why: string; first?: { now: Model | '' } }
 
 let home = ''
-let cfg: Config = { project: '', rules: '', language: 'auto', classifier: 'sonnet', effortMode: 'auto', modelMode: 'auto' }
+let cfg: Config = { project: '', rules: '', language: 'auto', classifier: 'sonnet', effortMode: 'ask', modelMode: 'ask' }
 let enabled = true
 // The level the main chat's last request ran at, and its model.
 let seen: Level | '' = ''
@@ -168,14 +168,14 @@ const TEMPLATE = `You route one prompt in a Claude Code chat about {{project}}. 
 WHERE
 - keep: the prompt only approves, answers a question or says to go on (yes, ok, go on, do it, option 2, or the same in another language). Answer keep for all three fields.
 - here: it builds on what this chat already read, found, decided or changed (a follow-up, a fix of what was just found, the next iteration, a question about it). Also here when the chat is still small (under 30k tokens) and the right model is the current one.
-- Also here for anything trivial that takes one short answer (a greeting, a quick fact, a one-line question): starting a subagent or a session costs more than answering it.
+- Also here for anything trivial that takes one short answer (a greeting, a quick fact, a one-line question) when it relates to this chat or the chat is under 60k tokens: starting a subagent or a session costs more than answering it. In a bigger chat every reply re-reads the whole context, so an unrelated task, even a trivial one, goes to session. A greeting or small talk is not a task and stays here.
 - subagent: a self-contained lookup, search, read of something big, build or run whose short answer is needed here, and that needs none of this chat's context.
-- session: unrelated to this chat (a new topic, another feature, a task that ends in its own branch or PR), or long mechanical work better done with a fresh context on a cheaper model. Pick session only when you are fairly sure; if unsure, here.
+- session: unrelated to this chat (a new topic, another feature, a task that ends in its own branch or PR, or anything unrelated at all once the chat is over 60k tokens), or long mechanical work better done with a fresh context on a cheaper model. Pick session only when you are fairly sure; if unsure, here.
 
 {{model_head}}
-- haiku: anything that takes one short answer and no code changes (a short message or email, a translation, a quick fact, a regex or one command); running builds, lint or tests; reading and summarizing; searching the codebase.
+- haiku: anything that takes one short answer and no code changes, except a greeting or opener with no task yet, which keeps the current model (a short message or email, a translation, a quick fact, a regex or one command); running builds, lint or tests; reading and summarizing; searching the codebase.
 - sonnet: mechanical edits by an existing pattern (strings, renames, porting finished code to another platform), clicking through an app, writing summaries.
-- opus: new logic, architecture, debugging, code review, anything risky (money, user data, security, auth). Also opus when the work is open-ended or its size is unclear.
+- opus: new logic, architecture, debugging, code review, anything risky (money, user data, security, auth, rewriting git history, force pushes, deleting data or anything else hard to undo). Also opus when the work is open-ended or its size is unclear.
 
 EFFORT
 - low: simple, mechanical or rule-following work, a greeting, a short message or a quick answer, or work the person will iterate on with Claude.
@@ -315,22 +315,37 @@ function userLang() {
   return cfg.language && cfg.language.toLowerCase() !== 'auto' ? cfg.language : "the user's language (the language of this prompt)"
 }
 
-function askNote(p: Pick, now: Level | '') {
+// Here keeps its own effort choice: a lower effort fits a task even when it stays in this chat.
+function askNote(p: Pick, now: Level | '', midTurn = false) {
   const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
   const where = p.where === 'session' ? 'a new session' : 'a subagent'
   const session = `"New session (${label})"`
   const agent = `"Subagent (${label})"`
-  const here = `"Do it here"`
+  const effort = !midTurn && p.effort !== now
+  const switchHere = `"Do it here (${NAMES[p.effort]})"`
+  const keepHere = now ? `"Do it here (keep ${NAMES[now]})"` : `"Do it here (keep the effort)"`
+  const here = !effort ? `"Do it here"` : cfg.effortMode === 'ask' ? `${switchHere}, ${keepHere}` : switchHere
   const options = p.where === 'session' ? `${session}, ${agent}, ${here}` : `${agent}, ${here}`
-  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang()}. Then: new session = call start_session right away with initiation "user_asked", context "fresh", model "${MODELS[p.model]}", effort "${p.effort}", use_worktree true only when the task changes code, prompt = the task from this message, background = what it needs to know; here, say in one line where the work went. Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. Do it here = continue normally.`
+  const hereThen = !effort
+    ? 'Do it here = continue normally.'
+    : cfg.effortMode === 'ask'
+      ? `${switchHere} = change the effort with set_session_effort "${p.effort}" (or tell the user to run /effort ${p.effort}), then handle the prompt; ${keepHere} = continue normally.`
+      : `${switchHere} = change the effort with set_session_effort "${p.effort}" (or tell the user to run /effort ${p.effort}), then handle the prompt.`
+  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang()}. Then: new session = call start_session right away with initiation "user_asked", context "fresh", model "${MODELS[p.model]}", effort "${p.effort}", use_worktree true only when the task changes code, prompt = the task from this message, background = what it needs to know; here, say in one line where the work went. Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${hereThen}`
 }
 
-function modelNote(p: Pick, from: Model) {
-  return `Prompt Router suggests running this new chat on ${MODEL_NAMES[p.model]} instead of ${MODEL_NAMES[from]}${p.why ? `, because: ${p.why}` : ''}. Start your reply with one short line in ${userLang()} offering the switch (the model picker, or /model ${p.model}), then handle the prompt normally.`
-}
-
-function effortNote(p: Pick, now: Level | '') {
-  return `Prompt Router suggests effort ${p.effort} for this prompt (now ${now || 'unknown'})${p.why ? `, because: ${p.why}` : ''}. Start your reply with one short line in ${userLang()} offering the switch with /effort ${p.effort}, then handle the prompt normally.`
+// The person decides: one dialog for the model and effort changes the router would make.
+function switchNote(p: Pick, model: { from: Model } | null, effort: { now: Level | '' } | null) {
+  const parts = [
+    model ? `model ${MODEL_NAMES[p.model]} instead of ${MODEL_NAMES[model.from]}` : '',
+    effort ? `effort ${p.effort} instead of ${effort.now || 'unknown'}` : '',
+  ].filter(Boolean)
+  const label = [model ? MODEL_NAMES[p.model] : '', effort ? NAMES[p.effort] : ''].filter(Boolean).join(' · ')
+  const how = [
+    model ? `the model with set_session_model "${MODELS[p.model]}" (or tell the user to run /model ${p.model})` : '',
+    effort ? `the effort with set_session_effort "${p.effort}" (or tell the user to run /effort ${p.effort})` : '',
+  ].filter(Boolean).join(' and ')
+  return `Prompt Router suggests ${parts.join(' and ')} for this prompt${p.why ? `, because: ${p.why}` : ''}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Switch?" with the reason in one sentence) with the options "Switch (${label})", "Keep as is", the recommended one first. Write the question and options in ${userLang()}. On Switch, change ${how}, then handle the prompt; on Keep as is, handle the prompt normally.`
 }
 
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
@@ -357,20 +372,22 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   if (!p) return e
 
   if (p.where === 'here') {
-    const notes: string[] = []
+    // A prompt typed over a running turn belongs to that work: its model and effort stay.
+    if (e.turnId) return e
     const changes: string[] = []
+    let askModel: { from: Model } | null = null
+    let askEffort: { now: Level | '' } | null = null
     // A new chat: the model it starts on may not fit the task.
     const from = p.first?.now
     if (from && p.model !== from && cfg.modelMode !== 'off') {
-      if (cfg.modelMode === 'ask') notes.push(modelNote(p, from))
+      if (cfg.modelMode === 'ask') askModel = { from }
       else {
         await applyModel($, p.model)
         changes.push(`Model: ${MODEL_NAMES[p.model]} (was ${MODEL_NAMES[from]})`)
       }
     }
-    // Effort alone is set by itself: a question would cost a turn on every prompt.
     if (p.effort !== now) {
-      if (cfg.effortMode === 'ask') notes.push(effortNote(p, now))
+      if (cfg.effortMode === 'ask') askEffort = { now }
       else {
         await applyLevel($, p.effort)
         changes.push(`Effort: ${NAMES[p.effort]}${now ? ` (was ${NAMES[now]})` : ''}`)
@@ -383,11 +400,11 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
         // The footer label still shows it.
       }
     }
-    return notes.length ? { ...e, text: `${e.text}\n\n${notes.map(n => `[${n}]`).join('\n')}` } : e
+    return askModel || askEffort ? { ...e, text: `${e.text}\n\n[${switchNote(p, askModel, askEffort)}]` } : e
   }
   // A mod's own dialog does not open at prompt time in the app, so Claude asks with the same options.
   // `context` does not reach the model for prompts from the app, so the note rides on the text.
-  return ({ ...e, text: `${e.text}\n\n[${askNote(p, now)}]` })
+  return ({ ...e, text: `${e.text}\n\n[${askNote(p, now, !!e.turnId)}]` })
 }
 
 function str(v: unknown, fallback: string) {
@@ -400,8 +417,8 @@ export const register: Register = (on, options) => {
     rules: str(options.rules, ''),
     language: str(options.language, 'auto').trim() || 'auto',
     classifier: options.classifier === 'haiku' || options.classifier === 'opus' ? options.classifier : 'sonnet',
-    effortMode: options.effortMode === 'ask' ? 'ask' : 'auto',
-    modelMode: options.modelMode === 'ask' ? 'ask' : options.modelMode === 'off' ? 'off' : 'auto',
+    effortMode: options.effortMode === 'auto' ? 'auto' : 'ask',
+    modelMode: options.modelMode === 'auto' ? 'auto' : options.modelMode === 'off' ? 'off' : 'ask',
   }
   on('session.start', async ($, e, next) => {
     home = $.plugin.root.split('/.claude/')[0] ?? ''

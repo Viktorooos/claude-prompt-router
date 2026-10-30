@@ -50,7 +50,7 @@
   },
   "fact": {
     "where": [
-      "here"
+      "session"
     ],
     "model": null,
     "effort": [
@@ -588,7 +588,8 @@
     ],
     "model": [
       "haiku",
-      "sonnet"
+      "sonnet",
+      "opus"
     ],
     "effort": [
       "low",
@@ -1020,6 +1021,123 @@
     "effort": null
   },
   "n_tests": {
+    "where": [
+      "subagent",
+      "here"
+    ],
+    "model": [
+      "haiku"
+    ],
+    "effort": [
+      "low"
+    ]
+  },
+  "u_small": {
+    "where": [
+      "here",
+      "session"
+    ],
+    "model": [
+      "haiku",
+      "sonnet"
+    ],
+    "effort": [
+      "low"
+    ]
+  },
+  "u_mid": {
+    "where": [
+      "session"
+    ],
+    "model": [
+      "haiku",
+      "sonnet"
+    ],
+    "effort": [
+      "low"
+    ]
+  },
+  "u_big": {
+    "where": [
+      "session"
+    ],
+    "model": [
+      "haiku",
+      "sonnet"
+    ],
+    "effort": [
+      "low"
+    ]
+  },
+  "u_big_fact": {
+    "where": [
+      "session"
+    ],
+    "model": [
+      "haiku",
+      "sonnet"
+    ],
+    "effort": [
+      "low"
+    ]
+  },
+  "u_big_email": {
+    "where": [
+      "session"
+    ],
+    "model": [
+      "haiku",
+      "sonnet"
+    ],
+    "effort": [
+      "low"
+    ]
+  },
+  "r_big_why": {
+    "where": [
+      "here"
+    ],
+    "model": null,
+    "effort": [
+      "low",
+      "medium"
+    ]
+  },
+  "r_big_thanks": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": null,
+    "effort": null
+  },
+  "h_rewrite": {
+    "where": [
+      "here",
+      "session"
+    ],
+    "model": [
+      "opus"
+    ],
+    "effort": [
+      "medium",
+      "high"
+    ]
+  },
+  "h_force": {
+    "where": [
+      "here",
+      "session"
+    ],
+    "model": [
+      "opus"
+    ],
+    "effort": [
+      "medium",
+      "high"
+    ]
+  },
+  "h_search": {
     "where": [
       "subagent",
       "here"

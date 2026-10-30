@@ -77,7 +77,7 @@ async function submit($: any, text: string) {
   await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } })
 }
 
-test('here with another effort: sets effort itself and shows a toast', async ($: any, on: any) => {
+test('here with another effort: sets effort itself and shows a toast (auto)', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
   const seen = engine(on, PICK.here)
   await start($)
   await submit($, 'the new test fails on an empty search, fix that too')
@@ -124,7 +124,8 @@ test('subagent pick: appends the AskUserQuestion note with the Agent call', asyn
   expect(t.startsWith('run the whole test suite and tell me what fails\n\n[Prompt Router suggests')).toBe(true)
   expect(t).toMatch(/in a subagent \(Haiku · low\), because: just run the tests/)
   expect(t).toMatch(/AskUserQuestion/)
-  expect(t).toMatch(/"Subagent \(Haiku · low\)", "Do it here"/)
+  expect(t).toMatch(/"Subagent \(Haiku · low\)", "Do it here \(Low\)", "Do it here \(keep Medium\)"/)
+  expect(t).toMatch(/"Do it here \(Low\)" = change the effort with set_session_effort "low"/)
   expect(t).toMatch(/Agent tool with model "haiku" and effort "low"/)
   expect(t).not.toMatch(/New session/)
   expect(seen.sets).toEqual([])
@@ -159,7 +160,7 @@ const MODEL_ROW = {
   isLocked: false,
 }
 
-test('first prompt, another model fits: switches the model setting and says so', async ($: any, on: any) => {
+test('first prompt, another model fits: switches the model setting and says so (auto)', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
   const seen = engine(on, PICK.session, { isFirst: true, rows: [MODEL_ROW] })
   await start($)
   await submit($, 'rename every string key from snake to camel case')
@@ -169,7 +170,7 @@ test('first prompt, another model fits: switches the model setting and says so',
   expect(seen.sent).toEqual(['rename every string key from snake to camel case'])
 })
 
-test('first prompt without a model setting: holds the model on main-chat requests', async ($: any, on: any) => {
+test('first prompt without a model setting: holds the model on main-chat requests (auto)', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
   const seen = engine(on, PICK.session, { isFirst: true })
   await start($)
   await submit($, 'rename every string key')
@@ -190,8 +191,8 @@ test('modelMode ask: does not switch, tells Claude to offer it', { options: { mo
   const seen = engine(on, PICK.subagent, { isFirst: true, rows: [MODEL_ROW] })
   await start($)
   await submit($, 'run the tests')
-  expect(seen.sets).toEqual(['low'])
-  expect(seen.sent[0]).toMatch(/^run the tests\n\n\[Prompt Router suggests running this new chat on Haiku instead of Opus/)
+  expect(seen.sets).toEqual([])
+  expect(seen.sent[0]).toMatch(/^run the tests\n\n\[Prompt Router suggests model Haiku instead of Opus and effort low instead of medium/)
 })
 
 test('modelMode off: the model is never judged', { options: { modelMode: 'off' } } as any, async ($: any, on: any) => {
@@ -286,7 +287,7 @@ test('/router off, on and status', async ($: any, on: any) => {
   expect(seen.sent).toEqual(['run the tests'])
   expect(seen.prompts).toEqual([])
   const status = await $.command.run({ command: 'router', args: '' })
-  expect(status.text).toMatch(/^Prompt Router is off \(classifier sonnet, effort mode auto, model mode auto\)\./)
+  expect(status.text).toMatch(/^Prompt Router is off \(classifier sonnet, effort mode ask, model mode ask\)\./)
   expect(status.text).toMatch(/Commands: \/router off, \/router on\./)
   const back = await $.command.run({ command: 'router', args: 'on' })
   expect(back.text).toBe('Prompt Router is on.')
@@ -295,7 +296,7 @@ test('/router off, on and status', async ($: any, on: any) => {
   expect(seen.sent[1]).toMatch(/Prompt Router suggests/)
 })
 
-test('first prompt: an empty session model falls back to the model setting', async ($: any, on: any) => {
+test('first prompt: an empty session model falls back to the model setting (auto)', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
   const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "low", "why": "short message"}', { isFirst: true, model: '', rows: [MODEL_ROW] })
   await start($)
   await submit($, 'write a message wishing a colleague a nice day')
@@ -335,4 +336,51 @@ test('classifier opus: the routing call runs on Opus', { options: { classifier: 
   await start($)
   await submit($, 'and the mobile search too')
   expect(seen.models).toEqual(['claude-opus-5-5'])
+})
+
+test('defaults ask: one dialog for model and effort, nothing switched', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "low", "why": "short message"}', { isFirst: true, rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'write a message wishing a colleague a nice day')
+  expect(seen.sets).toEqual([])
+  expect(seen.toasts).toEqual([])
+  expect(seen.sent[0]).toMatch(/suggests model Haiku instead of Opus and effort low instead of medium/)
+  expect(seen.sent[0]).toMatch(/AskUserQuestion/)
+  expect(seen.sent[0]).toMatch(/"Switch \(Haiku · Low\)", "Keep as is"/)
+  expect(seen.sent[0]).toMatch(/set_session_model "claude-haiku-5-5"/)
+  expect(seen.sent[0]).toMatch(/set_session_effort "low"/)
+})
+
+test('defaults ask: an effort change alone is asked too', async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.sets).toEqual([])
+  expect(seen.sent[0]).toMatch(/suggests effort low instead of medium/)
+  expect(seen.sent[0]).not.toMatch(/model Opus/)
+  expect(seen.sent[0]).toMatch(/"Switch \(Low\)", "Keep as is"/)
+})
+
+test('a prompt typed over a running turn keeps model and effort', async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  await start($)
+  await $.prompt.submit({ text: 'and push it', wait: false, origin: { kind: 'composer' }, turnId: 't1' })
+  expect(seen.sent).toEqual(['and push it'])
+})
+
+test('a prompt typed over a running turn still offers a session', async ($: any, on: any) => {
+  const seen = engine(on, PICK.session)
+  await start($)
+  await $.prompt.submit({ text: 'unrelated: a shopping list', wait: false, origin: { kind: 'composer' }, turnId: 't1' })
+  expect(seen.sent[0]).toMatch(/Prompt Router suggests running this prompt in a new session/)
+})
+
+test('subagent pick (auto): Do it here switches the effort too', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.subagent)
+  await start($)
+  await submit($, 'run the whole test suite and tell me what fails')
+  const t = seen.sent[0] ?? ''
+  expect(t).toMatch(/"Subagent \(Haiku · low\)", "Do it here \(Low\)"/)
+  expect(t).not.toMatch(/keep Medium/)
+  expect(seen.sets).toEqual([])
 })

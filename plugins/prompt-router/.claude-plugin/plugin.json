@@ -1,6 +1,6 @@
 {
   "name": "prompt-router",
-  "version": "0.3.2",
+  "version": "0.4.1",
   "description": "Before each prompt, picks where it belongs (this chat, a subagent or a new session), which model and which effort, and offers it",
   "author": { "name": "Viktor Kadeřábek" },
   "license": "MIT",
@@ -34,15 +34,15 @@
     "effortMode": {
       "type": "string",
       "title": "Effort mode",
-      "description": "auto: the router sets effort in this chat by itself. ask: it only tells Claude to offer the switch.",
-      "default": "auto",
+      "description": "ask: Claude asks you in a dialog before the effort changes. auto: the router sets effort in this chat by itself.",
+      "default": "ask",
       "options": ["auto", "ask"]
     },
     "modelMode": {
       "type": "string",
       "title": "Model mode",
-      "description": "On the first prompt of a new chat, checks whether the selected model fits the task. auto: switches it by itself. ask: tells Claude to offer the switch. off: never touches the model.",
-      "default": "auto",
+      "description": "On the first prompt of a new chat, checks whether the selected model fits the task. ask: Claude asks you in a dialog before switching. auto: switches it by itself. off: never touches the model.",
+      "default": "ask",
       "options": ["auto", "ask", "off"]
     }
   }

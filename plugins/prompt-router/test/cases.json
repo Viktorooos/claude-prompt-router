@@ -1004,5 +1004,125 @@
     "prompt": "spusť testy a lint a vrať jen chyby",
     "model": "claude-opus-5-5",
     "tokens": 40000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "u_small",
+    "prompt": "napiš mi nákupní seznam",
+    "tokens": 20000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "u_mid",
+    "prompt": "napiš mi nákupní seznam",
+    "tokens": 90000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "u_big",
+    "prompt": "napiš mi nákupní seznam",
+    "tokens": 181000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "u_big_fact",
+    "prompt": "what's the capital of Australia?",
+    "tokens": 180000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "u_big_email",
+    "prompt": "napiš e-mail pronajímateli, že v pátek nebudu doma",
+    "tokens": 150000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "r_big_why",
+    "prompt": "proč jsi v grafu použil ty barvy?",
+    "tokens": 180000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "r_big_thanks",
+    "prompt": "díky, super",
+    "tokens": 180000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "h_rewrite",
+    "prompt": "a v repu projdi commity ať v žádném není contributor claude, jenom já",
+    "tokens": 40000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "h_force",
+    "prompt": "force pushni main s přepsanou historií",
+    "tokens": 40000
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "id": "h_search",
+    "prompt": "najdi v git historii commit, který přidal PriceFormatter",
+    "tokens": 40000
   }
 ]

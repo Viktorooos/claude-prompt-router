@@ -38,8 +38,10 @@ Approvals ("yes", "go on", "option 2"), slash commands and prompts where nothing
 | `rules` | Your own routing rules, appended to the classifier prompt; they win over the built-in ones | empty |
 | `language` | Language of the reason and of the questions Claude asks | `auto` (the language of each prompt) |
 | `classifier` | Model that makes the routing call: `sonnet`, `haiku` (cheaper, less accurate) or `opus` (most accurate, slowest and most expensive) | `sonnet` |
-| `effortMode` | `auto` sets effort in this chat by itself; `ask` only has Claude offer `/effort <level>` | `auto` |
-| `modelMode` | On the first prompt of a new chat: `auto` switches to the model that fits; `ask` only has Claude offer the switch; `off` never touches the model | `auto` |
+| `effortMode` | `ask`: Claude asks you in a dialog before the effort changes; `auto` sets it by itself | `ask` |
+| `modelMode` | On the first prompt of a new chat: `ask` has Claude ask in a dialog before switching; `auto` switches by itself; `off` never touches the model | `ask` |
+
+You decide: a session, a subagent, a model or an effort change is always offered in one dialog (Switch / Keep as is) unless you set the mode to `auto`. When a new session or a subagent is offered, "Do it here" carries the suggested effort too: with `effortMode` `ask` you get "Do it here (Low)" and "Do it here (keep Medium)", with `auto` just "Do it here (Low)". A prompt typed while a turn is running keeps the model and effort. In a chat over 60k tokens an unrelated task, even a trivial one, is offered a new session, since every reply there re-reads the whole context.
 
 Example:
 
