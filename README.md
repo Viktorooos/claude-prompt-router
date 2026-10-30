@@ -26,7 +26,7 @@ Approvals ("yes", "go on", "option 2"), slash commands and prompts where nothing
 ## Install
 
 ```
-/plugin marketplace add ViktorKaderabek/prompt-router
+/plugin marketplace add Viktorooos/prompt-router
 /plugin install prompt-router@prompt-router
 ```
 
