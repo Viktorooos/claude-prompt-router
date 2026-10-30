@@ -69,3 +69,17 @@ Mod smí importovat soubory ze své složky, proto jádro bydlí uvnitř modu.
 - Codex efforty se liší podle modelu (luna nemá `ultra`); mapovat jen na podporované.
 - `transcript_path` formát není stabilní: chyba čtení = klasifikace bez historie, nikdy pád.
 - Claude Code mod: po kroku 1 nesmí změnit ani znak výstupu (golden test).
+
+## Stav (2026-10-31)
+- [x] Krok 0: commit bd0b2dd na `main` (ff merge `fix/reliability`). Nic nepushnuto.
+- Krok 1 rozdělaný: větev `feat/multi-platform`. Postup: přesunout doslova z `hooks/register.tsx` do `core/router.ts`
+  (s `export`): `LEVELS`, `NAMES`, `MODELS`, `MODEL_NAMES`, `ALL_MODELS`, typy `Where/Config/Model/Pick/Chat`
+  (Chat bez `conf` z globálu: `chatOf` zůstává v modu), `norm`, `asLevel`, `knownModel`, `asModel`, `typed`, `clip`,
+  `TEMPLATE`, `MODEL_HEAD_FIRST`, `MODEL_HEAD`, `FABLE_RULE`, `pickPrompt`, `field`, `parsePick`, `str`, `toConfig`.
+  `Level` zůstává v `types/index.d.ts` (jádro ho re-exportuje/definuje stejně).
+  Golden: skript porovná těla přesunutých bloků s `git show main:plugins/prompt-router/hooks/register.tsx` (bez `export `),
+  plus 47/47 `claude plugin test plugins/prompt-router` a `claude plugin validate plugins/prompt-router`.
+- Pak krok 3 plánu chatu: ověřit, jestli běžící Codex session znovu čte `~/.codex/config.toml` (rozhodne Codex auto: dialog
+  přes MCP elicitation + zápis configu, nebo jen řádek `/model …`). Uživatelův config: model gpt-5.6-sol, effort high.
+- Codex mapování (výchozí, nastavitelné): haiku→gpt-5.6-luna, sonnet→gpt-5.6-terra, opus→gpt-5.6-sol, fable→gpt-6.1-sol;
+  klasifikátor `codex exec -m gpt-5.6-luna -c model_reasoning_effort=low --ephemeral --skip-git-repo-check -s read-only`.
