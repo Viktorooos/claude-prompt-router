@@ -1,6 +1,6 @@
 {
   "name": "prompt-router",
-  "version": "0.2.0",
+  "version": "0.3.2",
   "description": "Before each prompt, picks where it belongs (this chat, a subagent or a new session), which model and which effort, and offers it",
   "author": { "name": "Viktor Kadeřábek" },
   "license": "MIT",
@@ -27,9 +27,9 @@
     "classifier": {
       "type": "string",
       "title": "Classifier model",
-      "description": "The model that makes the routing call on each prompt. haiku is cheaper, sonnet is more accurate.",
+      "description": "The model that makes the routing call on each prompt. haiku is the cheapest and fastest, sonnet the default, opus the most accurate but slowest and most expensive (it runs on every prompt).",
       "default": "sonnet",
-      "options": ["sonnet", "haiku"]
+      "options": ["sonnet", "haiku", "opus"]
     },
     "effortMode": {
       "type": "string",
@@ -37,6 +37,13 @@
       "description": "auto: the router sets effort in this chat by itself. ask: it only tells Claude to offer the switch.",
       "default": "auto",
       "options": ["auto", "ask"]
+    },
+    "modelMode": {
+      "type": "string",
+      "title": "Model mode",
+      "description": "On the first prompt of a new chat, checks whether the selected model fits the task. auto: switches it by itself. ask: tells Claude to offer the switch. off: never touches the model.",
+      "default": "auto",
+      "options": ["auto", "ask", "off"]
     }
   }
 }

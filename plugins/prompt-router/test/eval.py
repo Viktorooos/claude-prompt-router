@@ -11,7 +11,9 @@ for path in sys.argv[1:]:
         model = f[2] if len(f) > 2 else ""; effort = f[3] if len(f) > 3 else ""
         errs = []
         if where not in e["where"]: errs.append(f"where {where} (want {'/'.join(e['where'])})")
-        elif where in ("subagent", "session") and e["model"] and model not in e["model"]: errs.append(f"model {model} (want {'/'.join(e['model'])})")
+        # A first prompt names the model for the whole chat; keep leaves the current one.
+        elif e.get("first") and where != "keep" and e["model"] and model not in e["model"]: errs.append(f"model {model} (want {'/'.join(e['model'])})")
+        elif not e.get("first") and where in ("subagent", "session") and e["model"] and model not in e["model"]: errs.append(f"model {model} (want {'/'.join(e['model'])})")
         if where != "keep" and e["effort"] and effort not in e["effort"]: errs.append(f"effort {effort} (want {'/'.join(e['effort'])})")
         if errs: bad += 1; print(f"✗ {f[0]}: {'; '.join(errs)} | {f[-1]}")
         else: ok += 1

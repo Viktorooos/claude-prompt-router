@@ -22,7 +22,7 @@ const EFFORT_ROW = {
 type Seen = { prompts: string[]; models: string[]; sent: string[]; sets: unknown[]; toasts: string[]; store: Map<string, unknown> }
 
 // Stands for the engine beneath the plugin: each `$` call it makes is answered here.
-function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean } = {}): Seen {
+function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string> } = {}): Seen {
   const seen: Seen = { prompts: [], models: [], sent: [], sets: [], toasts: [], store: new Map() }
   const messages = opts.isFirst
     ? []
@@ -40,8 +40,9 @@ function engine(on: any, reply: string | (() => string), opts: { isFirst?: boole
     return { value: { isAnswered: true, text, usage: { input_tokens: 1, output_tokens: 1 } } }
   })
   on('session.messages', () => ({ value: messages }))
+  on('session.model', () => ({ value: opts.model ?? 'claude-opus-5-5' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 85000 }, rateLimits: [] } }))
-  on('config.list', () => ({ value: [EFFORT_ROW] }))
+  on('config.list', () => ({ value: [EFFORT_ROW, ...(opts.rows ?? [])] }))
   on('config.set', (_: unknown, e: any) => {
     seen.sets.push(e.value)
     return { value: e.value }
@@ -58,7 +59,7 @@ function engine(on: any, reply: string | (() => string), opts: { isFirst?: boole
     return { value: undefined }
   })
   on('fs.exists', () => ({ value: false }))
-  on('fs.read', () => ({ value: '' }))
+  on('fs.read', (_: unknown, e: any) => ({ value: opts.files?.[e.path] ?? '' }))
   on('fs.write', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 0 }))
   on('prompt.submit', (_: unknown, e: any) => {
@@ -141,11 +142,73 @@ test('session pick: offers a new session first, with start_session', async ($: a
 })
 
 test('the first prompt of a chat stays here', async ($: any, on: any) => {
-  const seen = engine(on, PICK.session, { isFirst: true })
+  const seen = engine(on, PICK.session, { isFirst: true, model: 'claude-sonnet-5-5' })
   await start($)
   await submit($, 'add a shopping list')
   expect(seen.sent).toEqual(['add a shopping list'])
   expect(seen.sets).toEqual([])
+})
+
+const MODEL_ROW = {
+  key: 'model',
+  label: 'Model',
+  kind: 'choice',
+  value: 'opus',
+  options: ['default', 'opus', 'opus[1m]', 'sonnet', 'haiku'],
+  provider: { plugin: 'engine' },
+  isLocked: false,
+}
+
+test('first prompt, another model fits: switches the model setting and says so', async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { isFirst: true, rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'rename every string key from snake to camel case')
+  expect(seen.prompts[0]).toMatch(/FIRST prompt of a new chat/)
+  expect(seen.sets).toEqual(['sonnet'])
+  expect(seen.toasts.join(' ')).toMatch(/Model: Sonnet \(was Opus\), unrelated feature/)
+  expect(seen.sent).toEqual(['rename every string key from snake to camel case'])
+})
+
+test('first prompt without a model setting: holds the model on main-chat requests', async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { isFirst: true })
+  await start($)
+  await submit($, 'rename every string key')
+  expect(seen.toasts.join(' ')).toMatch(/Model: Sonnet \(was Opus\)/)
+  const status = await $.command.run({ command: 'router', args: '' })
+  expect(status.text).toMatch(/runs on claude-sonnet-5-5 \(held by the router\)/)
+})
+
+test('first prompt, the current model fits: the model stays', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same, { isFirst: true, rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'design the offline sync')
+  expect(seen.sets).toEqual([])
+  expect(seen.toasts).toEqual([])
+})
+
+test('modelMode ask: does not switch, tells Claude to offer it', { options: { modelMode: 'ask' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.subagent, { isFirst: true, rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'run the tests')
+  expect(seen.sets).toEqual(['low'])
+  expect(seen.sent[0]).toMatch(/^run the tests\n\n\[Prompt Router suggests running this new chat on Haiku instead of Opus/)
+})
+
+test('modelMode off: the model is never judged', { options: { modelMode: 'off' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { isFirst: true, rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'rename every string key')
+  expect(seen.prompts[0]).not.toMatch(/FIRST prompt/)
+  expect(seen.sets).toEqual([])
+})
+
+test('a later prompt never switches the chat model', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "medium", "why": "fits"}', { rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'and the mobile search too')
+  expect(seen.prompts[0]).not.toMatch(/FIRST prompt/)
+  expect(seen.sets).toEqual([])
+  expect(seen.toasts).toEqual([])
 })
 
 test('config reaches the classifier prompt and model', { options: { project: 'a Flutter food delivery app', rules: 'Payments: opus, high.', language: 'Czech', classifier: 'haiku' } } as any, async ($: any, on: any) => {
@@ -223,11 +286,53 @@ test('/router off, on and status', async ($: any, on: any) => {
   expect(seen.sent).toEqual(['run the tests'])
   expect(seen.prompts).toEqual([])
   const status = await $.command.run({ command: 'router', args: '' })
-  expect(status.text).toMatch(/^Prompt Router is off \(classifier sonnet, effort mode auto\)\./)
+  expect(status.text).toMatch(/^Prompt Router is off \(classifier sonnet, effort mode auto, model mode auto\)\./)
   expect(status.text).toMatch(/Commands: \/router off, \/router on\./)
   const back = await $.command.run({ command: 'router', args: 'on' })
   expect(back.text).toBe('Prompt Router is on.')
   await submit($, 'run the tests')
   expect(seen.prompts.length).toBe(1)
   expect(seen.sent[1]).toMatch(/Prompt Router suggests/)
+})
+
+test('first prompt: an empty session model falls back to the model setting', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "low", "why": "short message"}', { isFirst: true, model: '', rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'write a message wishing a colleague a nice day')
+  expect(seen.prompts[0]).toMatch(/The chat now: model opus,/)
+  expect(seen.sets).toEqual(['haiku', 'low'])
+  expect(seen.toasts.join(' ')).toMatch(/Model: Haiku \(was Opus\), Effort: Low \(was Medium\), short message/)
+})
+
+test('first prompt with an unknown model: the model is left alone', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "medium", "why": "short"}', { isFirst: true, model: 'some-custom-model' })
+  await start($)
+  await submit($, 'write a message')
+  expect(seen.sets).toEqual([])
+  expect(seen.toasts).toEqual([])
+})
+
+test('a prompt holding {{slots}} reaches the classifier as written', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same)
+  await start($)
+  await submit($, 'why does {{project}} show up raw in the email template?')
+  expect(seen.prompts[0]).toMatch(/why does \{\{project\}\} show up raw/)
+  expect(seen.prompts[0]).not.toMatch(/\{\{(model_head|rules|first|lang)\}\}/)
+})
+
+test('the test tool takes a template file and the first-prompt flag', async ($: any, on: any) => {
+  const seen = engine(on, PICK.subagent, { files: { '/t.txt': 'TEMPLATE {{model_head}} :: {{prompt}}' } })
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  const r = await $.tool.call({ tool: 'mcp__prompt-router__test', template: '/t.txt', cases: [{ id: 'a', prompt: 'run lint', isFirst: true }] })
+  expect(seen.prompts[0]).toMatch(/^TEMPLATE MODEL \(this is the FIRST prompt/)
+  expect(seen.prompts[0]).toMatch(/:: run lint$/)
+  expect(JSON.stringify(r)).toMatch(/a: subagent haiku low ×1/)
+})
+
+test('classifier opus: the routing call runs on Opus', { options: { classifier: 'opus' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.same)
+  await start($)
+  await submit($, 'and the mobile search too')
+  expect(seen.models).toEqual(['claude-opus-5-5'])
 })

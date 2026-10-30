@@ -21,7 +21,7 @@ When the prompt stays here but needs another effort, the router switches it and 
 Effort: Low (was Medium), small follow-up to the last fix
 ```
 
-Approvals ("yes", "go on", "option 2"), slash commands and prompts where nothing needs to change pass through untouched. The first prompt of a chat only gets its effort set.
+Approvals ("yes", "go on", "option 2"), slash commands and prompts where nothing needs to change pass through untouched. The first prompt of a chat stays in the chat, but the router checks whether the selected model fits the task (e.g. Opus picked for a rename, Haiku for debugging) and switches the model and effort to match.
 
 ## Install
 
@@ -37,8 +37,9 @@ Approvals ("yes", "go on", "option 2"), slash commands and prompts where nothing
 | `project` | What your chats are about, in a few words | empty (a software project) |
 | `rules` | Your own routing rules, appended to the classifier prompt; they win over the built-in ones | empty |
 | `language` | Language of the reason and of the questions Claude asks | `auto` (the language of each prompt) |
-| `classifier` | Model that makes the routing call: `sonnet` or `haiku` (cheaper, less accurate) | `sonnet` |
+| `classifier` | Model that makes the routing call: `sonnet`, `haiku` (cheaper, less accurate) or `opus` (most accurate, slowest and most expensive) | `sonnet` |
 | `effortMode` | `auto` sets effort in this chat by itself; `ask` only has Claude offer `/effort <level>` | `auto` |
+| `modelMode` | On the first prompt of a new chat: `auto` switches to the model that fits; `ask` only has Claude offer the switch; `off` never touches the model | `auto` |
 
 Example:
 
@@ -78,7 +79,7 @@ Effort here is changed through the chat's effort setting. Where that setting can
 
 ## Cost
 
-One small classifier call per prompt (Sonnet or Haiku, low effort, at most 150 output tokens). It sees the new prompt, the chat's first and last few prompts, the start of Claude's last reply, and the current model, effort and context size.
+One small classifier call per prompt (Sonnet, Haiku or Opus, low effort, at most 150 output tokens). It sees the new prompt, the chat's first and last few prompts, the start of Claude's last reply, and the current model, effort and context size.
 
 ## Tests
 
