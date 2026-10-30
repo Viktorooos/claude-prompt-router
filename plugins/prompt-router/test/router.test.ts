@@ -125,7 +125,8 @@ test('subagent pick: appends the AskUserQuestion note with the Agent call', asyn
   expect(t).toMatch(/in a subagent \(Haiku · low\), because: just run the tests/)
   expect(t).toMatch(/AskUserQuestion/)
   expect(t).toMatch(/"Subagent \(Haiku · low\)", "Do it here \(Low\)", "Do it here \(keep Medium\)"/)
-  expect(t).toMatch(/"Do it here \(Low\)" = change the effort with set_session_effort "low"/)
+  expect(t).toMatch(/"Do it here \(Low\)" = call the mcp__prompt-router__switch tool with \{"effort":"low"\}/)
+  expect(t).toMatch(/never set_session_model or set_session_effort/)
   expect(t).toMatch(/Agent tool with model "haiku" and effort "low"/)
   expect(t).not.toMatch(/New session/)
   expect(seen.sets).toEqual([])
@@ -252,7 +253,7 @@ test('odd and broken classifier replies', async ($: any, on: any) => {
   const r = await $.tool.call({ tool: 'mcp__prompt-router__test', cases })
   const text = String(r.result ?? r.text ?? JSON.stringify(r))
   expect(text).toMatch(/c0: subagent haiku xhigh ×1/)
-  expect(text).toMatch(/c1: session sonnet xhigh ×1/)
+  expect(text).toMatch(/c1: session sonnet max ×1/)
   expect(text).toMatch(/c2: UNPARSED/)
   expect(text).toMatch(/c3: UNPARSED/)
   expect(text).toMatch(/c4: UNPARSED not json at all/)
@@ -347,8 +348,9 @@ test('defaults ask: one dialog for model and effort, nothing switched', async ($
   expect(seen.sent[0]).toMatch(/suggests model Haiku instead of Opus and effort low instead of medium/)
   expect(seen.sent[0]).toMatch(/AskUserQuestion/)
   expect(seen.sent[0]).toMatch(/"Switch \(Haiku · Low\)", "Keep as is"/)
-  expect(seen.sent[0]).toMatch(/set_session_model "claude-haiku-5-5"/)
-  expect(seen.sent[0]).toMatch(/set_session_effort "low"/)
+  expect(seen.sent[0]).toMatch(/On Switch, call the mcp__prompt-router__switch tool with \{"model":"haiku","effort":"low"\}/)
+  expect(seen.sent[0]).toMatch(/tell the user in one line to run \/model haiku and \/effort low/)
+  expect(seen.sent[0]).not.toMatch(/set_session_model "/)
 })
 
 test('defaults ask: an effort change alone is asked too', async ($: any, on: any) => {
@@ -383,4 +385,92 @@ test('subagent pick (auto): Do it here switches the effort too', { options: { ef
   expect(t).toMatch(/"Subagent \(Haiku · low\)", "Do it here \(Low\)"/)
   expect(t).not.toMatch(/keep Medium/)
   expect(seen.sets).toEqual([])
+})
+
+const FABLE_ROW = { ...MODEL_ROW, options: ['default', 'opus', 'sonnet', 'haiku', 'fable', 'fable[1m]'] }
+
+test('Switch: the mod tool sets the chat model and effort', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same, { rows: [FABLE_ROW] })
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  const r = await $.tool.call({ tool: 'mcp__prompt-router__switch', model: 'fable', effort: 'max' })
+  expect(seen.sets).toEqual(['fable', 'max'])
+  expect(JSON.stringify(r)).toMatch(/Switched this chat to model Fable and effort Max/)
+  const none = await $.tool.call({ tool: 'mcp__prompt-router__switch' })
+  expect(JSON.stringify(none)).toMatch(/Nothing switched/)
+})
+
+test('Switch: refuses a model this chat is not offered and names what it skipped', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same)
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  const r = await $.tool.call({ tool: 'mcp__prompt-router__switch', model: 'fable', effort: 'high' })
+  expect(seen.sets).toEqual(['high'])
+  expect(r.result).toMatch(/Switched this chat to effort High\. Not switched: model "fable"/)
+  const bad = await $.tool.call({ tool: 'mcp__prompt-router__switch', model: 'opus', effort: 'ultra' })
+  expect(bad.result).toMatch(/Switched this chat to model Opus\. Not switched: effort "ultra"/)
+})
+
+test('Fable listed in the model setting: offered, with its rule', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "session", "model": "fable", "effort": "high", "why": "new cross-platform architecture"}', { rows: [FABLE_ROW] })
+  await start($)
+  await submit($, 'design offline sync for shared, iOS and Android')
+  const t = seen.sent[0] ?? ''
+  expect(seen.prompts[0]).toMatch(/"model": "haiku\|sonnet\|opus\|fable"/)
+  expect(seen.prompts[0]).toMatch(/- fable: rare/)
+  expect(t).toMatch(/"New session \(Fable · high\)"/)
+  expect(t).toMatch(/model "claude-fable-5-1", effort "high"/)
+  expect(t).toMatch(/Agent tool with model "fable"/)
+})
+
+test('Fable not in the model setting: never offered, a fable pick becomes Opus', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "session", "model": "fable", "effort": "high", "why": "x"}', { rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'design offline sync')
+  expect(seen.prompts[0]).toMatch(/"model": "haiku\|sonnet\|opus"/)
+  expect(seen.prompts[0]).not.toMatch(/fable/)
+  expect(seen.sent[0]).toMatch(/"New session \(Opus · high\)"/)
+})
+
+test('no model setting: the base models only', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same)
+  await start($)
+  await submit($, 'and the mobile search too')
+  expect(seen.prompts[0]).toMatch(/"model": "haiku\|sonnet\|opus"/)
+})
+
+test('a chat running on Fable can keep Fable', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same, { model: 'claude-fable-5-1' })
+  await start($)
+  await submit($, 'and the mobile search too')
+  expect(seen.prompts[0]).toMatch(/model claude-fable-5-1/)
+  expect(seen.prompts[0]).toMatch(/\|fable"/)
+})
+
+test('max stays max (auto): the effort is set to max', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "max", "why": "irreversible production fix"}')
+  await start($)
+  await submit($, 'run the one-off production data repair, maximum care')
+  expect(seen.sets).toEqual(['max'])
+  expect(seen.toasts.join(' ')).toMatch(/Effort: Max \(was Medium\)/)
+})
+
+test('max (ask): offered as Switch (Max) through the mod tool', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "max", "why": "x"}')
+  await start($)
+  await submit($, 'p')
+  expect(seen.sent[0]).toMatch(/"Switch \(Max\)", "Keep as is"/)
+  expect(seen.sent[0]).toMatch(/\{"effort":"max"\}/)
+})
+
+test('the test tool takes the models on offer per case', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "session", "model": "fable", "effort": "xhigh", "why": "x"}')
+  on('tool.call', () => ({ result: {} }))
+  await start($)
+  const r = await $.tool.call({ tool: 'mcp__prompt-router__test', cases: [{ id: 'all', prompt: 'p' }, { id: 'nofable', prompt: 'p', models: ['haiku', 'sonnet', 'opus'] }] })
+  const text = JSON.stringify(r)
+  expect(text).toMatch(/all: session fable xhigh ×1/)
+  expect(text).toMatch(/nofable: session opus xhigh ×1/)
+  expect(seen.prompts[0]).toMatch(/- fable: rare/)
+  expect(seen.prompts[1]).not.toMatch(/fable/)
 })

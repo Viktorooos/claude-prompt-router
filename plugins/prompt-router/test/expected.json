@@ -1148,5 +1148,466 @@
     "effort": [
       "low"
     ]
+  },
+  "fab_sync": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "fable"
+    ],
+    "effort": [
+      "high",
+      "xhigh"
+    ],
+    "first": true
+  },
+  "fab_race": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "fable"
+    ],
+    "effort": [
+      "high",
+      "xhigh"
+    ],
+    "first": true
+  },
+  "fab_deadlock": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "fable"
+    ],
+    "effort": [
+      "high",
+      "xhigh"
+    ],
+    "first": true
+  },
+  "fab_jwt": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "fable"
+    ],
+    "effort": [
+      "high",
+      "xhigh",
+      "max"
+    ],
+    "first": true
+  },
+  "fab_analysis": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "fable"
+    ],
+    "effort": [
+      "high",
+      "xhigh"
+    ],
+    "first": true
+  },
+  "fab_session": {
+    "where": [
+      "session"
+    ],
+    "model": [
+      "fable"
+    ],
+    "effort": [
+      "high",
+      "xhigh"
+    ]
+  },
+  "fab_sync_off": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus"
+    ],
+    "effort": [
+      "high",
+      "xhigh"
+    ],
+    "first": true
+  },
+  "xh_night": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus",
+      "fable"
+    ],
+    "effort": [
+      "xhigh"
+    ],
+    "first": true
+  },
+  "xh_weekend": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus",
+      "fable"
+    ],
+    "effort": [
+      "xhigh"
+    ],
+    "first": true
+  },
+  "xh_cz": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus",
+      "fable"
+    ],
+    "effort": [
+      "xhigh"
+    ],
+    "first": true
+  },
+  "xh_later": {
+    "where": [
+      "here",
+      "keep",
+      "session"
+    ],
+    "model": null,
+    "effort": [
+      "xhigh"
+    ]
+  },
+  "max_explicit": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus",
+      "fable"
+    ],
+    "effort": [
+      "max"
+    ],
+    "first": true
+  },
+  "max_cz": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus",
+      "fable"
+    ],
+    "effort": [
+      "max"
+    ],
+    "first": true
+  },
+  "max_prod": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus",
+      "fable"
+    ],
+    "effort": [
+      "max"
+    ],
+    "first": true
+  },
+  "max_breach": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus",
+      "fable"
+    ],
+    "effort": [
+      "max"
+    ],
+    "first": true
+  },
+  "no_bigfeat": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_review_pay": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_migration": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_properly_cz": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_arch_q": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_careful": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_applepay": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_oauth": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_arch_cz": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_take_time": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_prod_read": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_review_sec": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "first": true
+  },
+  "no_onefail": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": null,
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "no_think": {
+    "where": [
+      "here",
+      "keep",
+      "subagent"
+    ],
+    "model": null,
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ]
+  },
+  "no_lunch": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": null,
+    "effort": [
+      "low",
+      "medium"
+    ]
+  },
+  "no_bigfeat_s": {
+    "where": [
+      "session"
+    ],
+    "model": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ],
+    "effort": [
+      "low",
+      "medium",
+      "high"
+    ]
   }
 }

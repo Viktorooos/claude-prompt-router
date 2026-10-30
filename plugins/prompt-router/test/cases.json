@@ -1124,5 +1124,388 @@
     "id": "h_search",
     "prompt": "najdi v git historii commit, který přidal PriceFormatter",
     "tokens": 40000
+  },
+  {
+    "id": "fab_sync",
+    "prompt": "Design and build offline sync for the shared KMP module and both apps: users edit appointments on phone and tablet offline, and we have no idea yet how to resolve the conflicts.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "fab_race",
+    "prompt": "Orders sometimes get marked paid twice: the payment webhook and the app's status poll race each other. Two fixes (a DB lock, an idempotency key) already failed. Find the real cause and fix it.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "fab_deadlock",
+    "prompt": "The Android app rarely freezes when the background sync worker and the UI write to the database at the same time. I tried a mutex and a single dispatcher and it still happens. Get to the bottom of it.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "fab_jwt",
+    "prompt": "A pentest found that JWT signature checks can be bypassed in some paths through our API gateway and three backend services. Investigate how deep it goes and fix it everywhere.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "fab_analysis",
+    "prompt": "Analyse the whole billing flow (app, backend, 6 services) and find every place where the price or VAT calculation can go wrong. A wrong conclusion here costs us real money.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "fab_session",
+    "prompt": "Unrelated: we need a new architecture for real-time video consultations across backend, iOS and Android. Nobody knows yet how to handle reconnects and recording. Start on that.",
+    "first": "Add a dark mode toggle to the settings screen",
+    "recent": [
+      "make it follow the system setting by default"
+    ],
+    "reply": "Done: the toggle now defaults to the system setting and the choice is saved in DataStore.",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 90000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "fab_sync_off",
+    "prompt": "Design and build offline sync for the shared KMP module and both apps: users edit appointments on phone and tablet offline, and we have no idea yet how to resolve the conflicts.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop",
+    "models": [
+      "haiku",
+      "sonnet",
+      "opus"
+    ]
+  },
+  {
+    "id": "xh_night",
+    "prompt": "I'm leaving for the night. Migrate all 40 payment endpoints to the new ledger API, run the full test suite and keep fixing until everything is green. I won't be around to answer.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "xh_weekend",
+    "prompt": "Over the weekend go through the whole auth module, write tests for every path and fix every bug you find. I'm offline until Monday, don't wait for me.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "xh_cz",
+    "prompt": "Odcházím na celý den a nebudu k dispozici. Přepiš celou platební vrstvu na nové API, otestuj ji a oprav všechno, co spadne, dokud nebude všechno zelené.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "xh_later",
+    "prompt": "I'm off for the rest of the day: bring this dark mode to every screen of the app, check each one on iOS and Android and keep fixing until all screenshot tests pass. Don't stop to ask me.",
+    "first": "Add a dark mode toggle to the settings screen",
+    "recent": [
+      "make it follow the system setting by default"
+    ],
+    "reply": "Done: the toggle now defaults to the system setting and the choice is saved in DataStore.",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 90000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "max_explicit",
+    "prompt": "Use maximum effort on this one, think as hard as you can: prove that our currency conversion and rounding can never lose a cent.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "max_cz",
+    "prompt": "Dej tomu maximální effort: zkontroluj, že migrace účtů nesmaže žádná data uživatelů.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "max_prod",
+    "prompt": "Tomorrow I run a one-off script that rewrites the account balances of 200k users in production. It cannot be undone. Check it with the greatest possible care before I run it; time does not matter.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "max_breach",
+    "prompt": "After yesterday's breach (contained now) we must delete the attacker's records from the production database without touching any real customer data. It is irreversible, take as long as you need and get it exactly right.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_bigfeat",
+    "prompt": "Add a shopping list to the app: shared logic in the KMP module, screens on iOS and Android, sync with the backend. The design is in Figma.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_review_pay",
+    "prompt": "Review the refund code in the payments module for bugs.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_migration",
+    "prompt": "Write the Room migration from version 12 to 13 that adds the tags column, the usual way.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_properly_cz",
+    "prompt": "Udělej to pořádně: přidej validaci formuláře registrace.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_arch_q",
+    "prompt": "How should we structure navigation between the feature modules? What do you recommend?",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_careful",
+    "prompt": "Be careful, this is important: rename userId to accountId across the codebase.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_applepay",
+    "prompt": "This is the most important feature this quarter: add Apple Pay checkout on iOS following the Stripe docs.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_oauth",
+    "prompt": "Implement Google sign-in on iOS and Android following the official guide.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_arch_cz",
+    "prompt": "Navrhni architekturu nové obrazovky profilu podle našich pravidel MVI.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_take_time",
+    "prompt": "Take your time and write tests for the cart module.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_prod_read",
+    "prompt": "Run a read-only query on production that counts users who signed up last week.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_review_sec",
+    "prompt": "Do a security review of the login and password reset code.",
+    "isFirst": true,
+    "first": "",
+    "recent": [],
+    "reply": "",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 18000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_onefail",
+    "prompt": "the toggle still doesn't switch on Android, look at it again",
+    "first": "Add a dark mode toggle to the settings screen",
+    "recent": [
+      "make it follow the system setting by default"
+    ],
+    "reply": "Done: the toggle now defaults to the system setting and the choice is saved in DataStore.",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 90000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_think",
+    "prompt": "Think hard about this one: why does the settings screen flicker when I flip the dark mode toggle?",
+    "first": "Add a dark mode toggle to the settings screen",
+    "recent": [
+      "make it follow the system setting by default"
+    ],
+    "reply": "Done: the toggle now defaults to the system setting and the choice is saved in DataStore.",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 90000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_lunch",
+    "prompt": "I'm going for lunch, rename the variable darkMode to isDarkMode in SettingsViewModel.",
+    "first": "Add a dark mode toggle to the settings screen",
+    "recent": [
+      "make it follow the system setting by default"
+    ],
+    "reply": "Done: the toggle now defaults to the system setting and the choice is saved in DataStore.",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 90000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "no_bigfeat_s",
+    "prompt": "Unrelated: add push notifications for appointment reminders on iOS and Android.",
+    "first": "Add a dark mode toggle to the settings screen",
+    "recent": [
+      "make it follow the system setting by default"
+    ],
+    "reply": "Done: the toggle now defaults to the system setting and the choice is saved in DataStore.",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 90000,
+    "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
   }
 ]

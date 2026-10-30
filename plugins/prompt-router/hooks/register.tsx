@@ -2,13 +2,19 @@ import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMe
 
 import type { Level } from '../types'
 
+const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
 const MODEL_HOLD = { plugin: 'prompt-router', key: 'model' } as const
+const TEST_TOOL = `mcp__${NAME}__test`
+const SWITCH_TOOL = `mcp__${NAME}__switch`
 const LEVELS: readonly Level[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const NAMES: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max' }
 const SHORT: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
-const MODELS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' } as const
-const MODEL_NAMES = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus' } as const
+const MODELS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' } as const
+const MODEL_NAMES = { haiku: 'Haiku', sonnet: 'Sonnet', opus: 'Opus', fable: 'Fable' } as const
+// Always offered; Fable only when the model setting lists it (or the chat runs on it).
+const BASE_MODELS: readonly Model[] = ['haiku', 'sonnet', 'opus']
+const ALL_MODELS = Object.keys(MODELS) as Model[]
 const ACCENT = '#d97757'
 
 type Where = 'here' | 'subagent' | 'session'
@@ -56,12 +62,13 @@ function asLevel(v: unknown): Level | '' {
 // A model id or alias the router knows, or '' (e.g. a custom or non-Claude model).
 function knownModel(v: unknown): Model | '' {
   const t = typeof v === 'string' ? v.toLowerCase() : ''
-  return t.includes('haiku') ? 'haiku' : t.includes('sonnet') ? 'sonnet' : t.includes('opus') ? 'opus' : ''
+  return ALL_MODELS.find(m => t.includes(m)) ?? ''
 }
 
-function asModel(v: unknown): Model {
-  const t = typeof v === 'string' ? v.toLowerCase() : ''
-  return t.includes('haiku') ? 'haiku' : t.includes('sonnet') ? 'sonnet' : 'opus'
+// A model the router may offer: an unknown or unavailable one falls back to Opus.
+function asModel(v: unknown, models: readonly Model[] = ALL_MODELS): Model {
+  const m = knownModel(v)
+  return m && models.includes(m) ? m : 'opus'
 }
 
 function isEffortRow(r: ConfigRow) {
@@ -145,9 +152,9 @@ function clip(s: string, n: number) {
 }
 
 // What the classifier sees of the chat. The test tool fills it by hand.
-type Chat = { first: string; recent: string[]; reply: string; model: string; now: Level | ''; tokens: number | undefined; conf: Config; isFirst?: boolean }
+type Chat = { first: string; recent: string[]; reply: string; model: string; now: Level | ''; tokens: number | undefined; conf: Config; isFirst?: boolean; models: readonly Model[] }
 
-function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: number | undefined, model: string): Chat {
+function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: number | undefined, model: string, models: readonly Model[]): Chat {
   const users = messages.filter(m => m.role === 'user' && m.text.trim())
   return {
     first: users[0]?.text ?? '',
@@ -158,6 +165,7 @@ function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: nu
     tokens,
     conf: cfg,
     isFirst: !messages.some(m => m.role === 'assistant'),
+    models,
   }
 }
 
@@ -175,14 +183,16 @@ WHERE
 {{model_head}}
 - haiku: anything that takes one short answer and no code changes, except a greeting or opener with no task yet, which keeps the current model (a short message or email, a translation, a quick fact, a regex or one command); running builds, lint or tests; reading and summarizing; searching the codebase.
 - sonnet: mechanical edits by an existing pattern (strings, renames, porting finished code to another platform), clicking through an app, writing summaries.
-- opus: new logic, architecture, debugging, code review, anything risky (money, user data, security, auth, rewriting git history, force pushes, deleting data or anything else hard to undo). Also opus when the work is open-ended or its size is unclear.
+- opus: new logic, architecture, debugging, code review, anything risky (money, user data, security, auth, rewriting git history, force pushes, deleting data or anything else hard to undo). Also opus when the work is open-ended or its size is unclear.{{fable}}
 
 EFFORT
 - low: simple, mechanical or rule-following work, a greeting, a short message or a quick answer, or work the person will iterate on with Claude.
 - medium: everyday work with a clear definition of done, including writing tests. The default. If unsure, medium.
 - high: a hidden mistake would cost money, data or trust: hunting bugs, reviewing, checking work, payment, data or security logic, architecture decisions.
-- xhigh: only a long, hard, critical job the person hands off and walks away from. Never max.
-A task being long does not make it high.{{rules}}
+- xhigh: only a long, hard, critical job the person hands off and walks away from.
+- max: only when the person explicitly asks for the maximum effort or thinking, or for a one-off irreversible step with a very high cost of a mistake (production data, a live security incident) where time does not matter. Never for everyday work, a feature or a review, however important. "Do it properly" or "be careful" is not max.
+A task being long does not make it high. Words like important, critical, carefully, properly or take your time do not raise the effort beyond high on their own; only handing off a long job (xhigh) or the max cases above do.
+Examples: reviewing payment code = opus, high (not xhigh, not max). A big feature on iOS and Android with a known design = opus, medium or high. A database migration done the usual way = medium or high. A one-off script that rewrites production data and cannot be undone, checked with all the care possible = max.{{rules}}
 
 The chat now: model {{model}}, effort {{effort}}, context {{tokens}}.
 
@@ -202,16 +212,20 @@ The new prompt:
 {{prompt}}
 </prompt>
 
-Reply with JSON only: {"where": "keep|here|subagent|session", "model": "haiku|sonnet|opus", "effort": "low|medium|high|xhigh", "why": "the reason in under 12 plain words, in {{lang}}"}`
+Reply with JSON only: {"where": "keep|here|subagent|session", "model": "{{models}}", "effort": "low|medium|high|xhigh|max", "why": "the reason in under 12 plain words, in {{lang}}"}`
 
 const MODEL_HEAD_FIRST = 'MODEL (this is the FIRST prompt of a new chat: pick the model the whole chat should run on, by the rules below; for a greeting or an opener with no task yet, answer the current model)'
 const MODEL_HEAD = 'MODEL (for subagent or session; for here use the current one)'
+const FABLE_RULE = `
+- fable: rare, 2.5 times the price of opus; only where opus at high effort is likely not enough: a new architecture across several layers (shared code plus iOS and Android, or backend plus clients) with no clear solution yet; a hard concurrency or race problem, or a security hole whose reach across several services is still unknown; a bug that two or more fixes already failed to solve; a deep analysis of a whole large system (many services) where a wrong conclusion costs a lot of money or data. Not fable (opus instead): an everyday feature, however big or important; a code review of a given module, also of payments or security code; payments, auth or a migration with a known approach or an official guide; anything mechanical; a question about architecture. A single failed fix is not two.`
 
 function pickPrompt(text: string, c: Chat, template = TEMPLATE) {
   const conf = c.conf
   const slots: Record<string, string> = {
     project: conf.project.trim() || 'a software project',
     model_head: c.isFirst && conf.modelMode !== 'off' ? MODEL_HEAD_FIRST : MODEL_HEAD,
+    models: c.models.join('|'),
+    fable: c.models.includes('fable') ? FABLE_RULE : '',
     rules: conf.rules.trim() ? `\n\nPROJECT RULES (they take precedence over the rules above)\n${conf.rules.trim()}` : '',
     model: c.model || 'unknown',
     effort: c.now || 'unknown',
@@ -231,13 +245,13 @@ function field(text: string, name: string) {
   return new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`).exec(text)?.[1] ?? ''
 }
 
-function parsePick(text: string): Pick | null {
+function parsePick(text: string, models: readonly Model[] = ALL_MODELS): Pick | null {
   const w = field(text, 'where')
   const where = w === 'here' || w === 'subagent' || w === 'session' ? w : null
   const effort = asLevel(field(text, 'effort'))
   if (!where || !effort) return null
   const why = clip(field(text, 'why').replace(/\s*[—–]\s*/g, ', '), 90)
-  return { where, model: asModel(field(text, 'model')), effort: effort === 'max' ? 'xhigh' : effort, why }
+  return { where, model: asModel(field(text, 'model'), models), effort, why }
 }
 
 function classify($: EngineInterface, text: string, c: Chat, template?: string) {
@@ -245,7 +259,7 @@ function classify($: EngineInterface, text: string, c: Chat, template?: string) 
 }
 
 // One test case for the classifier: a prompt and the chat it arrives in.
-type Case = { id?: string; prompt: string; isFirst?: boolean; classifier?: string; project?: string; rules?: string; language?: string; first?: string; recent?: string[]; reply?: string; model?: string; effort?: string; tokens?: number }
+type Case = { id?: string; prompt: string; isFirst?: boolean; models?: string[]; classifier?: string; project?: string; rules?: string; language?: string; first?: string; recent?: string[]; reply?: string; model?: string; effort?: string; tokens?: number }
 
 async function runCase($: EngineInterface, k: Case, template?: string) {
   const c: Chat = {
@@ -263,11 +277,12 @@ async function runCase($: EngineInterface, k: Case, template?: string) {
       classifier: k.classifier === 'haiku' || k.classifier === 'sonnet' || k.classifier === 'opus' ? k.classifier : cfg.classifier,
     },
     isFirst: k.isFirst ?? false,
+    models: k.models ? ALL_MODELS.filter(m => k.models?.includes(m)) : ALL_MODELS,
   }
   try {
     const r = await classify($, k.prompt, c, template)
     if (!r.isAnswered) return `${k.id ?? '?'}\tERROR ${r.reason}`
-    const p = parsePick(r.text)
+    const p = parsePick(r.text, c.models)
     if (!p) return `${k.id ?? '?'}\t${/"where"\s*:\s*"keep"/.test(r.text) ? 'keep' : `UNPARSED ${clip(r.text, 120)}`}`
     return `${k.id ?? '?'}\t${p.where}\t${p.model}\t${p.effort}\t${p.why}`
   } catch (err) {
@@ -291,6 +306,18 @@ async function chatModel($: EngineInterface) {
   }
 }
 
+// The models the router may offer this chat.
+async function availableModels($: EngineInterface, model: string): Promise<Model[]> {
+  if (knownModel(model) === 'fable') return ALL_MODELS
+  try {
+    const row = (await $.config.list()).find(isModelRow)
+    if (row?.options?.some(o => knownModel(o) === 'fable')) return ALL_MODELS
+  } catch {
+    // The base models.
+  }
+  return [...BASE_MODELS]
+}
+
 async function pick($: EngineInterface, text: string, now: Level | ''): Promise<Pick | null> {
   const messages = await $.session.messages()
   let tokens: number | undefined
@@ -300,9 +327,10 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
     tokens = undefined
   }
   const model = seenModel || (await chatModel($))
-  const r = await classify($, text, chatOf(messages, now, tokens, model))
+  const models = await availableModels($, model)
+  const r = await classify($, text, chatOf(messages, now, tokens, model, models))
   if (!r.isAnswered) throw new Error(`pick failed: ${r.reason}`)
-  const p = parsePick(r.text)
+  const p = parsePick(r.text, models)
   if (!p && !/"where"\s*:\s*"keep"/.test(r.text)) await log($, 'parse', 'reply could not be parsed')
   const isFirst = !messages.some(m => m.role === 'assistant')
   await log($, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${tokens ?? '?'} tok | first ${isFirst} | ${clip(r.text, 200)}`)
@@ -313,6 +341,14 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
 
 function userLang() {
   return cfg.language && cfg.language.toLowerCase() !== 'auto' ? cfg.language : "the user's language (the language of this prompt)"
+}
+
+// The chat's own model and effort change through the mod's tool: set_session_model and
+// set_session_effort refuse the session they run in.
+function switchCall(to: { model?: Model; effort?: Level }) {
+  const args = JSON.stringify({ ...(to.model ? { model: to.model } : {}), ...(to.effort ? { effort: to.effort } : {}) })
+  const slash = [to.model ? `/model ${to.model}` : '', to.effort ? `/effort ${to.effort}` : ''].filter(Boolean).join(' and ')
+  return `call the ${SWITCH_TOOL} tool with ${args} (load it with ToolSearch "select:${SWITCH_TOOL}" if it is not loaded; never set_session_model or set_session_effort, which refuse this chat; if the tool fails, tell the user in one line to run ${slash})`
 }
 
 // Here keeps its own effort choice: a lower effort fits a task even when it stays in this chat.
@@ -329,8 +365,8 @@ function askNote(p: Pick, now: Level | '', midTurn = false) {
   const hereThen = !effort
     ? 'Do it here = continue normally.'
     : cfg.effortMode === 'ask'
-      ? `${switchHere} = change the effort with set_session_effort "${p.effort}" (or tell the user to run /effort ${p.effort}), then handle the prompt; ${keepHere} = continue normally.`
-      : `${switchHere} = change the effort with set_session_effort "${p.effort}" (or tell the user to run /effort ${p.effort}), then handle the prompt.`
+      ? `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt; ${keepHere} = continue normally.`
+      : `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt.`
   return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang()}. Then: new session = call start_session right away with initiation "user_asked", context "fresh", model "${MODELS[p.model]}", effort "${p.effort}", use_worktree true only when the task changes code, prompt = the task from this message, background = what it needs to know; here, say in one line where the work went. Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${hereThen}`
 }
 
@@ -341,11 +377,8 @@ function switchNote(p: Pick, model: { from: Model } | null, effort: { now: Level
     effort ? `effort ${p.effort} instead of ${effort.now || 'unknown'}` : '',
   ].filter(Boolean)
   const label = [model ? MODEL_NAMES[p.model] : '', effort ? NAMES[p.effort] : ''].filter(Boolean).join(' · ')
-  const how = [
-    model ? `the model with set_session_model "${MODELS[p.model]}" (or tell the user to run /model ${p.model})` : '',
-    effort ? `the effort with set_session_effort "${p.effort}" (or tell the user to run /effort ${p.effort})` : '',
-  ].filter(Boolean).join(' and ')
-  return `Prompt Router suggests ${parts.join(' and ')} for this prompt${p.why ? `, because: ${p.why}` : ''}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Switch?" with the reason in one sentence) with the options "Switch (${label})", "Keep as is", the recommended one first. Write the question and options in ${userLang()}. On Switch, change ${how}, then handle the prompt; on Keep as is, handle the prompt normally.`
+  const how = switchCall({ model: model ? p.model : undefined, effort: effort ? p.effort : undefined })
+  return `Prompt Router suggests ${parts.join(' and ')} for this prompt${p.why ? `, because: ${p.why}` : ''}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Switch?" with the reason in one sentence) with the options "Switch (${label})", "Keep as is", the recommended one first. Write the question and options in ${userLang()}. On Switch, ${how}, then handle the prompt; on Keep as is, handle the prompt normally.`
 }
 
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
@@ -446,6 +479,7 @@ export const register: Register = (on, options) => {
                 rules: { type: 'string', description: 'Overrides the rules option for this case' },
                 language: { type: 'string', description: 'Overrides the language option for this case' },
                 isFirst: { type: 'boolean', description: 'The prompt opens a new chat (the model check runs)' },
+                models: { type: 'array', items: { type: 'string' }, description: 'The models the router may offer (default: all, Fable included)' },
                 classifier: { type: 'string', description: 'sonnet, haiku or opus, overriding the classifier option' },
               },
               required: ['prompt'],
@@ -455,6 +489,18 @@ export const register: Register = (on, options) => {
           template: { type: 'string', description: 'Absolute path to a classifier prompt template with {{slots}}, instead of the built-in one' },
           runs: { type: 'number', description: 'How many times to run the whole set (1-5)' },
           out: { type: 'string', description: 'Absolute path to write every raw result line to (TSV)' },
+        },
+      },
+      isDeferred: true,
+    })
+    await $.tool.register({
+      name: 'switch',
+      description: "Prompt Router: switches this chat's model and/or effort after the user chose it in the Prompt Router dialog. Applies from the next request of this turn.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          model: { type: 'string', enum: [...ALL_MODELS] },
+          effort: { type: 'string', enum: [...LEVELS] },
         },
       },
       isDeferred: true,
@@ -508,10 +554,29 @@ export const register: Register = (on, options) => {
     return yield* next({ ...step, effort: want })
   })
 
-  on('tool.call', { tool: 'mcp__prompt-router__test' }, async ($, e) => {
+  on('tool.call', { tool: SWITCH_TOOL }, async ($, e) => {
+    const input = e as unknown as { model?: string; effort?: string }
+    const known = knownModel(input.model)
+    const model = known && (await availableModels($, await chatModel($))).includes(known) ? known : ''
+    const level = asLevel(input.effort)
+    if (model) await applyModel($, model)
+    if (level) await applyLevel($, level)
+    const done = [model ? `model ${MODEL_NAMES[model]}` : '', level ? `effort ${NAMES[level]}` : ''].filter(Boolean)
+    const skipped = [
+      input.model && !model ? `model ${JSON.stringify(input.model)} (not offered in this chat)` : '',
+      input.effort && !level ? `effort ${JSON.stringify(input.effort)} (unknown)` : '',
+    ].filter(Boolean)
+    const parts = [
+      done.length ? `Switched this chat to ${done.join(' and ')}.` : 'Nothing switched.',
+      skipped.length ? `Not switched: ${skipped.join(', ')}.` : done.length ? '' : 'Give model and/or effort.',
+    ]
+    return { result: parts.filter(Boolean).join(' ') }
+  })
+
+  on('tool.call', { tool: TEST_TOOL }, async ($, e) => {
     const input = e as unknown as { cases?: Case[]; file?: string; template?: string; runs?: number; out?: string }
     const raw = input.file ? (JSON.parse(String(await $.fs.read(input.file))) as Case[]) : (input.cases ?? [])
-    const cases = raw.slice(0, 120)
+    const cases = raw.slice(0, 200)
     const template = input.template ? String(await $.fs.read(input.template)) : undefined
     const runs = Math.min(Math.max(Math.round(input.runs ?? 1), 1), 5)
     const all: string[] = []

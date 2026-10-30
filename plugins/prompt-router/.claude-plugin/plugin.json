@@ -1,6 +1,6 @@
 {
   "name": "prompt-router",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Before each prompt, picks where it belongs (this chat, a subagent or a new session), which model and which effort, and offers it",
   "author": { "name": "Viktor Kadeřábek" },
   "license": "MIT",
