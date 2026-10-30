@@ -22,14 +22,14 @@ const EFFORT_ROW = {
 type Seen = { prompts: string[]; models: string[]; sent: string[]; sets: unknown[]; toasts: string[]; store: Map<string, unknown> }
 
 // Stands for the engine beneath the plugin: each `$` call it makes is answered here.
-function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string> } = {}): Seen {
+function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[] } = {}): Seen {
   const seen: Seen = { prompts: [], models: [], sent: [], sets: [], toasts: [], store: new Map() }
-  const messages = opts.isFirst
+  const messages = opts.messages ?? (opts.isFirst
     ? []
     : [
         { role: 'user', text: 'Fix the duplicate recipes in search', toolUses: [] },
         { role: 'assistant', text: 'Fixed: the query now groups by recipe id.', toolUses: [] },
-      ]
+      ])
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__prompt-router__${e.name}` } }))
@@ -59,7 +59,11 @@ function engine(on: any, reply: string | (() => string), opts: { isFirst?: boole
     return { value: undefined }
   })
   on('fs.exists', () => ({ value: false }))
-  on('fs.read', (_: unknown, e: any) => ({ value: opts.files?.[e.path] ?? '' }))
+  // A key starting with * matches any path that ends with the rest (e.g. *\/.claude/settings.json).
+  const file = (path: string) => opts.files?.[path] ?? Object.entries(opts.files ?? {}).find(([k]) => k.startsWith('*') && path.endsWith(k.slice(1)))?.[1]
+  on('fs.read', (_: unknown, e: any) => ({ value: file(e.path) ?? '' }))
+  on('tool.list', () => ({ value: (opts.tools ?? ['mcp__ccd_session__start_session']).map(name => ({ name, description: '', mcp: true })) }))
+  on('session.surfaces', () => ({ value: opts.surfaces ?? ['desktop'] }))
   on('fs.write', () => ({ value: undefined }))
   on('clock.now', () => ({ value: 0 }))
   on('prompt.submit', (_: unknown, e: any) => {
@@ -473,4 +477,97 @@ test('the test tool takes the models on offer per case', async ($: any, on: any)
   expect(text).toMatch(/nofable: session opus xhigh ×1/)
   expect(seen.prompts[0]).toMatch(/- fable: rare/)
   expect(seen.prompts[1]).not.toMatch(/fable/)
+})
+
+// The app's own text before the prompt: it can be far longer than what the classifier reads.
+const REMINDER = `<system-reminder>\nThe user started this session without choosing a project folder. ${'Setup detail. '.repeat(400)}\n</system-reminder>`
+
+const SETTINGS = (key: string, options: Record<string, string>) => JSON.stringify({ pluginConfigs: { [key]: { options } } })
+
+test('options saved under the short key still apply (auto): no dialog', async ($: any, on: any) => {
+  const seen = engine(on, PICK.here, { files: { '*/.claude/settings.json': SETTINGS('prompt-router', { effortMode: 'auto', modelMode: 'auto', language: 'Czech' }) } })
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.sets).toEqual(['low'])
+  expect(seen.sent).toEqual(['fix that too'])
+  expect(seen.prompts[0]).toMatch(/Czech/)
+})
+
+test('options under the full id win over a stray short-key entry', { options: { effortMode: 'ask' } } as any, async ($: any, on: any) => {
+  const both = JSON.stringify({ pluginConfigs: { 'prompt-router': { options: { effortMode: 'auto' } }, 'prompt-router@prompt-router': { options: { effortMode: 'ask' } } } })
+  const seen = engine(on, PICK.here, { files: { '*/.claude/settings.json': both } })
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.sets).toEqual([])
+  expect(seen.sent[0]).toMatch(/AskUserQuestion/)
+})
+
+test('/router status says when the options sit under the short key', async ($: any, on: any) => {
+  engine(on, PICK.same, { files: { '*/.claude/settings.json': SETTINGS('prompt-router', { effortMode: 'auto' }) } })
+  await start($)
+  const r = await $.command.run({ command: 'router', args: '' })
+  expect(r.text).toMatch(/effort mode auto/)
+  expect(r.text).toMatch(/prompt-router@prompt-router/)
+})
+
+test('the app text before a prompt never reaches the classifier as the prompt', async ($: any, on: any) => {
+  const seen = engine(on, PICK.here, { isFirst: true })
+  await start($)
+  await submit($, `${REMINDER}\n\nproč se mi přihlášení neuloží po restartu appky`)
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.prompts[0]).toMatch(/proč se mi přihlášení neuloží/)
+  expect(seen.prompts[0]).not.toMatch(/system-reminder|Setup detail/)
+})
+
+test('a prompt that is only app text is not classified', async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  await start($)
+  await submit($, REMINDER)
+  expect(seen.prompts.length).toBe(0)
+  expect(seen.sent).toEqual([REMINDER])
+})
+
+test('a slash command after app text passes untouched', async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  await start($)
+  await submit($, `${REMINDER}\n/compact`)
+  expect(seen.prompts.length).toBe(0)
+})
+
+test('app text in earlier messages is left out of the chat summary', async ($: any, on: any) => {
+  const messages = [
+    { role: 'user', text: `${REMINDER}\nFix the duplicate recipes in search`, toolUses: [] },
+    { role: 'assistant', text: 'Fixed.', toolUses: [] },
+  ]
+  const seen = engine(on, PICK.same, { messages })
+  await start($)
+  await submit($, 'and the mobile search too')
+  expect(seen.prompts[0]).toMatch(/Fix the duplicate recipes in search/)
+  expect(seen.prompts[0]).not.toMatch(/Setup detail/)
+})
+
+test('no start_session (terminal, VS Code): a session pick gives the claude command instead', async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { tools: [], surfaces: ['terminal'] })
+  await start($)
+  await submit($, 'now build the shopping list feature')
+  const t = seen.sent[0]
+  expect(t).not.toMatch(/start_session/)
+  expect(t).toMatch(/claude --model claude-sonnet-5-5 --effort medium/)
+  expect(t).toMatch(/AskUserQuestion/)
+})
+
+test('start_session deferred but the app draws: the session is started there', async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { tools: [], surfaces: ['desktop'] })
+  await start($)
+  await submit($, 'now build the shopping list feature')
+  expect(seen.sent[0]).toMatch(/start_session/)
+})
+
+test('a -p / SDK run passes untouched: its flags chose model and effort', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { surfaces: [] })
+  await start($)
+  await $.prompt.submit({ text: 'now build the shopping list feature', wait: false, origin: { kind: 'sdk' } })
+  expect(seen.sent).toEqual(['now build the shopping list feature'])
+  expect(seen.prompts.length).toBe(0)
+  expect(seen.sets).toEqual([])
 })

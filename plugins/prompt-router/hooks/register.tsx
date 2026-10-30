@@ -25,6 +25,9 @@ type Pick = { where: Where; model: Model; effort: Level; why: string; first?: { 
 let home = ''
 let cfg: Config = { project: '', rules: '', language: 'auto', classifier: 'sonnet', effortMode: 'ask', modelMode: 'ask' }
 let enabled = true
+// The options as the engine passed them, and a line for /router when they came from elsewhere.
+let given: Record<string, unknown> = {}
+let cfgNote = ''
 // The level the main chat's last request ran at, and its model.
 let seen: Level | '' = ''
 let seenModel = ''
@@ -146,6 +149,12 @@ async function applyModel($: EngineInterface, model: Model) {
   redraw($)
 }
 
+// What the person typed: the app puts its own blocks (<system-reminder>…) before it, at times
+// tens of thousands of characters, which would push the prompt out of what the classifier reads.
+function typed(text: string) {
+  return text.replace(/<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/g, '').trim()
+}
+
 function clip(s: string, n: number) {
   const t = s.replace(/\s+/g, ' ').trim()
   return t.length > n ? `${t.slice(0, n)}…` : t
@@ -155,10 +164,10 @@ function clip(s: string, n: number) {
 type Chat = { first: string; recent: string[]; reply: string; model: string; now: Level | ''; tokens: number | undefined; conf: Config; isFirst?: boolean; models: readonly Model[] }
 
 function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: number | undefined, model: string, models: readonly Model[]): Chat {
-  const users = messages.filter(m => m.role === 'user' && m.text.trim())
+  const users = messages.filter(m => m.role === 'user').map(m => typed(m.text)).filter(Boolean)
   return {
-    first: users[0]?.text ?? '',
-    recent: users.slice(-4, -1).map(m => m.text),
+    first: users[0] ?? '',
+    recent: users.slice(-4, -1),
     reply: [...messages].reverse().find(m => m.role === 'assistant' && m.text.trim())?.text ?? '',
     model,
     now,
@@ -352,7 +361,7 @@ function switchCall(to: { model?: Model; effort?: Level }) {
 }
 
 // Here keeps its own effort choice: a lower effort fits a task even when it stays in this chat.
-function askNote(p: Pick, now: Level | '', midTurn = false) {
+function askNote(p: Pick, now: Level | '', midTurn = false, inApp = true) {
   const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
   const where = p.where === 'session' ? 'a new session' : 'a subagent'
   const session = `"New session (${label})"`
@@ -367,7 +376,28 @@ function askNote(p: Pick, now: Level | '', midTurn = false) {
     : cfg.effortMode === 'ask'
       ? `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt; ${keepHere} = continue normally.`
       : `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt.`
-  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang()}. Then: new session = call start_session right away with initiation "user_asked", context "fresh", model "${MODELS[p.model]}", effort "${p.effort}", use_worktree true only when the task changes code, prompt = the task from this message, background = what it needs to know; here, say in one line where the work went. Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${hereThen}`
+  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang()}. Then: ${sessionThen(p, inApp)} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${hereThen}`
+}
+
+// start_session is the desktop app's; in a terminal or VS Code the person opens the session.
+function sessionThen(p: Pick, inApp: boolean) {
+  if (inApp) return `new session = call start_session right away with initiation "user_asked", context "fresh", model "${MODELS[p.model]}", effort "${p.effort}", use_worktree true only when the task changes code, prompt = the task from this message, background = what it needs to know; here, say in one line where the work went.`
+  return `new session = this client cannot start one, so give the user, in a bash code block, the command to run in a new terminal: claude --model ${MODELS[p.model]} --effort ${p.effort} "<the task from this message, with what it needs to know, in one line>", then stop here.`
+}
+
+// Whether this chat can start a session itself: the tool is listed, or the app draws (where it
+// may be deferred and so missing from the list).
+async function canStartSession($: EngineInterface) {
+  try {
+    if ((await $.tool.list()).some(t => /(^|__)start_session$/.test(t.name))) return true
+  } catch {
+    // Ask the surfaces.
+  }
+  try {
+    return (await $.session.surfaces()).includes('desktop')
+  } catch {
+    return false
+  }
 }
 
 // The person decides: one dialog for the model and effort changes the router would make.
@@ -385,7 +415,7 @@ function switchNote(p: Pick, model: { from: Model } | null, effort: { now: Level
 async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!enabled || e.command || e.isMeta) return e
   if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return e
-  const text = e.text.trim()
+  const text = typed(e.text)
   if (!text || text.startsWith('/')) return e
   turnLevel = null
   const now = await currentLevel($)
@@ -437,15 +467,16 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   }
   // A mod's own dialog does not open at prompt time in the app, so Claude asks with the same options.
   // `context` does not reach the model for prompts from the app, so the note rides on the text.
-  return ({ ...e, text: `${e.text}\n\n[${askNote(p, now, !!e.turnId)}]` })
+  const inApp = p.where === 'session' ? await canStartSession($) : true
+  return ({ ...e, text: `${e.text}\n\n[${askNote(p, now, !!e.turnId, inApp)}]` })
 }
 
 function str(v: unknown, fallback: string) {
   return typeof v === 'string' ? v : fallback
 }
 
-export const register: Register = (on, options) => {
-  cfg = {
+function toConfig(options: Record<string, unknown>): Config {
+  return {
     project: str(options.project, ''),
     rules: str(options.rules, ''),
     language: str(options.language, 'auto').trim() || 'auto',
@@ -453,8 +484,33 @@ export const register: Register = (on, options) => {
     effortMode: options.effortMode === 'auto' ? 'auto' : 'ask',
     modelMode: options.modelMode === 'auto' ? 'auto' : options.modelMode === 'off' ? 'off' : 'ask',
   }
+}
+
+// The engine reads options only under the full id (prompt-router@<marketplace>), so options saved
+// under the plain name were ignored without a word and the mod asked although they said auto.
+// They count here unless a full-id entry exists, and /router says where they belong.
+async function loadShortKey($: EngineInterface) {
+  cfgNote = ''
+  try {
+    const all = (JSON.parse(String(await $.fs.read(`${home}/.claude/settings.json`))) as { pluginConfigs?: Record<string, { options?: unknown }> }).pluginConfigs ?? {}
+    if (Object.keys(all).some(k => k.startsWith(`${NAME}@`))) return
+    const opts = all[NAME]?.options
+    if (!opts || typeof opts !== 'object') return
+    // With no full-id entry the engine's values are only the defaults, so the saved ones win.
+    cfg = toConfig({ ...given, ...(opts as Record<string, unknown>) })
+    cfgNote = `Options come from "pluginConfigs" › "${NAME}" in ~/.claude/settings.json. Rename that key to "${NAME}@${NAME}", the name Claude Code reads them under.`
+    await log($, 'options', cfgNote)
+  } catch {
+    // No settings file, or one that does not parse: the engine's options stand.
+  }
+}
+
+export const register: Register = (on, options) => {
+  given = { ...options }
+  cfg = toConfig(given)
   on('session.start', async ($, e, next) => {
     home = $.plugin.root.split('/.claude/')[0] ?? ''
+    await loadShortKey($)
     await $.command.register({ name: 'router', description: 'Prompt Router: status, or off / on', argumentHint: '[off|on]' })
     await $.tool.register({
       name: 'test',
@@ -619,8 +675,9 @@ export const register: Register = (on, options) => {
       text: [
         `Prompt Router is ${enabled ? 'on' : 'off'} (classifier ${cfg.classifier}, effort mode ${cfg.effortMode}, model mode ${cfg.modelMode}).`,
         `This chat runs on ${seenModel || 'an unknown model so far'}${modelHold ? ' (held by the router)' : ''}, effort ${now ? NAMES[now] : 'unknown so far'}${value ? ` (held by the router: ${NAMES[value]})` : ''}.`,
+        cfgNote,
         'Commands: /router off, /router on.',
-      ].join('\n'),
+      ].filter(Boolean).join('\n'),
     }
   })
 

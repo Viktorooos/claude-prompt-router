@@ -10,7 +10,7 @@ and decides whether it belongs in **this chat**, a **subagent** or a **fresh ses
 ![version](https://img.shields.io/badge/version-0.5.0-blue?style=flat-square)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-mod-d97757?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
-![unit tests](https://img.shields.io/badge/unit_tests-37_passing-brightgreen?style=flat-square)
+![unit tests](https://img.shields.io/badge/unit_tests-47_passing-brightgreen?style=flat-square)
 ![eval](https://img.shields.io/badge/eval-123_cases-8a63d2?style=flat-square)
 
 [Quick start](#-quick-start) •
@@ -156,7 +156,7 @@ Words like *important*, *carefully* or *do it properly* never raise it beyond **
 
 ```json
 "pluginConfigs": {
-  "prompt-router": {
+  "prompt-router@prompt-router": {
     "options": {
       "project": "a React web app and a React Native mobile app for sharing recipes, Node.js backend",
       "rules": "Database migrations: opus, high. Copy changes on the marketing site: haiku, low.",
@@ -173,6 +173,9 @@ Words like *important*, *carefully* or *do it properly* never raise it beyond **
 
 > [!TIP]
 > Want no questions about effort or model at all? Set both `effortMode` and `modelMode` to `auto`. "Where should this go?" is still asked, since moving work to another session is always your call.
+
+> [!NOTE]
+> **Clients.** The desktop app, the terminal CLI, VS Code and Remote Control all run it. Where the chat cannot start a session itself (terminal, VS Code), "New session" gives you a `claude --model … --effort …` command to run in a new terminal. `claude -p` and Agent SDK runs pass untouched: their flags already chose the model and effort.
 
 ## 🛠️ Customizing
 
@@ -248,7 +251,7 @@ One small classifier call per prompt: low effort, at most 150 output tokens, on 
 <details>
 <summary><b>It asks me even though I set <code>auto</code>.</b></summary>
 
-Options are read when a session starts, so open a new chat. Also check that no second copy of the mod runs (`claude plugin list`, and any dev copy under `~/.claude/dev-mods/`), since a copy without your options falls back to `ask`.
+Options are read when a session starts, so open a new chat. Check that the entry under `pluginConfigs` uses the full id `prompt-router@prompt-router`: under plain `prompt-router` it is ignored. Also check that no second copy of the mod runs (`claude plugin list`, and any dev copy under `~/.claude/dev-mods/`), since a copy without your options falls back to `ask`.
 
 </details>
 
