@@ -4,8 +4,8 @@
 
 **The right place, the right model and the right effort for every prompt, decided before the agent starts working.**
 
-![version](https://img.shields.io/badge/version-0.8.0-blue?style=flat-square)
-![unit tests](https://img.shields.io/badge/unit_tests-193_passing-brightgreen?style=flat-square)
+![version](https://img.shields.io/badge/version-0.9.0-blue?style=flat-square)
+![unit tests](https://img.shields.io/badge/unit_tests-220_passing-brightgreen?style=flat-square)
 ![eval](https://img.shields.io/badge/eval-123_cases-8a63d2?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 <br>
@@ -13,7 +13,7 @@
 ![Codex](https://img.shields.io/badge/Codex-CLI_+_desktop-10a37f?style=flat-square)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-4b5563?style=flat-square)
 
-<sub>Unit tests: Claude Code 79 · Codex 62 · OpenCode 47</sub>
+<sub>Unit tests: Claude Code 106 · Codex 62 · OpenCode 47</sub>
 
 [How it works](#how-it-works) •
 [Quick start](#quick-start) •
@@ -124,6 +124,7 @@ The decisions are the same everywhere. What each platform lets a plugin do diffe
 | **Model check on first prompt** | ✅ | ⚠️ as a suggestion | ✅ |
 | **Here on another model** (later prompts) | ✅ asks Subagent or Stay here | ✅ asks Subagent (`spawn_agent`) or Stay here | ✅ asks Subagent (`task`) or Stay here |
 | **Notice** (`auto`, `notifications`) | toast + footer label | system message + `/model` line | toast |
+| **Savings stats** (`stats`) | `/router stats` (table + page with a graph), saving in the footer | not yet | not yet |
 | **`/router` command** (lists every option and where it came from) | ✅ | ⚠️ typed as a prompt; the TUI may take it as unknown | ✅ config command + toast |
 | **Default classifier** | Sonnet | `gpt-6-luna` (tier `light`) | `anthropic/claude-sonnet-5-5` |
 | **Options live in** | `~/.claude/settings.json` (`pluginConfigs`) or `/plugin` | `~/.codex/prompt-router.json` | `~/.config/opencode/prompt-router.json` or `opencode.json` |
@@ -204,6 +205,7 @@ The same keys on every platform. Each feature has its own switch. The defaults k
 | `subagentSuggestions` | `ask`, `off` | `ask`: offer a subagent for a self-contained task. `off`: the prompt stays here (effort and the other-model offer still apply). |
 | `sessionSuggestions` | `ask`, `off` | `ask`: offer a new session for an unrelated task. `off`: the prompt stays here. |
 | `notifications` | `on`, `off` | `on`: a toast after an automatic change, and a footer label in Claude Code (Codex: a system message). `off`: none of these; the changes still happen. |
+| `stats` | `on`, `off` | Claude Code. `on`: note each decision and each turn's token use in a local file for [savings stats](#savings-stats). `off`: nothing is noted. Default `on`. |
 
 Where to put them:
 
@@ -245,6 +247,22 @@ Last live eval: **123 cases**, including the Fable / xhigh / max boundaries. How
 | Haiku | ⚠️ 114 / 123 (none of the misses raised a tier) |
 
 One classifier call per prompt: low effort, at most 150 output tokens, on the model you pick in `classifier`. With the default Sonnet in Claude Code, that is a fraction of a cent per prompt. In Codex it runs on your ChatGPT plan and adds about 3–4 s before each prompt. The savings come from not running a 200k-token chat on a question that needed a fresh one.
+
+<a id="savings-stats"></a>
+### Savings stats
+
+`/router stats` shows Today / 7 days / Total and writes a page with a bar graph of the last 30 days (`~/.claude/mods-logs/prompt-router-stats.html`; open the `file://` link it prints). The footer shows today's net saving next to the model and effort (`notifications: on`).
+
+It is an **estimate**, kept honest:
+
+- Each turn's tokens (input, output, cache read and write) are priced with the list prices in [`core/prices.ts`](plugins/prompt-router/core/prices.ts), the only place with prices.
+- **Saved** = the same tokens on the model the turn would have run on without the router (the model you picked for the chat; for a subagent the router offered, the main chat's model) minus what they cost. A subagent the router did not offer saves nothing.
+- The **classifier's own cost** is taken off: **net saving** = saved − classifier.
+- A **stronger model** the router picked is shown as **extra cost**, apart, never hidden in the net.
+- **Effort** changes are counts only: what a turn would have cost at another effort is unknown.
+- A turn cut off before it finished has no token count and is counted as unknown; a model with no price claims no saving.
+
+The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl`, trimmed to 90 days and 5 MB. Turn it off with `"stats": "off"`.
 
 ---
 
@@ -571,7 +589,7 @@ Use one of them, not both: they both set effort per prompt.
 Canned classifier replies, no model calls. From the repo root:
 
 ```bash
-claude plugin test plugins/prompt-router       # Claude Code mod: 79
+claude plugin test plugins/prompt-router       # Claude Code mod: 106
 claude plugin validate plugins/prompt-router   # manifest and options check
 node --test adapters/codex/test/               # Codex: 62
 node --test adapters/shared/test/              # tier names: 5
@@ -598,7 +616,9 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 | File | What lives there |
 | --- | --- |
 | [`core/router.ts`](plugins/prompt-router/core/router.ts) | Shared by all platforms: the classifier prompt (`TEMPLATE`, `FABLE_RULE`), parsing, the routing rules |
-| [`hooks/register.tsx`](plugins/prompt-router/hooks/register.tsx) | Claude Code wiring: the dialogs, the `switch` tool, `/router` |
+| [`core/prices.ts`](plugins/prompt-router/core/prices.ts) | Model prices per 1M tokens (the only place with prices) |
+| [`core/stats.ts`](plugins/prompt-router/core/stats.ts) | Savings stats from the log: summary, per day, text table, page |
+| [`hooks/register.tsx`](plugins/prompt-router/hooks/register.tsx) | Claude Code wiring: the dialogs, the `switch` tool, `/router`, the stats log |
 | [`adapters/codex/`](adapters/codex) | `install.ts`, `hook.ts` (CLI hook), `mcp.ts` (desktop `route` tool) |
 | [`adapters/opencode/`](adapters/opencode) | `install.ts`, `prompt-router.ts` (the plugin) |
 | [`test/router.test.ts`](plugins/prompt-router/test/router.test.ts) | Unit tests with canned classifier replies |
@@ -613,6 +633,7 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 
 | Version | Changes |
 | --- | --- |
+| **0.9.0** | Savings stats in Claude Code: `/router stats` (Today / 7 days / Total, and a page with a graph of the last 30 days) and today's net saving in the footer. An estimate from list prices: the classifier's cost is taken off, a stronger model is shown as extra cost apart, effort only as counts. New option `stats`. |
 | **0.8.0** | One switch per feature: `effortDetection`, `firstChatDetection`, `midChatModelDetection`, `subagentSuggestions`, `sessionSuggestions`, `notifications`. The old `effortMode` and `modelMode` still work. `/router` lists every option and where it came from, and the log records them once per session. Codex and OpenCode: a prompt that stays here but fits another model offers a subagent on that model or staying here. `midChatModelDetection: auto` lets the agent choose between the two itself, with no question. Codex and OpenCode options name tiers (`light`, `standard`, `strong`, `top`) instead of Claude models; the old keys still work. OpenCode subagents are `router-<tier>`, and its questions show the real model. |
 | **0.7.0** | Claude Code: a prompt that stays here but fits another model offers a subagent on that model or staying here; the chat's model never changes mid-chat (it would break the prompt cache) |
 | **0.6.0** | Codex and OpenCode adapters (`adapters/`), the router logic moved to a shared `core/router.ts` |

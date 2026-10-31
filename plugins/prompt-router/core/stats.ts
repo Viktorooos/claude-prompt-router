@@ -258,3 +258,68 @@ export function savingLabel(s: Summary): string {
   if (Math.abs(s.netUsd) < 0.005) return ''
   return s.netUsd > 0 ? `saved ${usd(s.netUsd)} today` : `router cost ${usd(-s.netUsd)} today`
 }
+
+// A self-contained page for /router stats: the three periods and the net saving per day as bars.
+export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[]): string {
+  const W = 720
+  const H = 200
+  const pad = 24
+  const max = Math.max(0.01, ...days.map(d => Math.abs(d.netUsd)))
+  const hasNeg = days.some(d => d.netUsd < 0)
+  const zero = hasNeg ? H / 2 : H - pad
+  const scale = (hasNeg ? H / 2 - pad : H - 2 * pad) / max
+  const bw = (W - 2 * pad) / Math.max(1, days.length)
+  const bars = days
+    .map((d, i) => {
+      const h = Math.abs(d.netUsd) * scale
+      const y = d.netUsd >= 0 ? zero - h : zero
+      return `<rect class="bar ${d.netUsd >= 0 ? 'pos' : 'neg'}" x="${(pad + i * bw + 1).toFixed(1)}" y="${y.toFixed(1)}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${h.toFixed(1)}"><title>${d.day}: ${usd(d.netUsd)}</title></rect>`
+    })
+    .join('')
+  const first = days[0]?.day ?? ''
+  const last = days.at(-1)?.day ?? ''
+  const rows: [string, (s: Summary) => string][] = [
+    ['Net saving', s => `${usd(s.netUsd)} (${Math.round(s.netPct)} %)`],
+    ['Saved (cheaper model)', s => usd(s.savedUsd)],
+    ['Classifier', s => usd(-s.classifierUsd)],
+    ['Extra cost (stronger model)', s => usd(s.extraUsd)],
+    ['Cost', s => usd(s.actualUsd)],
+    ['Cost without router', s => usd(s.withoutUsd)],
+    ['Prompts routed', s => String(s.prompts)],
+    ['Model changes', s => String(s.modelChanges)],
+    ['Effort lower / higher', s => `${s.effortDown} / ${s.effortUp}`],
+    ['Subagents / new sessions', s => `${s.subagents} / ${s.sessions}`],
+    ['Turns unknown / unpriced', s => `${s.unknownTurns} / ${s.unpricedTurns}`],
+  ]
+  const table = rows.map(([n, f]) => `<tr><th>${n}</th>${[r.today, r.week, r.total].map(s => `<td>${f(s)}</td>`).join('')}</tr>`).join('')
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt Router stats</title>
+<style>
+:root { --bg: #faf9f5; --fg: #1f1e1d; --muted: #6b6a65; --line: #e3e1da; --pos: #2f7d4f; --neg: #c0533a; }
+@media (prefers-color-scheme: dark) { :root { --bg: #1f1e1d; --fg: #f0eee6; --muted: #a3a199; --line: #3a3936; --pos: #5dbb84; --neg: #e27a60; } }
+body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+main { max-width: 760px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+p { color: var(--muted); margin: 0 0 16px; }
+.big { font-size: 32px; font-weight: 600; margin: 8px 0 16px; }
+svg { width: 100%; height: auto; display: block; margin-bottom: 4px; }
+.bar.pos { fill: var(--pos); } .bar.neg { fill: var(--neg); }
+.axis { stroke: var(--line); }
+.days { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+.wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+th:first-child { text-align: left; font-weight: 500; }
+thead th { color: var(--muted); font-weight: 500; }
+</style></head>
+<body><main>
+<h1>Prompt Router stats</h1>
+<p>An estimate: tokens × list prices. The saving compares each turn with the model it would have run on without the router; the classifier's own cost is taken off; a stronger model is extra cost, kept out of the net; effort changes are counts only.</p>
+<div class="big">${usd(r.week.netUsd)} <span style="font-size:15px;font-weight:400;color:var(--muted)">net saving, last 7 days</span></div>
+<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Net saving per day"><line class="axis" x1="${pad}" x2="${W - pad}" y1="${zero}" y2="${zero}"/>${bars}</svg>
+<div class="days"><span>${first}</span><span>net saving per day</span><span>${last}</span></div>
+<div class="wrap"><table><thead><tr><th></th><th>Today</th><th>7 days</th><th>Total</th></tr></thead><tbody>${table}</tbody></table></div>
+</main></body></html>
+`
+}

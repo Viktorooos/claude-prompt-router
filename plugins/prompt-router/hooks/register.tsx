@@ -5,7 +5,7 @@ import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, LEVELS, MODEL_NAMES, MODELS, NAM
 import type { Chat, Config, Model, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { parseLog, rotate, savingLabel, statsText, summarize } from '../core/stats.ts'
+import { byDay, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
 import type { Decision, Entry } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
@@ -694,7 +694,18 @@ export const register: Register = (on, options) => {
     if (arg === 'stats') {
       if (cfg.stats !== 'on') return { text: 'Prompt Router stats are off (option stats). Turn them on with "stats": "on".' }
       await flush($)
-      return { text: statsText(summarize(parseLog(await readStats($)), await $.clock.now())) }
+      const now = await $.clock.now()
+      const records = parseLog(await readStats($))
+      const report = summarize(records, now)
+      const page = `${home}/.claude/mods-logs/prompt-router-stats.html`
+      let link = ''
+      try {
+        await $.fs.write(page, statsHtml(report, byDay(records, now, 30)))
+        link = `\n\nWith a graph of the last 30 days: file://${page}`
+      } catch (err) {
+        await log($, 'stats page', err)
+      }
+      return { text: `${statsText(report)}${link}` }
     }
     const now = await currentLevel($)
     const { value } = await $.state.get(OVERRIDE)

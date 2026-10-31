@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { byDay, parseLog, rotate, savingLabel, statsText, summarize } from '../core/stats.ts'
+import { byDay, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
 import type { Accept, Decision, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -174,4 +174,18 @@ test('savingLabel is short, empty when there is nothing to show', () => {
   expect(savingLabel(s)).toBe(`saved $${s.netUsd.toFixed(2)} today`)
   const loss = summarize([decision({ classifier: { model: 'opus', usage: U, usd: 0.05 } })], NOW).today
   expect(savingLabel(loss)).toBe('router cost $0.05 today')
+})
+
+test('statsHtml is one page with the periods, a bar per day and the estimate note', () => {
+  const records = [turn('haiku', 'opus'), turn('opus', 'sonnet', { ts: NOW - 2 * DAY }), decision({ classifier: { model: 'haiku', usage: U, usd: 0.001 } })]
+  const html = statsHtml(summarize(records, NOW), byDay(records, NOW, 30))
+  expect(html.startsWith('<!doctype html>')).toBe(true)
+  expect(html).toMatch(/<svg/)
+  expect((html.match(/<rect class="bar/g) ?? []).length).toBe(30)
+  expect(html).toMatch(/2026-10-31/)
+  expect(html).toMatch(/Net saving/)
+  expect(html).toMatch(/Extra cost \(stronger model\)/)
+  expect(html).toMatch(/estimate/i)
+  expect(html).toMatch(/prefers-color-scheme: dark/)
+  expect(html).not.toMatch(/<script/)
 })

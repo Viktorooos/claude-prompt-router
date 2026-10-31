@@ -989,12 +989,15 @@ test('/router stats shows the table from the log', async ($: any, on: any) => {
     { kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } },
     { kind: 'decision', ts: now, platform: 'claude-code', chat: 'c', where: 'here', from: { model: 'opus', effort: 'medium' }, to: { model: 'haiku', effort: 'low' }, outcome: 'applied' },
   ].map(r => JSON.stringify(r)).join('\n')
-  engine(on, PICK.same, { now, files: { '*/prompt-router-stats.jsonl': `${log}\n` } })
+  const seen = engine(on, PICK.same, { now, files: { '*/prompt-router-stats.jsonl': `${log}\n` } })
   await start($)
   const r = await $.command.run({ command: 'router', args: 'stats' })
   expect(r.text).toMatch(/Today\s+7 days\s+Total/)
   expect(r.text).toMatch(/Net saving\s+\$19\.50 \(98 %\)/)
   expect(r.text).toMatch(/Effort lower \/ higher\s+1 \/ 0/)
+  const page = seen.writes.map(w => JSON.parse(w)).find(w => w.path.endsWith('prompt-router-stats.html'))
+  expect(page.text).toMatch(/<svg/)
+  expect(r.text).toMatch(/file:\/\/.*prompt-router-stats\.html/)
 })
 
 test('stats off: nothing is noted and /router stats says so', { options: { stats: 'off' } } as any, async ($: any, on: any) => {

@@ -45,9 +45,12 @@ Navazuje na 0.8.0 (main 005c893 + c57e57f přejmenování). Dvě části: A) kol
    - `baseline`: hlavní chat = model, který si zvolil člověk (router přepnutý model si pamatuje původní; ruční změna modelu ho přepíše); subagent nabídnutý routerem = baseline hlavního chatu, jiný subagent = jeho vlastní model (žádná úspora). Subagenti zděděného přepnutého modelu se jako úspora nepočítají (konzervativně).
    - `stats.ts` navíc: `Accept`, `rotate`, `statsText` (textová tabulka, použijí i Codex/OpenCode), `savingLabel` (štítek patičky „saved $X today“ / „router cost $X today“). „Top 3 důvody“ vypuštěny (záznam nemá vazbu tah → rozhodnutí).
    - Neověřeno živě (jen unit testy); ověřit po instalaci pár prompty + `/router stats`.
-4. Panel modu: `$.ui.open` z `/router stats`, `ui.render` Pane, sloupcový graf po dnech přes `Svg` (desktop), v terminálu textové pruhy; data v `atom` + kontrakt `types/index.d.ts`. Ověření: screenshot.
+✅ 4. Štítek v patičce + HTML stránka (místo panelu, rozhodnutí uživatele). Ověření: unit testy.
+   - Hotovo: `ui.render` SessionMode přidá k model · effort dnešní čistou úsporu (`savingLabel`, jen při `stats: on` a `notifications: on`). `/router stats` vypíše `statsText` a zapíše `~/.claude/mods-logs/prompt-router-stats.html` (`statsHtml`: tabulka tří období + SVG sloupec po dnech za 30 dní, tmavý režim přes `prefers-color-scheme`, bez skriptu) a vrátí `file://` odkaz (mod neumí otevřít prohlížeč).
+   - Neověřeno živě.
 5. Codex + OpenCode (samostatné sessions, nezávislé). Codex: nový hook `Stop` (+ `SubagentStop`) čte rozdíl `total_token_usage` z rolloutu, klasifikátor z `turn.completed` ve stdout `codex exec --json`. OpenCode: hook `event` na `message.updated` (tokens + cost), klasifikátor z `data.info`. Ověření: jejich testy.
-6. README (sekce Statistika, jak se počítá a že je to odhad), volba `stats: on|off`, verze 0.9.0.
+✅ 6. README (sekce Statistika, jak se počítá a že je to odhad), volba `stats: on|off`, verze 0.9.0.
+   - Hotovo: README sekce „Savings stats“, řádky v tabulkách voleb a funkcí, „Where things live“, changelog 0.9.0, počty testů (Claude Code 106, celkem 220).
 
 ## B) Měření přesnosti (už existuje základ)
 Dnes: `test/cases.json` (129 případů) + `expected.json` + `eval.py`, spouští se ručně přes nástroj `test` (stojí tokeny). Chybí:
