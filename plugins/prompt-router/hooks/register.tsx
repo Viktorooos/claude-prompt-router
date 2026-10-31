@@ -127,6 +127,7 @@ function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: nu
     tokens,
     conf: cfg,
     isFirst: !messages.some(m => m.role === 'assistant'),
+    hereModel: true,
     models,
   }
 }
@@ -136,7 +137,7 @@ function classify($: EngineInterface, text: string, c: Chat, template?: string) 
 }
 
 // One test case for the classifier: a prompt and the chat it arrives in.
-type Case = { id?: string; prompt: string; isFirst?: boolean; models?: string[]; classifier?: string; project?: string; rules?: string; language?: string; first?: string; recent?: string[]; reply?: string; model?: string; effort?: string; tokens?: number }
+type Case = { id?: string; prompt: string; isFirst?: boolean; hereModel?: boolean; models?: string[]; classifier?: string; project?: string; rules?: string; language?: string; first?: string; recent?: string[]; reply?: string; model?: string; effort?: string; tokens?: number }
 
 async function runCase($: EngineInterface, k: Case, template?: string) {
   const c: Chat = {
@@ -154,6 +155,7 @@ async function runCase($: EngineInterface, k: Case, template?: string) {
       classifier: k.classifier === 'haiku' || k.classifier === 'sonnet' || k.classifier === 'opus' ? k.classifier : cfg.classifier,
     },
     isFirst: k.isFirst ?? false,
+    hereModel: k.hereModel ?? false,
     models: k.models ? ALL_MODELS.filter(m => k.models?.includes(m)) : ALL_MODELS,
   }
   try {
@@ -213,6 +215,8 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
   await log($, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${tokens ?? '?'} tok | first ${isFirst} | ${clip(r.text, 200)}`)
   // The first prompt of a chat has nothing to leave: only its model and effort count.
   if (p && isFirst) return { ...p, where: 'here', first: { now: knownModel(model) } }
+  const cur = knownModel(model)
+  if (p?.where === 'here' && cur && p.model !== cur && cfg.modelMode !== 'off') return { ...p, other: { now: cur } }
   return p
 }
 
@@ -224,23 +228,32 @@ function switchCall(to: { model?: Model; effort?: Level }) {
   return `call the ${SWITCH_TOOL} tool with ${args} (load it with ToolSearch "select:${SWITCH_TOOL}" if it is not loaded; never set_session_model or set_session_effort, which refuse this chat; if the tool fails, tell the user in one line to run ${slash})`
 }
 
-// Here keeps its own effort choice: a lower effort fits a task even when it stays in this chat.
+// The "do it here" options: here keeps its own effort choice, a lower effort fits a task even
+// when it stays in this chat. Without an effort change the option just goes on.
+function hereChoice(name: string, p: Pick, now: Level | '', effort: boolean) {
+  const switchHere = `"${name} (${NAMES[p.effort]})"`
+  const keepHere = now ? `"${name} (keep ${NAMES[now]})"` : `"${name} (keep the effort)"`
+  if (!effort) return { options: `"${name}"`, then: `"${name}" = continue normally.` }
+  if (cfg.effortMode === 'ask') return { options: `${switchHere}, ${keepHere}`, then: `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt; ${keepHere} = continue normally.` }
+  return { options: switchHere, then: `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt.` }
+}
+
 function askNote(p: Pick, now: Level | '', midTurn = false, inApp = true) {
   const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
   const where = p.where === 'session' ? 'a new session' : 'a subagent'
   const session = `"New session (${label})"`
   const agent = `"Subagent (${label})"`
-  const effort = !midTurn && p.effort !== now
-  const switchHere = `"Do it here (${NAMES[p.effort]})"`
-  const keepHere = now ? `"Do it here (keep ${NAMES[now]})"` : `"Do it here (keep the effort)"`
-  const here = !effort ? `"Do it here"` : cfg.effortMode === 'ask' ? `${switchHere}, ${keepHere}` : switchHere
-  const options = p.where === 'session' ? `${session}, ${agent}, ${here}` : `${agent}, ${here}`
-  const hereThen = !effort
-    ? 'Do it here = continue normally.'
-    : cfg.effortMode === 'ask'
-      ? `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt; ${keepHere} = continue normally.`
-      : `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt.`
-  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang(cfg)}. Then: ${sessionThen(p, inApp)} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${hereThen}`
+  const here = hereChoice('Do it here', p, now, !midTurn && p.effort !== now)
+  const options = p.where === 'session' ? `${session}, ${agent}, ${here.options}` : `${agent}, ${here.options}`
+  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang(cfg)}. Then: ${sessionThen(p, inApp)} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${here.then}`
+}
+
+// A prompt that stays here but fits another model: a subagent on that model, or here on the chat's
+// model with only the effort judged again. The chat's model never changes mid-chat.
+function otherNote(p: Pick, from: Model, now: Level | '') {
+  const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
+  const here = hereChoice('Stay here', p, now, p.effort !== now)
+  return `Prompt Router: this prompt belongs to this chat but fits ${label} better than this chat's ${MODEL_NAMES[from]}${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options "Subagent (${label})", ${here.options}, the recommended one first. Write the question and options in ${userLang(cfg)}. Then: Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}"; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. ${here.then}`
 }
 
 // start_session is the desktop app's; in a terminal or VS Code the person opens the session.
@@ -301,6 +314,7 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   if (p.where === 'here') {
     // A prompt typed over a running turn belongs to that work: its model and effort stay.
     if (e.turnId) return e
+    if (p.other) return { ...e, text: `${e.text}\n\n[${otherNote(p, p.other.now, now)}]` }
     const changes: string[] = []
     let askModel: { from: Model } | null = null
     let askEffort: { now: Level | '' } | null = null
@@ -384,6 +398,7 @@ export const register: Register = (on, options) => {
                 rules: { type: 'string', description: 'Overrides the rules option for this case' },
                 language: { type: 'string', description: 'Overrides the language option for this case' },
                 isFirst: { type: 'boolean', description: 'The prompt opens a new chat (the model check runs)' },
+                hereModel: { type: 'boolean', description: 'Mid-chat in Claude Code: here also names the model the task needs (default false)' },
                 models: { type: 'array', items: { type: 'string' }, description: 'The models the router may offer (default: all, Fable included)' },
                 classifier: { type: 'string', description: 'sonnet, haiku or opus, overriding the classifier option' },
               },

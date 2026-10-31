@@ -1609,5 +1609,77 @@
       "medium",
       "high"
     ]
+  },
+  "hm_rename": {
+    "where": [
+      "here"
+    ],
+    "model": [
+      "sonnet",
+      "haiku"
+    ],
+    "effort": [
+      "low",
+      "medium"
+    ]
+  },
+  "hm_design": {
+    "where": [
+      "here"
+    ],
+    "model": [
+      "opus"
+    ],
+    "effort": [
+      "high",
+      "medium"
+    ]
+  },
+  "hm_thanks": {
+    "where": [
+      "keep",
+      "here"
+    ],
+    "model": [
+      "opus"
+    ],
+    "effort": null
+  },
+  "hm_quickq": {
+    "where": [
+      "here"
+    ],
+    "model": [
+      "opus",
+      "haiku"
+    ],
+    "effort": [
+      "low",
+      "medium"
+    ]
+  },
+  "hm_debug": {
+    "where": [
+      "here"
+    ],
+    "model": [
+      "opus"
+    ],
+    "effort": [
+      "medium",
+      "high"
+    ]
+  },
+  "hm_ahoj": {
+    "where": [
+      "here",
+      "keep"
+    ],
+    "model": [
+      "opus"
+    ],
+    "effort": [
+      "low"
+    ]
   }
 }

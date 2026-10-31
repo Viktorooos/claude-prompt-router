@@ -4,8 +4,8 @@
 
 **The right place, the right model and the right effort for every prompt, decided before the agent starts working.**
 
-![version](https://img.shields.io/badge/version-0.6.0-blue?style=flat-square)
-![unit tests](https://img.shields.io/badge/unit_tests-115_passing-brightgreen?style=flat-square)
+![version](https://img.shields.io/badge/version-0.7.0-blue?style=flat-square)
+![unit tests](https://img.shields.io/badge/unit_tests-123_passing-brightgreen?style=flat-square)
 ![eval](https://img.shields.io/badge/eval-123_cases-8a63d2?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 <br>
@@ -13,7 +13,7 @@
 ![Codex](https://img.shields.io/badge/Codex-CLI_+_desktop-10a37f?style=flat-square)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-4b5563?style=flat-square)
 
-<sub>Unit tests: Claude Code 47 · Codex 41 · OpenCode 27</sub>
+<sub>Unit tests: Claude Code 55 · Codex 41 · OpenCode 27</sub>
 
 [How it works](#how-it-works) •
 [Quick start](#quick-start) •
@@ -122,6 +122,7 @@ The decisions are the same everywhere. What each platform lets a plugin do diffe
 | **Subagent** | ✅ Agent tool with model and effort | ✅ `spawn_agent` with `model` and `reasoning_effort` | ✅ `task` with a `router-<model>` subagent |
 | **New session** | ✅ `start_session` in the app; ⚠️ a `claude …` command elsewhere | ⚠️ a `codex -m …` command to run | ✅ `router_session` tool (fallback: an `opencode` command) |
 | **Model check on first prompt** | ✅ | ⚠️ as a suggestion | ✅ |
+| **Here on another model** (later prompts) | ✅ asks Subagent or Stay here | ❌ not yet | ❌ not yet |
 | **Notice** (`auto`) | toast | system message + `/model` line | toast |
 | **`/router` command** | ✅ | ⚠️ typed as a prompt; the TUI may take it as unknown | ✅ config command + toast |
 | **Default classifier** | Sonnet | `gpt-6-luna` (class `haiku`) | `anthropic/claude-sonnet-5-5` |
@@ -141,6 +142,8 @@ Shared by all three platforms.
 | **here** | Builds on what this chat already read or changed, is trivial, or the chat is still small. |
 | **subagent** | A self-contained search, read, build or test run whose short result is needed here. |
 | **session** | Unrelated to this chat, or long mechanical work better done with a fresh context. In a chat over **60k tokens**, even a trivial unrelated task goes here. |
+
+**Here on another model** (Claude Code). The chat's model is set only on its first prompt. Later, switching it would break the prompt cache and the new model would read the whole context again at full price. So when a prompt belongs here but fits a stronger or a cheaper model, the router asks: **Subagent (model · effort)**, which gets what it needs from the chat and returns a short result, or **Stay here**, where only the effort is judged again (`effortMode`). With `modelMode: off` it only judges the effort.
 
 ### Models
 
@@ -285,6 +288,7 @@ Claude Code is the reference platform. Notes per client:
 - `switch` refuses a model this chat is not offered (e.g. Fable when your picker does not list it) and says what it skipped. If it fails, Claude tells you the `/model` or `/effort` command to run.
 - Where the effort setting cannot be changed, the router puts the level on each request until you move the effort picker yourself.
 - A prompt typed while a turn is running keeps the model and effort.
+- The model is switched only on a chat's first prompt. Where the app has no model setting to change, the router puts the model on each request: the picker may still show the old model, while `/router` and the footer label show the one in use.
 
 </details>
 
@@ -487,6 +491,14 @@ Removes the shim (only if it is the router's) and puts back the newest file it r
 - In Claude Code, put them under the full id `prompt-router@prompt-router` in `pluginConfigs`. An entry under plain `prompt-router` is used only when there is no full-id entry, and `/router` tells you to rename it.
 - Check that no second copy of the mod runs (`claude plugin list`, and any dev copy under `~/.claude/dev-mods/`). A copy without your options falls back to `ask`.
 - In Codex, `auto` still cannot switch the chat; you get the `/model` line instead of a question.
+- A later prompt that stays here but fits another model always asks **Subagent** or **Stay here**, also in `auto`: the chat's model never changes mid-chat. In `auto` the question has one **Stay here** option, and the new effort is set when you pick it.
+
+</details>
+
+<details>
+<summary><b>Why does it offer a subagent for a prompt that belongs to this chat?</b></summary>
+
+The prompt fits another model than this chat runs on, a stronger or a cheaper one. Switching this chat's model would make the new model read the whole context again at full price, so the router offers a subagent on that model instead. The subagent does not see the chat: Claude passes it what it needs and gets back a short result. **Stay here** keeps the model and only adjusts the effort. A greeting, an approval, a quick question or a short message stays here without asking.
 
 </details>
 
@@ -526,7 +538,7 @@ Use one of them, not both: they both set effort per prompt.
 Canned classifier replies, no model calls. From the repo root:
 
 ```bash
-claude plugin test plugins/prompt-router       # Claude Code mod: 47
+claude plugin test plugins/prompt-router       # Claude Code mod: 55
 claude plugin validate plugins/prompt-router   # manifest and options check
 node --test adapters/codex/test/               # Codex: 41
 node --test adapters/opencode/test/            # OpenCode: 27 (mock client)
@@ -567,6 +579,7 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 
 | Version | Changes |
 | --- | --- |
+| **0.7.0** | Claude Code: a prompt that stays here but fits another model offers a subagent on that model or staying here; the chat's model never changes mid-chat (it would break the prompt cache) |
 | **0.6.0** | Codex and OpenCode adapters (`adapters/`), the router logic moved to a shared `core/router.ts` |
 | **0.5.1** | Options under the short key `prompt-router` are read (with a hint to rename it); the classifier sees only the typed text (the app's reminder blocks are stripped); `start_session` is offered only where it exists, the terminal gets a `claude --model … --effort …` command |
 | **0.5.0** | Fable, xhigh and max with narrow rules; switching through the mod's own `switch` tool |

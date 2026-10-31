@@ -571,3 +571,99 @@ test('a -p / SDK run passes untouched: its flags chose model and effort', { opti
   expect(seen.prompts.length).toBe(0)
   expect(seen.sets).toEqual([])
 })
+
+// Here on another model: switching this chat's model would break the prompt cache, so the router
+// offers a subagent on that model or staying here with only the effort judged again.
+const OTHER = {
+  lower: '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}',
+  lowerSame: '{"where": "here", "model": "sonnet", "effort": "medium", "why": "a mechanical edit"}',
+  higher: '{"where": "here", "model": "opus", "effort": "high", "why": "new logic"}',
+}
+
+test('mid-chat, the classifier is asked which model the task needs, also for here', async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower)
+  await start($)
+  await submit($, 'rename the keys we just found')
+  expect(seen.prompts[0]).not.toMatch(/for here use the current one/)
+  expect(seen.prompts[0]).toMatch(/MODEL \(the model the task needs, also for here/)
+  expect(seen.prompts[0]).toMatch(/a quick question, or writing a short message or email keeps the current one, even where the haiku rule below says haiku/)
+})
+
+test('here on a cheaper model (ask): offers a subagent or staying here, switches nothing', { options: { effortMode: 'ask', modelMode: 'ask' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  const t = seen.sent[0] ?? ''
+  expect(t.startsWith('rename the keys we just found\n\n[Prompt Router')).toBe(true)
+  expect(t).toMatch(/fits Sonnet · low better than this chat's Opus, because: a mechanical edit/)
+  expect(t).toMatch(/AskUserQuestion/)
+  expect(t).toMatch(/"Subagent \(Sonnet · low\)", "Stay here \(Low\)", "Stay here \(keep Medium\)"/)
+  expect(t).toMatch(/Agent tool with model "sonnet" and effort "low"/)
+  expect(t).toMatch(/give it everything it needs from this chat/)
+  expect(t).toMatch(/"Stay here \(Low\)" = call the mcp__prompt-router__switch tool with \{"effort":"low"\}/)
+  expect(t).toMatch(/never switch this chat's model/)
+  expect(t).not.toMatch(/\{"model"/)
+  expect(t).not.toMatch(/New session/)
+  expect(seen.sets).toEqual([])
+  expect(seen.toasts).toEqual([])
+})
+
+test('here on a stronger model: the same offer, the chat model stays', async ($: any, on: any) => {
+  const seen = engine(on, OTHER.higher, { model: 'claude-haiku-5-5', rows: [{ ...MODEL_ROW, value: 'haiku' }] })
+  await start($)
+  await submit($, 'now work out the sync logic for it')
+  const t = seen.sent[0] ?? ''
+  expect(t).toMatch(/fits Opus · high better than this chat's Haiku, because: new logic/)
+  expect(t).toMatch(/"Subagent \(Opus · high\)", "Stay here \(High\)", "Stay here \(keep Medium\)"/)
+  expect(t).toMatch(/Agent tool with model "opus" and effort "high"/)
+  expect(seen.sets).toEqual([])
+})
+
+test('here on another model (auto): one Stay here option that switches only the effort', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  const t = seen.sent[0] ?? ''
+  expect(t).toMatch(/"Subagent \(Sonnet · low\)", "Stay here \(Low\)"/)
+  expect(t).not.toMatch(/keep Medium/)
+  expect(t).toMatch(/"Stay here \(Low\)" = call the mcp__prompt-router__switch tool with \{"effort":"low"\}/)
+  // The question comes first: nothing is set before the user picks.
+  expect(seen.sets).toEqual([])
+  expect(seen.toasts).toEqual([])
+})
+
+test('here on another model at the same effort: Stay here just goes on', async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lowerSame, { rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  const t = seen.sent[0] ?? ''
+  expect(t).toMatch(/"Subagent \(Sonnet · medium\)", "Stay here"/)
+  expect(t).toMatch(/"Stay here" = continue normally/)
+  expect(t).not.toMatch(/switch tool/)
+  expect(seen.sets).toEqual([])
+})
+
+test('modelMode off: here on another model only judges the effort, as before', { options: { effortMode: 'auto', modelMode: 'off' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW] })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  expect(seen.prompts[0]).toMatch(/for here use the current one/)
+  expect(seen.sent).toEqual(['rename the keys we just found'])
+  expect(seen.sets).toEqual(['low'])
+})
+
+test('here on another model typed over a running turn: nothing changes', async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW] })
+  await start($)
+  await $.prompt.submit({ text: 'and rename these too', wait: false, origin: { kind: 'composer' }, turnId: 't1' })
+  expect(seen.sent).toEqual(['and rename these too'])
+  expect(seen.sets).toEqual([])
+})
+
+test('here on another model when the chat model is unknown: as before', { options: { effortMode: 'auto', modelMode: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { model: 'some-custom-model' })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  expect(seen.sent).toEqual(['rename the keys we just found'])
+  expect(seen.sets).toEqual(['low'])
+})

@@ -1507,5 +1507,83 @@
     "effort": "medium",
     "tokens": 90000,
     "project": "a Kotlin Multiplatform app (Android, iOS) for vet consultations and a pet shop"
+  },
+  {
+    "id": "hm_rename",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 60000,
+    "first": "Find every place where the old fetchUserProfile API is still called in the app",
+    "recent": [],
+    "reply": "Found 14 call sites of fetchUserProfile across 9 files (ProfileRepository.kt, SettingsViewModel.kt, ProfileView.swift, ...). It was replaced by loadProfile(userId) in the shared module, which takes the same arguments.",
+    "prompt": "rename all of them to loadProfile",
+    "isFirst": false,
+    "hereModel": true
+  },
+  {
+    "id": "hm_design",
+    "model": "claude-haiku-5-5",
+    "effort": "low",
+    "tokens": 30000,
+    "first": "How do we store notes offline right now?",
+    "recent": [
+      "and what happens when two devices edit the same note?"
+    ],
+    "reply": "Notes are stored in a local SQLite table via SQLDelight and uploaded with a simple last-write-wins PUT when online. If two devices edit the same note, the later upload silently overwrites the other one; there is no conflict detection or merge.",
+    "prompt": "design a new sync logic for the notes that handles conflicts between devices properly, including offline edits on both",
+    "isFirst": false,
+    "hereModel": true
+  },
+  {
+    "id": "hm_thanks",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 90000,
+    "first": "The checkout total is off by one cent with some discounts, fix it",
+    "recent": [
+      "add a test for 3 items"
+    ],
+    "reply": "Fixed: totals are now rounded once at the end instead of per line. CheckoutTotalTest covers 1, 2 and 3 items with percentage discounts; all checkout tests pass.",
+    "prompt": "thanks, ok go on",
+    "isFirst": false,
+    "hereModel": true
+  },
+  {
+    "id": "hm_quickq",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 70000,
+    "first": "Show me how the session token is refreshed",
+    "recent": [],
+    "reply": "Here is TokenRefresher.refresh():\n```kotlin\nsuspend fun refresh(): Token = mutex.withLock {\n  current?.takeIf { !it.isExpired(skew = 30.seconds) } ?: api.refresh(stored.refreshToken).also { stored.save(it) }\n}\n```\nIt locks a mutex so parallel requests share one refresh.",
+    "prompt": "what is the 30 seconds skew for?",
+    "isFirst": false,
+    "hereModel": true
+  },
+  {
+    "id": "hm_debug",
+    "model": "claude-sonnet-5-5",
+    "effort": "medium",
+    "tokens": 55000,
+    "first": "Write unit tests for the OrderSyncWorker retry logic",
+    "recent": [
+      "cover the exponential backoff too"
+    ],
+    "reply": "Added OrderSyncWorkerTest with 6 tests: success, single retry, max retries, backoff delays 1s/2s/4s, cancellation and network error mapping.",
+    "prompt": "testBackoffDelays fails intermittently on CI, about 1 in 5 runs, with expected 4000 but was 3999. Find out why and fix it",
+    "isFirst": false,
+    "hereModel": true
+  },
+  {
+    "id": "hm_ahoj",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "tokens": 40000,
+    "first": "Explain how the push notification routing works",
+    "recent": [],
+    "reply": "Push payloads arrive in NotificationService, which reads the `route` field and maps it to a deep link through DeepLinkRouter.",
+    "prompt": "ahoj",
+    "isFirst": false,
+    "hereModel": true
   }
 ]

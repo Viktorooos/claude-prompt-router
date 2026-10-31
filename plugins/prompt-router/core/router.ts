@@ -22,7 +22,9 @@ export type Config = { project: string; rules: string; language: string; classif
 
 export type Model = keyof typeof MODELS
 
-export type Pick = { where: Where; model: Model; effort: Level; why: string; first?: { now: Model | '' } }
+// first: the first prompt of a chat, whose model may still change. other: a later prompt that stays
+// here but fits another model than the chat's, which is not switched (that would break the cache).
+export type Pick = { where: Where; model: Model; effort: Level; why: string; first?: { now: Model | '' }; other?: { now: Model } }
 
 export function norm(s: string) {
   const t = s.toLowerCase().replace(/[^a-z]/g, '')
@@ -59,7 +61,8 @@ export function clip(s: string, n: number) {
 }
 
 // What the classifier sees of the chat. The test tool fills it by hand.
-export type Chat = { first: string; recent: string[]; reply: string; model: string; now: Level | ''; tokens: number | undefined; conf: Config; isFirst?: boolean; models: readonly Model[] }
+// hereModel: the platform offers a subagent when a prompt that stays here fits another model.
+export type Chat = { first: string; recent: string[]; reply: string; model: string; now: Level | ''; tokens: number | undefined; conf: Config; isFirst?: boolean; hereModel?: boolean; models: readonly Model[] }
 
 // The classifier prompt. {{name}} slots are filled per prompt; the test tool can swap the whole
 // template for a file, so the rules can be tuned without reloading the mod.
@@ -110,6 +113,8 @@ export const MODEL_HEAD_FIRST = 'MODEL (this is the FIRST prompt of a new chat: 
 
 export const MODEL_HEAD = 'MODEL (for subagent or session; for here use the current one)'
 
+export const MODEL_HEAD_HERE = 'MODEL (the model the task needs, also for here: a here prompt on another model than the current one is offered to a subagent on that model. For here, a greeting, small talk, one short answer, a quick question, or writing a short message or email keeps the current one, even where the haiku rule below says haiku)'
+
 export const FABLE_RULE = `
 - fable: rare, 2.5 times the price of opus; only where opus at high effort is likely not enough: a new architecture across several layers (shared code plus iOS and Android, or backend plus clients) with no clear solution yet; a hard concurrency or race problem, or a security hole whose reach across several services is still unknown; a bug that two or more fixes already failed to solve; a deep analysis of a whole large system (many services) where a wrong conclusion costs a lot of money or data. Not fable (opus instead): an everyday feature, however big or important; a code review of a given module, also of payments or security code; payments, auth or a migration with a known approach or an official guide; anything mechanical; a question about architecture. A single failed fix is not two.`
 
@@ -117,7 +122,7 @@ export function pickPrompt(text: string, c: Chat, template = TEMPLATE) {
   const conf = c.conf
   const slots: Record<string, string> = {
     project: conf.project.trim() || 'a software project',
-    model_head: c.isFirst && conf.modelMode !== 'off' ? MODEL_HEAD_FIRST : MODEL_HEAD,
+    model_head: conf.modelMode === 'off' ? MODEL_HEAD : c.isFirst ? MODEL_HEAD_FIRST : c.hereModel ? MODEL_HEAD_HERE : MODEL_HEAD,
     models: c.models.join('|'),
     fable: c.models.includes('fable') ? FABLE_RULE : '',
     rules: conf.rules.trim() ? `\n\nPROJECT RULES (they take precedence over the rules above)\n${conf.rules.trim()}` : '',
