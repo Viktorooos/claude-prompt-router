@@ -124,7 +124,7 @@ The decisions are the same everywhere. What each platform lets a plugin do diffe
 | **Model check on first prompt** | ✅ | ⚠️ as a suggestion | ✅ |
 | **Here on another model** (later prompts) | ✅ asks Subagent or Stay here | ✅ asks Subagent (`spawn_agent`) or Stay here | ✅ asks Subagent (`task`) or Stay here |
 | **Notice** (`auto`, `notifications`) | toast + footer label | system message + `/model` line | toast |
-| **Savings stats** (`stats`) | `/router stats` (table + page with a graph), saving in the footer | not yet | not yet |
+| **Savings stats** (`stats`) | `/router stats` (table + page with a graph), saving in the footer | `/router stats` (text table) | `router_stats` tool (text table) |
 | **`/router` command** (lists every option and where it came from) | ✅ | ⚠️ typed as a prompt; the TUI may take it as unknown | ✅ config command + toast |
 | **Default classifier** | Sonnet | `gpt-6-luna` (tier `light`) | `anthropic/claude-sonnet-5-5` |
 | **Options live in** | `~/.claude/settings.json` (`pluginConfigs`) or `/plugin` | `~/.codex/prompt-router.json` | `~/.config/opencode/prompt-router.json` or `opencode.json` |
@@ -633,7 +633,7 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 
 | Version | Changes |
 | --- | --- |
-| **0.9.0** | Savings stats in Claude Code: `/router stats` (Today / 7 days / Total, and a page with a graph of the last 30 days) and today's net saving in the footer. An estimate from list prices: the classifier's cost is taken off, a stronger model is shown as extra cost apart, effort only as counts. New option `stats`. |
+| **0.9.0** | Savings stats on all three platforms. Claude Code: `/router stats` (Today / 7 days / Total, and a page with a graph of the last 30 days) and today's net saving in the footer. An estimate from list prices: the classifier's cost is taken off, a stronger model is shown as extra cost apart, effort only as counts. Codex: `/router stats` text table from Stop/SubagentStop turn tokens. OpenCode: `router_stats` tool. New option `stats`. |
 | **0.8.0** | One switch per feature: `effortDetection`, `firstChatDetection`, `midChatModelDetection`, `subagentSuggestions`, `sessionSuggestions`, `notifications`. The old `effortMode` and `modelMode` still work. `/router` lists every option and where it came from, and the log records them once per session. Codex and OpenCode: a prompt that stays here but fits another model offers a subagent on that model or staying here. `midChatModelDetection: auto` lets the agent choose between the two itself, with no question. Codex and OpenCode options name tiers (`light`, `standard`, `strong`, `top`) instead of Claude models; the old keys still work. OpenCode subagents are `router-<tier>`, and its questions show the real model. |
 | **0.7.0** | Claude Code: a prompt that stays here but fits another model offers a subagent on that model or staying here; the chat's model never changes mid-chat (it would break the prompt cache) |
 | **0.6.0** | Codex and OpenCode adapters (`adapters/`), the router logic moved to a shared `core/router.ts` |
