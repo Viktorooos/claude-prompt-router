@@ -8,6 +8,7 @@ import { TIER_OF } from '../shared/tiers.ts'
 
 export const SWITCH_TOOL = 'router_switch'
 export const SESSION_TOOL = 'router_session'
+export const STATS_TOOL = 'router_stats'
 
 // The subagent the router adds for each tier: OpenCode's task tool takes an agent, not a model.
 export function agentFor(m: Model) {
