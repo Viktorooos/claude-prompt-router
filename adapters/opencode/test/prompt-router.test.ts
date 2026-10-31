@@ -264,3 +264,218 @@ test('the router note in the history is not shown to the classifier again', asyn
   assert.match(prompt, /<reply>All green\.<\/reply>/)
   assert.doesNotMatch(prompt, /suggests running/)
 })
+
+// Here on another model: switching this chat's model would break the prompt cache, so the router
+// offers a subagent on that model or staying here with only the effort judged again.
+const OTHER = {
+  lower: '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}',
+  lowerSame: '{"where": "here", "model": "sonnet", "effort": "medium", "why": "a mechanical edit"}',
+  higher: '{"where": "here", "model": "opus", "effort": "high", "why": "new logic"}',
+}
+
+test('mid-chat, the classifier is asked which model the task needs, also for here', async () => {
+  const { hooks, calls } = await setup({ reply: OTHER.lower, history: ongoing(S) })
+  await send(hooks, S, 'rename the keys we just found')
+  const prompt = named(calls, 'session.prompt')[0].args.body.parts[0].text
+  assert.doesNotMatch(prompt, /for here use the current one/)
+  assert.match(prompt, /MODEL \(the model the task needs, also for here/)
+})
+
+test('here on a cheaper model (ask): offers a subagent or staying here, switches nothing', async () => {
+  const { hooks, calls } = await setup({ reply: OTHER.lower, history: ongoing(S) }, { effortMode: 'ask', modelMode: 'ask' })
+  const out = await send(hooks, S, 'rename the keys we just found')
+  const t = said(out)
+  assert.ok(t.startsWith('rename the keys we just found\n\n[Prompt Router'))
+  assert.match(t, /fits Sonnet · low better than this chat's Opus, because: a mechanical edit/)
+  assert.match(t, /question tool/)
+  assert.match(t, /"Subagent \(Sonnet · low\)", "Stay here \(Low\)", "Stay here \(keep Medium\)"/)
+  assert.match(t, /call the task tool with subagent_type "router-sonnet"/)
+  assert.match(t, /give it everything it needs from this chat/)
+  assert.match(t, /"Stay here \(Low\)" = call the router_switch tool with \{"effort":"low"\}/)
+  assert.match(t, /never switch this chat's model/)
+  assert.doesNotMatch(t, /\{"model"/)
+  assert.doesNotMatch(t, /New session/)
+  assert.equal(out.message.variant, undefined)
+  assert.equal(out.message.model.modelID, 'claude-opus-5-5')
+  assert.equal(named(calls, 'tui.showToast').length, 0)
+})
+
+test('here on a stronger model: the same offer, the chat model stays', async () => {
+  const { hooks } = await setup({ reply: OTHER.higher, history: ongoing(S) })
+  const out = await send(hooks, S, 'now work out the sync logic for it', { model: 'anthropic/claude-haiku-5-5' })
+  const t = said(out)
+  assert.match(t, /fits Opus · high better than this chat's Haiku, because: new logic/)
+  assert.match(t, /"Subagent \(Opus · high\)", "Stay here \(High\)", "Stay here \(keep Medium\)"/)
+  assert.match(t, /subagent_type "router-opus"/)
+  assert.equal(out.message.variant, undefined)
+  assert.equal(out.message.model.modelID, 'claude-haiku-5-5')
+})
+
+test('here on another model (auto): one Stay here option that switches only the effort', async () => {
+  const { hooks, calls } = await setup({ reply: OTHER.lower, history: ongoing(S) }, { effortMode: 'auto', modelMode: 'auto' })
+  const out = await send(hooks, S, 'rename the keys we just found')
+  const t = said(out)
+  assert.match(t, /"Subagent \(Sonnet · low\)", "Stay here \(Low\)"/)
+  assert.doesNotMatch(t, /keep Medium/)
+  assert.match(t, /"Stay here \(Low\)" = call the router_switch tool with \{"effort":"low"\}/)
+  // The question comes first: nothing is set before the user picks.
+  assert.equal(out.message.variant, undefined)
+  assert.equal(out.message.model.modelID, 'claude-opus-5-5')
+  assert.equal(named(calls, 'tui.showToast').length, 0)
+})
+
+test('here on another model: the subagent gets the pick\'s effort', async () => {
+  const { hooks } = await setup({ reply: OTHER.lower, history: ongoing(S), parents: { ses_child: S } }, { effortMode: 'auto', modelMode: 'auto' })
+  await send(hooks, S, 'rename the keys we just found')
+  await hooks['tool.execute.before']({ tool: 'task', sessionID: S, callID: 'c1' }, { args: { subagent_type: 'router-sonnet', prompt: 'rename', description: 'rename' } })
+  const child = await send(hooks, 'ses_child', 'rename', { agent: 'router-sonnet', model: 'anthropic/claude-sonnet-5-5' })
+  assert.equal(child.message.variant, 'low')
+})
+
+test('here on another model at the same effort: Stay here just goes on', async () => {
+  const { hooks } = await setup({ reply: OTHER.lowerSame, history: ongoing(S) })
+  const out = await send(hooks, S, 'rename the keys we just found')
+  const t = said(out)
+  assert.match(t, /"Subagent \(Sonnet · medium\)", "Stay here"/)
+  assert.match(t, /"Stay here" = continue normally/)
+  assert.doesNotMatch(t, /router_switch/)
+  assert.equal(out.message.variant, undefined)
+})
+
+test('modelMode off: here on another model only judges the effort, as before', async () => {
+  const { hooks, calls } = await setup({ reply: OTHER.lower, history: ongoing(S) }, { effortMode: 'auto', modelMode: 'off' })
+  const out = await send(hooks, S, 'rename the keys we just found')
+  assert.match(named(calls, 'session.prompt')[0].args.body.parts[0].text, /for here use the current one/)
+  assert.equal(said(out), 'rename the keys we just found')
+  assert.equal(out.message.variant, 'low')
+  assert.equal(out.message.model.modelID, 'claude-opus-5-5')
+})
+
+test('here on another model typed over a running turn: nothing changes', async () => {
+  const { hooks } = await setup({ reply: OTHER.lower, history: ongoing(S), busy: [S] })
+  const out = await send(hooks, S, 'and rename these too')
+  assert.equal(said(out), 'and rename these too')
+  assert.equal(out.message.variant, undefined)
+})
+
+test('here on another model when the chat model is unknown: as before', async () => {
+  const { hooks } = await setup({ reply: OTHER.lower, history: ongoing(S) }, { effortMode: 'auto', modelMode: 'auto' })
+  const out = await send(hooks, S, 'rename the keys we just found', { model: 'other/some-custom-model' })
+  assert.equal(said(out), 'rename the keys we just found')
+  assert.equal(out.message.variant, 'low')
+  assert.equal(out.message.model.modelID, 'some-custom-model')
+})
+
+// One switch per feature (0.8.0), read from ~/.config/opencode/prompt-router.json the way the
+// auto-loaded plugin reads it (no plugin options).
+async function fromFile(o: Parameters<typeof setup>[0], options: Record<string, unknown>) {
+  const { tool, mockClient, tmp } = await import('./helpers.ts')
+  const { routerPlugin } = await import('../prompt-router.ts')
+  const { writeFileSync } = await import('node:fs')
+  const dir = tmp()
+  writeFileSync(join(dir, 'prompt-router.json'), JSON.stringify(options))
+  const { client, calls } = mockClient(o)
+  const hooks: any = await routerPlugin(tool)({ client }, { stateDir: dir, optionsFile: join(dir, 'prompt-router.json') })
+  const config: any = {}
+  await hooks.config(config)
+  return { hooks, client, calls, dir, config }
+}
+
+test('effortDetection off: no variant set or offered, Do it here has no level', async () => {
+  const { hooks, calls } = await fromFile({ reply: PICK.here, history: ongoing(S) }, { effortDetection: 'off' })
+  const out = await send(hooks, S, 'rename that variable')
+  assert.equal(out.message.variant, undefined)
+  assert.equal(said(out), 'rename that variable')
+  assert.equal(named(calls, 'tui.showToast').length, 0)
+  const sub = await fromFile({ reply: PICK.subagent, history: ongoing(S) }, { effortDetection: 'off' })
+  const t = said(await send(sub.hooks, S, 'run the tests'))
+  assert.match(t, /"Subagent \(Haiku · low\)", "Do it here"/)
+  assert.doesNotMatch(t, /Do it here \(/)
+  const other = await fromFile({ reply: OTHER.lower, history: ongoing(S) }, { effortDetection: 'off' })
+  const o = said(await send(other.hooks, S, 'rename the keys we just found'))
+  assert.match(o, /"Subagent \(Sonnet · low\)", "Stay here"/)
+  assert.doesNotMatch(o, /Stay here \(/)
+})
+
+test('firstChatDetection off: the first prompt keeps its model, the effort is still judged', async () => {
+  const { hooks } = await fromFile({ reply: PICK.first }, { firstChatDetection: 'off', effortDetection: 'auto' })
+  const out = await send(hooks, S, 'rename foo to bar everywhere')
+  assert.equal(out.message.model.modelID, 'claude-opus-5-5')
+  assert.equal(out.message.variant, 'low')
+  assert.equal(said(out), 'rename foo to bar everywhere')
+})
+
+test('midChatModelDetection off: no Subagent / Stay here question, only the effort', async () => {
+  const { hooks, calls } = await fromFile({ reply: OTHER.lower, history: ongoing(S) }, { midChatModelDetection: 'off' })
+  const t = said(await send(hooks, S, 'rename the keys we just found'))
+  assert.doesNotMatch(t, /Subagent|Stay here/)
+  assert.match(t, /suggests effort low instead of medium/)
+  const prompt = named(calls, 'session.prompt')[0].args.body.parts[0].text
+  assert.match(prompt, /for here use the current one/)
+})
+
+test('midChatModelDetection auto: no question, the agent decides between the task tool and here', async () => {
+  const { hooks } = await fromFile({ reply: OTHER.lower, history: ongoing(S) }, { midChatModelDetection: 'auto', effortDetection: 'auto' })
+  const t = said(await send(hooks, S, 'rename the keys we just found'))
+  assert.doesNotMatch(t, /question tool|Where should this go/)
+  assert.match(t, /Do not ask the user; decide yourself/)
+  assert.match(t, /only when it is worth it: a larger self-contained piece of work/)
+  assert.match(t, /a quick question, a short answer or a short message stays here/)
+  assert.match(t, /Subagent = call the task tool with subagent_type "router-sonnet"/)
+  assert.match(t, /Here = call the router_switch tool with \{"effort":"low"\}/)
+  assert.match(t, /never switch this chat's model/)
+  assert.match(t, /tell the user in one sentence what you chose/)
+})
+
+test('midChatModelDetection auto with effortDetection off: staying here changes nothing', async () => {
+  const { hooks } = await fromFile({ reply: OTHER.lower, history: ongoing(S) }, { midChatModelDetection: 'auto', effortDetection: 'off' })
+  const t = said(await send(hooks, S, 'rename the keys we just found'))
+  assert.doesNotMatch(t, /question tool|router_switch/)
+  assert.match(t, /Here = handle the prompt normally/)
+})
+
+test('subagentSuggestions off: a subagent pick is handled as here', async () => {
+  const { hooks } = await fromFile({ reply: '{"where": "subagent", "model": "opus", "effort": "low", "why": "just run the tests"}', history: ongoing(S) }, { subagentSuggestions: 'off' })
+  const t = said(await send(hooks, S, 'run the tests'))
+  assert.doesNotMatch(t, /in a subagent|task tool/)
+  assert.match(t, /suggests effort low instead of medium/)
+})
+
+test('sessionSuggestions off: a session pick is handled as here', async () => {
+  const { hooks } = await fromFile({ reply: '{"where": "session", "model": "opus", "effort": "medium", "why": "unrelated"}', history: ongoing(S) }, { sessionSuggestions: 'off' })
+  assert.equal(said(await send(hooks, S, 'build the billing page')), 'build the billing page')
+})
+
+test('notifications off: the variant is still set, but no toast', async () => {
+  const { hooks, calls } = await fromFile({ reply: PICK.here, history: ongoing(S) }, { effortDetection: 'auto', notifications: 'off' })
+  const out = await send(hooks, S, 'rename that variable')
+  assert.equal(out.message.variant, 'low')
+  assert.equal(named(calls, 'tui.showToast').length, 0)
+})
+
+test('old keys still work when the new ones are missing; modelMode off turns off both model checks', async () => {
+  const a = await fromFile({ reply: PICK.here, history: ongoing(S) }, { effortMode: 'auto' })
+  assert.equal((await send(a.hooks, S, 'rename that variable')).message.variant, 'low')
+  const first = await fromFile({ reply: PICK.first }, { modelMode: 'off', effortMode: 'auto' })
+  assert.equal((await send(first.hooks, S, 'rename foo')).message.model.modelID, 'claude-opus-5-5')
+  const mid = await fromFile({ reply: OTHER.lower, history: ongoing(S) }, { modelMode: 'off', effortMode: 'auto' })
+  assert.doesNotMatch(said(await send(mid.hooks, S, 'rename the keys we just found')), /Subagent/)
+})
+
+test('/router prints every option with its value and where it came from', async () => {
+  const { hooks } = await fromFile({ reply: PICK.same, history: ongoing(S) }, { effortMode: 'auto', notifications: 'off' })
+  const parts = [{ type: 'text', text: '' }]
+  await hooks['command.execute.before']({ command: 'router', sessionID: S, arguments: '' }, { parts })
+  const t = parts[0].text
+  assert.match(t, /effortDetection: auto \(old key effortMode; rename it to effortDetection\)/)
+  assert.match(t, /notifications: off \(set\)/)
+  for (const k of ['project', 'rules', 'language', 'classifier', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions']) assert.match(t, new RegExp(`${k}: .*\\(default\\)`))
+})
+
+test('the plugin logs the effective options once when it loads', async () => {
+  const { hooks, dir } = await fromFile({ reply: PICK.same, history: ongoing(S) }, { effortDetection: 'off' })
+  await send(hooks, S, 'rename that variable')
+  const log = readFileSync(join(dir, 'prompt-router.log'), 'utf8')
+  assert.equal(log.match(/effective options/g)?.length, 1)
+  assert.match(log, /effortDetection=off/)
+})

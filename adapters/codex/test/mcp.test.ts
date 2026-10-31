@@ -66,6 +66,25 @@ test('the open turn of the routed prompt does not count as a running turn', asyn
   assert.match(r, /switch with `\/model/)
 })
 
+// The desktop app has no spawn_agent: a here prompt on another model only judges the effort.
+test('the desktop skips the subagent offer for here on another model', async () => {
+  const h = home({ effortMode: 'auto', modelMode: 'auto' })
+  rollout(sessions(h), 'a', 'přejmenuj ty klíče', { model: 'gpt-6.1-sol', replied: true })
+  const prompts: string[] = []
+  const r = await route({ prompt: 'přejmenuj ty klíče' }, { codexHome: h, runner: async p => (prompts.push(p), '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}') })
+  assert.match(r, /switch with `\/model gpt-6\.1-sol low`/)
+  assert.doesNotMatch(r, /Subagent|spawn_agent/)
+  assert.match(prompts[0], /for here use the current one/)
+})
+
+test('the desktop skips the feature with midChatModelDetection auto too', async () => {
+  const h = home({ midChatModelDetection: 'auto', effortDetection: 'auto' })
+  rollout(sessions(h), 'a', 'přejmenuj ty klíče', { model: 'gpt-6.1-sol', replied: true })
+  const r = await route({ prompt: 'přejmenuj ty klíče' }, { codexHome: h, runner: async () => '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}' })
+  assert.match(r, /switch with `\/model gpt-6\.1-sol low`/)
+  assert.doesNotMatch(r, /Subagent|spawn_agent|decide yourself/)
+})
+
 test('nothing to switch tells the agent to go on', async () => {
   const h = home()
   rollout(sessions(h), 'a', 'ok', { model: 'gpt-6.1-sol' })

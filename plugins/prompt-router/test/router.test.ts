@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { optionSources, toConfig } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -19,11 +20,11 @@ const EFFORT_ROW = {
   isLocked: false,
 }
 
-type Seen = { prompts: string[]; models: string[]; sent: string[]; sets: unknown[]; toasts: string[]; store: Map<string, unknown> }
+type Seen = { prompts: string[]; models: string[]; sent: string[]; sets: unknown[]; toasts: string[]; store: Map<string, unknown>; writes: string[]; modes: string[][] }
 
 // Stands for the engine beneath the plugin: each `$` call it makes is answered here.
-function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[] } = {}): Seen {
-  const seen: Seen = { prompts: [], models: [], sent: [], sets: [], toasts: [], store: new Map() }
+function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[]; noEffortRow?: boolean } = {}): Seen {
+  const seen: Seen = { prompts: [], models: [], sent: [], sets: [], toasts: [], store: new Map(), writes: [], modes: [] }
   const messages = opts.messages ?? (opts.isFirst
     ? []
     : [
@@ -42,7 +43,7 @@ function engine(on: any, reply: string | (() => string), opts: { isFirst?: boole
   on('session.messages', () => ({ value: messages }))
   on('session.model', () => ({ value: opts.model ?? 'claude-opus-5-5' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 85000 }, rateLimits: [] } }))
-  on('config.list', () => ({ value: [EFFORT_ROW, ...(opts.rows ?? [])] }))
+  on('config.list', () => ({ value: [...(opts.noEffortRow ? [] : [EFFORT_ROW]), ...(opts.rows ?? [])] }))
   on('config.set', (_: unknown, e: any) => {
     seen.sets.push(e.value)
     return { value: e.value }
@@ -64,7 +65,14 @@ function engine(on: any, reply: string | (() => string), opts: { isFirst?: boole
   on('fs.read', (_: unknown, e: any) => ({ value: file(e.path) ?? '' }))
   on('tool.list', () => ({ value: (opts.tools ?? ['mcp__ccd_session__start_session']).map(name => ({ name, description: '', mcp: true })) }))
   on('session.surfaces', () => ({ value: opts.surfaces ?? ['desktop'] }))
-  on('fs.write', () => ({ value: undefined }))
+  on('fs.write', (_: unknown, e: any) => {
+    seen.writes.push(JSON.stringify(e))
+    return { value: undefined }
+  })
+  on('ui.render', (_: unknown, e: any) => {
+    seen.modes.push(e.props?.modes ?? [])
+    return { type: 'Text', props: {} }
+  })
   on('clock.now', () => ({ value: 0 }))
   on('prompt.submit', (_: unknown, e: any) => {
     seen.sent.push(e.text)
@@ -666,4 +674,250 @@ test('here on another model when the chat model is unknown: as before', { option
   await submit($, 'rename the keys we just found')
   expect(seen.sent).toEqual(['rename the keys we just found'])
   expect(seen.sets).toEqual(['low'])
+})
+
+// One switch per feature (0.8.0). The options reach the mod the way they do for real: the engine
+// passes pluginConfigs › prompt-router@prompt-router from ~/.claude/settings.json (with the manifest
+// defaults filled in), and the mod reads that same entry, or the plain prompt-router one, from the file.
+const FULL = (options: Record<string, string>) => ({ '*/.claude/settings.json': SETTINGS('prompt-router@prompt-router', options) })
+const SHORT_KEY = (options: Record<string, string>) => ({ '*/.claude/settings.json': SETTINGS('prompt-router', options) })
+const saved = (options: Record<string, string>) => ({ options } as any)
+
+test('toConfig: the new keys, the old ones when they are missing, defaults otherwise', () => {
+  const d = toConfig({})
+  expect([d.effortDetection, d.firstChatDetection, d.midChatModelDetection, d.subagentSuggestions, d.sessionSuggestions, d.notifications]).toEqual(['ask', 'ask', 'ask', 'ask', 'ask', 'on'])
+  const n = toConfig({ effortDetection: 'off', firstChatDetection: 'auto', midChatModelDetection: 'off', subagentSuggestions: 'off', sessionSuggestions: 'off', notifications: 'off' })
+  expect([n.effortDetection, n.firstChatDetection, n.midChatModelDetection, n.subagentSuggestions, n.sessionSuggestions, n.notifications]).toEqual(['off', 'auto', 'off', 'off', 'off', 'off'])
+  const old = toConfig({ effortMode: 'auto', modelMode: 'auto' })
+  expect([old.effortDetection, old.firstChatDetection, old.midChatModelDetection]).toEqual(['auto', 'auto', 'ask'])
+  const oldOff = toConfig({ modelMode: 'off' })
+  expect([oldOff.firstChatDetection, oldOff.midChatModelDetection]).toEqual(['off', 'off'])
+  const both = toConfig({ effortDetection: 'ask', effortMode: 'auto', firstChatDetection: 'auto', midChatModelDetection: 'ask', modelMode: 'off' })
+  expect([both.effortDetection, both.firstChatDetection, both.midChatModelDetection]).toEqual(['ask', 'auto', 'ask'])
+  expect(toConfig({ midChatModelDetection: 'auto' }).midChatModelDetection).toBe('auto')
+  const bad = toConfig({ effortDetection: 'sometimes', midChatModelDetection: 'sometimes', notifications: 'loud', subagentSuggestions: 1 })
+  expect([bad.effortDetection, bad.midChatModelDetection, bad.notifications, bad.subagentSuggestions]).toEqual(['ask', 'ask', 'on', 'ask'])
+})
+
+test('optionSources: each option says whether the new key, the old key or the default set it', () => {
+  const s = optionSources({ effortMode: 'auto', modelMode: 'off', notifications: 'off' })
+  expect(s.effortDetection).toEqual({ value: 'auto', from: 'old', key: 'effortMode' })
+  expect(s.firstChatDetection).toEqual({ value: 'off', from: 'old', key: 'modelMode' })
+  expect(s.midChatModelDetection).toEqual({ value: 'off', from: 'old', key: 'modelMode' })
+  expect(s.notifications).toEqual({ value: 'off', from: 'new', key: 'notifications' })
+  expect(s.subagentSuggestions).toEqual({ value: 'ask', from: 'default', key: 'subagentSuggestions' })
+})
+
+test('effortDetection off: no effort set or offered, Do it here has no level', saved({ effortDetection: 'off' }), async ($: any, on: any) => {
+  const replies = [PICK.here, PICK.subagent]
+  const seen = engine(on, () => replies.shift() ?? PICK.keep, { files: FULL({ effortDetection: 'off' }) })
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.sent).toEqual(['fix that too'])
+  expect(seen.sets).toEqual([])
+  expect(seen.toasts).toEqual([])
+  await submit($, 'run the whole test suite and tell me what fails')
+  const t = seen.sent[1] ?? ''
+  expect(t).toMatch(/"Subagent \(Haiku · low\)", "Do it here"/)
+  expect(t).not.toMatch(/Do it here \(/)
+  expect(t).not.toMatch(/switch tool/)
+  expect(seen.sets).toEqual([])
+})
+
+test('effortDetection off: Stay here has no level either', saved({ effortDetection: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW], files: FULL({ effortDetection: 'off' }) })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  const t = seen.sent[0] ?? ''
+  expect(t).toMatch(/"Subagent \(Sonnet · low\)", "Stay here"/)
+  expect(t).not.toMatch(/Stay here \(/)
+  expect(seen.sets).toEqual([])
+})
+
+test('firstChatDetection off: the first prompt keeps its model, the effort is still judged', saved({ firstChatDetection: 'off', effortDetection: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "sonnet", "effort": "low", "why": "a rename"}', { isFirst: true, rows: [MODEL_ROW], files: FULL({ firstChatDetection: 'off', effortDetection: 'auto' }) })
+  await start($)
+  await submit($, 'rename every string key')
+  expect(seen.prompts[0]).not.toMatch(/FIRST prompt/)
+  expect(seen.sent).toEqual(['rename every string key'])
+  expect(seen.sets).toEqual(['low'])
+  expect(seen.toasts.join(' ')).not.toMatch(/Model/)
+})
+
+test('midChatModelDetection off: no Subagent / Stay here question, only the effort', saved({ midChatModelDetection: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW], files: FULL({ midChatModelDetection: 'off' }) })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  expect(seen.prompts[0]).toMatch(/for here use the current one/)
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/Subagent|Stay here/)
+  expect(t).toMatch(/Prompt Router suggests effort low instead of medium/)
+  expect(seen.sets).toEqual([])
+})
+
+test('midChatModelDetection auto: no question, the agent decides between the subagent and here', saved({ midChatModelDetection: 'auto', effortDetection: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW], files: FULL({ midChatModelDetection: 'auto', effortDetection: 'auto' }) })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/AskUserQuestion|Where should this go/)
+  expect(t).toMatch(/Do not ask the user; decide yourself/)
+  expect(t).toMatch(/only when it is worth it: a larger self-contained piece of work/)
+  expect(t).toMatch(/a quick question, a short answer or a short message stays here/)
+  expect(t).toMatch(/Subagent = call the Agent tool with model "sonnet" and effort "low"/)
+  expect(t).toMatch(/Here = call the mcp__prompt-router__switch tool with \{"effort":"low"\}/)
+  expect(t).toMatch(/never switch this chat's model/)
+  expect(t).toMatch(/tell the user in one sentence what you chose/)
+  expect(seen.sets).toEqual([])
+})
+
+test('midChatModelDetection auto with effortDetection ask: only the effort is asked, and only when staying here', saved({ midChatModelDetection: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW], files: FULL({ midChatModelDetection: 'auto' }) })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/Where should this go|"Subagent \(/)
+  expect(t).toMatch(/Do not ask the user; decide yourself/)
+  expect(t).toMatch(/Here = ask the user only about the effort with the AskUserQuestion tool .*"Stay here \(Low\)", "Stay here \(keep Medium\)"/)
+})
+
+test('midChatModelDetection auto with effortDetection off: staying here changes nothing', saved({ midChatModelDetection: 'auto', effortDetection: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW], files: FULL({ midChatModelDetection: 'auto', effortDetection: 'off' }) })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/AskUserQuestion|mcp__prompt-router__switch/)
+  expect(t).toMatch(/Here = handle the prompt normally/)
+})
+
+test('midChatModelDetection off leaves the first prompt alone: its model is still judged', saved({ midChatModelDetection: 'off', effortDetection: 'auto', firstChatDetection: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { isFirst: true, rows: [MODEL_ROW], files: FULL({ midChatModelDetection: 'off', effortDetection: 'auto', firstChatDetection: 'auto' }) })
+  await start($)
+  await submit($, 'rename every string key')
+  expect(seen.prompts[0]).toMatch(/FIRST prompt/)
+  expect(seen.sets).toEqual(['sonnet'])
+})
+
+test('subagentSuggestions off: a subagent pick is handled as here', saved({ subagentSuggestions: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "subagent", "model": "opus", "effort": "low", "why": "just run the tests"}', { files: FULL({ subagentSuggestions: 'off' }) })
+  await start($)
+  await submit($, 'run the whole test suite and tell me what fails')
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/in a subagent|Subagent \(|Agent tool/)
+  expect(t).toMatch(/Prompt Router suggests effort low instead of medium/)
+})
+
+test('subagentSuggestions off: a subagent pick on another model goes on to the other-model offer', saved({ subagentSuggestions: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.subagent, { rows: [MODEL_ROW], files: FULL({ subagentSuggestions: 'off' }) })
+  await start($)
+  await submit($, 'run the whole test suite and tell me what fails')
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/suggests running this prompt in a subagent/)
+  expect(t).toMatch(/fits Haiku · low better than this chat's Opus/)
+})
+
+test('subagentSuggestions and midChatModelDetection off: a subagent pick only judges the effort', saved({ subagentSuggestions: 'off', midChatModelDetection: 'off', effortDetection: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.subagent, { rows: [MODEL_ROW], files: FULL({ subagentSuggestions: 'off', midChatModelDetection: 'off', effortDetection: 'auto' }) })
+  await start($)
+  await submit($, 'run the whole test suite and tell me what fails')
+  expect(seen.sent).toEqual(['run the whole test suite and tell me what fails'])
+  expect(seen.sets).toEqual(['low'])
+})
+
+test('sessionSuggestions off: a session pick is handled as here', saved({ sessionSuggestions: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "session", "model": "opus", "effort": "medium", "why": "unrelated feature"}', { files: FULL({ sessionSuggestions: 'off' }) })
+  await start($)
+  await submit($, 'unrelated: add a shopping list')
+  expect(seen.sent).toEqual(['unrelated: add a shopping list'])
+  expect(seen.sets).toEqual([])
+})
+
+test('sessionSuggestions off: a session pick over a running turn passes untouched', saved({ sessionSuggestions: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { files: FULL({ sessionSuggestions: 'off' }) })
+  await start($)
+  await $.prompt.submit({ text: 'unrelated: a shopping list', wait: false, origin: { kind: 'composer' }, turnId: 't1' })
+  expect(seen.sent).toEqual(['unrelated: a shopping list'])
+})
+
+test('notifications off: the effort is still set, but no toast and no footer label', saved({ notifications: 'off', effortDetection: 'auto' }), async ($: any, on: any) => {
+  // No effort setting to move: the mod holds the level, which the footer label would name.
+  const seen = engine(on, PICK.here, { noEffortRow: true, files: FULL({ notifications: 'off', effortDetection: 'auto' }) })
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.toasts).toEqual([])
+  await $.ui.render({ component: 'SessionMode', surface: 'terminal', props: { modes: ['Plan'] } })
+  expect(seen.modes.at(-1)).toEqual(['Plan'])
+  const status = await $.command.run({ command: 'router', args: '' })
+  expect(status.text).toMatch(/held by the router: Low/)
+})
+
+test('notifications on (default): the same change shows a toast and the footer label', saved({ effortDetection: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.here, { noEffortRow: true, files: FULL({ effortDetection: 'auto' }) })
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.toasts.join(' ')).toMatch(/Effort: Low/)
+  await $.ui.render({ component: 'SessionMode', surface: 'terminal', props: { modes: ['Plan'] } })
+  expect(seen.modes.at(-1)).toEqual(['Plan', 'Effort Low'])
+})
+
+test('old keys under the full id still work when the new ones are missing', saved({ effortMode: 'auto', modelMode: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.here, { files: FULL({ effortMode: 'auto', modelMode: 'auto' }) })
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.sets).toEqual(['low'])
+  expect(seen.sent).toEqual(['fix that too'])
+})
+
+test('a new key set to its default wins over an old key', saved({ effortDetection: 'ask', effortMode: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.here, { files: FULL({ effortDetection: 'ask', effortMode: 'auto' }) })
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.sets).toEqual([])
+  expect(seen.sent[0]).toMatch(/AskUserQuestion/)
+})
+
+test('modelMode off alone turns off both first-chat and mid-chat model detection', saved({ modelMode: 'off', effortMode: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { isFirst: true, rows: [MODEL_ROW], files: FULL({ modelMode: 'off', effortMode: 'auto' }) })
+  await start($)
+  await submit($, 'rename every string key')
+  expect(seen.prompts[0]).not.toMatch(/FIRST prompt/)
+  expect(seen.sets).toEqual([])
+  expect(seen.sent).toEqual(['rename every string key'])
+})
+
+test('modelMode off alone: no mid-chat Subagent / Stay here question', saved({ modelMode: 'off', effortMode: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, OTHER.lower, { rows: [MODEL_ROW], files: FULL({ modelMode: 'off', effortMode: 'auto' }) })
+  await start($)
+  await submit($, 'rename the keys we just found')
+  expect(seen.prompts[0]).toMatch(/for here use the current one/)
+  expect(seen.sent).toEqual(['rename the keys we just found'])
+  expect(seen.sets).toEqual(['low'])
+})
+
+test('new keys under the short key apply too', async ($: any, on: any) => {
+  const seen = engine(on, PICK.here, { files: SHORT_KEY({ effortDetection: 'off' }) })
+  await start($)
+  await submit($, 'fix that too')
+  expect(seen.sent).toEqual(['fix that too'])
+  expect(seen.sets).toEqual([])
+})
+
+test('/router prints every option with its value and where it came from', saved({ effortMode: 'auto', notifications: 'off', language: 'Czech' }), async ($: any, on: any) => {
+  engine(on, PICK.same, { files: FULL({ effortMode: 'auto', notifications: 'off', language: 'Czech' }) })
+  await start($)
+  const t = (await $.command.run({ command: 'router', args: '' })).text
+  expect(t).toMatch(/effortDetection: auto \(old key effortMode; rename it to effortDetection\)/)
+  expect(t).toMatch(/notifications: off \(set\)/)
+  expect(t).toMatch(/language: Czech \(set\)/)
+  for (const k of ['project', 'rules', 'classifier', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions']) expect(t).toMatch(new RegExp(`${k}: .*\\(default\\)`))
+})
+
+test('the session start logs the effective options once', saved({ effortDetection: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.here, { files: FULL({ effortDetection: 'off' }) })
+  await start($)
+  await submit($, 'fix that too')
+  const logs = seen.writes.filter(w => w.includes('prompt-router.log') && w.includes('effective options'))
+  expect(logs.length).toBe(1)
+  expect(logs[0]).toMatch(/effortDetection=off/)
+  expect(logs[0]).toMatch(/notifications=on/)
 })

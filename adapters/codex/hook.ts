@@ -13,7 +13,8 @@
 // ~/.codex/log/prompt-router.log.
 //
 // Options: ~/.codex/prompt-router.json (install.ts writes the defaults), read like the mod's toConfig
-// (project, rules, language, classifier, effortMode, modelMode) plus:
+// (project, rules, language, classifier, effortDetection, firstChatDetection, midChatModelDetection,
+// subagentSuggestions, sessionSuggestions, notifications; the 0.7 effortMode and modelMode still count) plus:
 //   "models": { "haiku": "gpt-6-luna", "sonnet": "gpt-6.1-terra", "opus": "gpt-6.1-sol", "fable": "gpt-6-astra" },
 //   "efforts": { "low": "low", ... "max": "max" }   the Codex effort for each router level
 //   "enabled": true                                  /router off|on writes it
@@ -27,18 +28,23 @@ import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, asLevel, clip, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
-import { askNote, autoNote, line, statusNote, switchNote } from './notes.ts'
+import { askNote, autoNote, line, otherAutoNote, otherNote, statusNote, switchNote } from './notes.ts'
 import type { NoteCtx } from './notes.ts'
 
 export const DEFAULT_MODELS: Record<Model, string> = { haiku: 'gpt-6-luna', sonnet: 'gpt-6.1-terra', opus: 'gpt-6.1-sol', fable: 'gpt-6-astra' }
+
+// The Codex classifier defaults to the haiku class (gpt-6-luna): the shared default is sonnet.
+const CODEX_DEFAULTS = { classifier: 'haiku' }
 
 export type Input = { session_id?: string; transcript_path?: string | null; cwd?: string; hook_event_name?: string; model?: string; turn_id?: string; prompt?: string; permission_mode?: string }
 export type Output = { hookSpecificOutput?: { hookEventName: 'UserPromptSubmit'; additionalContext: string }; systemMessage?: string }
 // Runs the classifier: the prompt in, the model's reply text out (throws on failure or timeout).
 export type Runner = (prompt: string, o: { model: string; effort: string; timeoutMs: number }) => Promise<string>
-export type Deps = { codexHome?: string; runner?: Runner }
+// noSubagent: the client has no spawn_agent (the ChatGPT desktop through mcp.ts), so a here prompt
+// that fits another model is not offered to a subagent.
+export type Deps = { codexHome?: string; runner?: Runner; noSubagent?: boolean }
 
 export function codexHome() {
   return process.env.CODEX_HOME || join(process.env.HOME || homedir(), '.codex')
@@ -82,8 +88,7 @@ export async function loadOptions(home: string): Promise<Options> {
   } catch {
     // The defaults.
   }
-  // The Codex classifier defaults to the haiku class (gpt-6-luna): toConfig's default is sonnet.
-  const cfg = toConfig({ classifier: 'haiku', ...raw })
+  const cfg = toConfig({ ...CODEX_DEFAULTS, ...raw })
   return {
     raw,
     source,
@@ -293,6 +298,12 @@ export const codexRunner: Runner = async (prompt, o) => {
   }
 }
 
+// The line the user sees when the agent is to ask where the prompt runs.
+function suggests(o: Options, effortOf: (slug: string, l: Level) => string, p: Pick) {
+  const slug = o.models[p.model]
+  return `Prompt Router: suggests ${p.where === 'session' ? 'a new session' : 'a subagent'} on ${slug} · ${effortOf(slug, p.effort)}${p.why ? ` (${p.why})` : ''}`
+}
+
 function out(context: string, system?: string): Output {
   return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: context }, ...(system ? { systemMessage: system } : {}) }
 }
@@ -312,9 +323,10 @@ async function routerCommand(home: string, o: Options, arg: string, cur: { model
     return enabled ? 'Prompt Router is on.' : 'Prompt Router is off. Turn it back on with /router on.'
   }
   return [
-    `Prompt Router is ${o.enabled ? 'on' : 'off'} (classifier ${o.models[o.cfg.classifier]}, effort mode ${o.cfg.effortMode}, model mode ${o.cfg.modelMode}).`,
+    `Prompt Router is ${o.enabled ? 'on' : 'off'} (classifier ${o.models[o.cfg.classifier]}, effort mode ${o.cfg.effortDetection}, model mode ${o.cfg.firstChatDetection}).`,
     `This chat runs on ${cur.model || 'an unknown model'}, effort ${cur.now ? NAMES[cur.now] : 'unknown'}.`,
     `Options: ${o.source}.`,
+    ...describeOptions(o.raw, CODEX_DEFAULTS).map(l => `  ${l}`),
     'Commands: /router off, /router on.',
   ].join('\n')
 }
@@ -348,11 +360,18 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   // The rollout may already hold this prompt; the classifier sees it once, as the new one.
   if (users.at(-1) === text) users.pop()
   const all = [...users, text]
-  const c: Chat = { first: all[0] ?? '', recent: all.slice(-4, -1), reply: h.reply, model, now, tokens: h.tokens, conf: o.cfg, isFirst: h.isFirst, models: avail }
+  // Mid-chat, a here prompt that fits another model is offered to a subagent on it (the chat's own
+  // model never changes: that would break its prompt cache), so the classifier names that model.
+  const curClass = routerModel(o.models, model)
+  const hereModel = !deps.noSubagent && !!curClass
+  const c: Chat = { first: all[0] ?? '', recent: all.slice(-4, -1), reply: h.reply, model, now, tokens: h.tokens, conf: o.cfg, isFirst: h.isFirst, hereModel, models: avail }
   const runner = deps.runner ?? codexRunner
   const reply = await runner(pickPrompt(text, c), { model: classifier, effort: effortOf(classifier, 'low'), timeoutMs: o.timeoutMs })
-  let p: Pick | null = parsePick(reply, avail)
-  if (!p && !/"where"\s*:\s*"keep"/.test(reply)) await log(home, 'parse', 'reply could not be parsed')
+  const parsed = parsePick(reply, avail)
+  if (!parsed && !/"where"\s*:\s*"keep"/.test(reply)) await log(home, 'parse', 'reply could not be parsed')
+  // Once per chat, so the log shows what the hook really goes by.
+  if (h.isFirst) await log(home, 'effective options', `${o.source} | ${optionsLine(o.raw, CODEX_DEFAULTS)}`)
+  let p: Pick | null = parsed && allowed(parsed, o.cfg)
   await log(home, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${h.tokens ?? '?'} tok | first ${h.isFirst} | ${clip(reply, 200)}`)
   if (!p) return null
   // The first prompt of a chat has nothing to leave: only its model and effort count.
@@ -362,23 +381,27 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
 
   if (p.where === 'here') {
     if (midTurn || !model) return null
+    if (hereModel && !h.isFirst && p.model !== curClass && o.cfg.midChatModelDetection !== 'off') {
+      // Mapped to the same Codex effort: Stay here just goes on.
+      const effort = p.effort !== now && !(now && effortOf(model, p.effort) === effortOf(model, now))
+      return out(`[${(o.cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(ctx, p, cur, effort)}]`, suggests(o, effortOf, p))
+    }
     const from = p.first?.now
-    const changeModel = !!from && p.model !== from && o.cfg.modelMode !== 'off'
-    const changeEffort = p.effort !== now
+    const changeModel = !!from && p.model !== from && o.cfg.firstChatDetection !== 'off'
+    const changeEffort = p.effort !== now && o.cfg.effortDetection !== 'off'
     if (!changeModel && !changeEffort) return null
     const slug = changeModel ? o.models[p.model] : model
     const level = changeEffort ? p.effort : (now || p.effort)
     // Mapped to the same Codex setting: nothing to switch.
     if (slug === model && now && effortOf(slug, level) === effortOf(model, now)) return null
     // Codex cannot be switched from here: the same line both ways, auto goes on, ask asks first.
-    const asks = (changeModel && o.cfg.modelMode === 'ask') || (changeEffort && o.cfg.effortMode === 'ask')
+    const asks = (changeModel && o.cfg.firstChatDetection === 'ask') || (changeEffort && o.cfg.effortDetection === 'ask')
     const sys = line(ctx, slug, level, p.why)
     if (asks) return out(`[${switchNote(ctx, p, cur, changeModel ? { from: model } : null, changeEffort ? { now } : null)}]`, sys)
-    return out(`[${autoNote(ctx, slug, level, p)}]`, sys)
+    // notifications off: the agent still gives the line, but no system message comes with it.
+    return out(`[${autoNote(ctx, slug, level, p)}]`, o.cfg.notifications === 'on' ? sys : undefined)
   }
-  const slug = o.models[p.model]
-  const sys = `Prompt Router: suggests ${p.where === 'session' ? 'a new session' : 'a subagent'} on ${slug} · ${effortOf(slug, p.effort)}${p.why ? ` (${p.why})` : ''}`
-  return out(`[${askNote(ctx, p, cur, midTurn)}]`, sys)
+  return out(`[${askNote(ctx, p, cur, midTurn)}]`, suggests(o, effortOf, p))
 }
 
 async function readStdin() {

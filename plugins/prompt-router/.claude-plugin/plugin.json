@@ -1,6 +1,6 @@
 {
   "name": "prompt-router",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Before each prompt, picks where it belongs (this chat, a subagent or a new session), which model and which effort, and offers it",
   "author": { "name": "Viktor Kadeřábek" },
   "license": "MIT",
@@ -31,19 +31,47 @@
       "default": "sonnet",
       "options": ["sonnet", "haiku", "opus"]
     },
-    "effortMode": {
+    "effortDetection": {
       "type": "string",
-      "title": "Effort mode",
-      "description": "ask: Claude asks you in a dialog before the effort changes. auto: the router sets effort in this chat by itself.",
+      "title": "Effort detection",
+      "description": "The effort for a prompt that stays in this chat. ask: Claude asks you before it changes. auto: the router sets it by itself. off: the router never touches the effort. Replaces effortMode.",
       "default": "ask",
-      "options": ["auto", "ask"]
+      "options": ["ask", "auto", "off"]
     },
-    "modelMode": {
+    "firstChatDetection": {
       "type": "string",
-      "title": "Model mode",
-      "description": "On the first prompt of a new chat, checks whether the selected model fits the task. ask: Claude asks you in a dialog before switching. auto: switches it by itself. off: never touches the model.",
+      "title": "First-chat model detection",
+      "description": "On the first prompt of a new chat, checks whether the selected model fits the task. ask: Claude asks you before switching. auto: switches it by itself. off: never touches the model. Replaces modelMode.",
       "default": "ask",
-      "options": ["auto", "ask", "off"]
+      "options": ["ask", "auto", "off"]
+    },
+    "midChatModelDetection": {
+      "type": "string",
+      "title": "Mid-chat model detection",
+      "description": "A later prompt that stays here but fits another model. ask: Claude offers a subagent on that model or staying here. auto: Claude picks one itself with no question and says what it chose. off: only the effort is judged (modelMode off also turns this off).",
+      "default": "ask",
+      "options": ["ask", "auto", "off"]
+    },
+    "subagentSuggestions": {
+      "type": "string",
+      "title": "Subagent suggestions",
+      "description": "ask: Claude offers a subagent for a self-contained task. off: such a prompt stays in this chat.",
+      "default": "ask",
+      "options": ["ask", "off"]
+    },
+    "sessionSuggestions": {
+      "type": "string",
+      "title": "Session suggestions",
+      "description": "ask: Claude offers a new session for an unrelated task. off: such a prompt stays in this chat.",
+      "default": "ask",
+      "options": ["ask", "off"]
+    },
+    "notifications": {
+      "type": "string",
+      "title": "Notifications",
+      "description": "on: a toast after the router changes the model or effort by itself, and a label in the footer. off: neither; the changes still happen.",
+      "default": "on",
+      "options": ["on", "off"]
     }
   }
 }

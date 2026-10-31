@@ -1,8 +1,8 @@
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, LEVELS, MODEL_NAMES, MODELS, NAMES, asLevel, clip, knownModel, norm, parsePick, pickPrompt, toConfig, typed, userLang } from '../core/router.ts'
-import type { Chat, Config, Model, Pick, Where } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, clip, describeOptions, knownModel, norm, optionsLine, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import type { Chat, Config, Model, Pick, Switch, Where } from '../core/router.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -13,10 +13,12 @@ const SHORT: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High
 const ACCENT = '#d97757'
 
 let home = ''
-let cfg: Config = { project: '', rules: '', language: 'auto', classifier: 'sonnet', effortMode: 'ask', modelMode: 'ask' }
+let cfg: Config = toConfig({})
 let enabled = true
-// The options as the engine passed them, and a line for /router when they came from elsewhere.
+// The options as the engine passed them, the options the mod goes by, and a line for /router when
+// they came from elsewhere.
 let given: Record<string, unknown> = {}
+let opts: Record<string, unknown> = {}
 let cfgNote = ''
 // The level the main chat's last request ran at, and its model.
 let seen: Level | '' = ''
@@ -209,14 +211,15 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
   const models = await availableModels($, model)
   const r = await classify($, text, chatOf(messages, now, tokens, model, models))
   if (!r.isAnswered) throw new Error(`pick failed: ${r.reason}`)
-  const p = parsePick(r.text, models)
-  if (!p && !/"where"\s*:\s*"keep"/.test(r.text)) await log($, 'parse', 'reply could not be parsed')
+  const parsed = parsePick(r.text, models)
+  if (!parsed && !/"where"\s*:\s*"keep"/.test(r.text)) await log($, 'parse', 'reply could not be parsed')
+  const p = parsed && allowed(parsed, cfg)
   const isFirst = !messages.some(m => m.role === 'assistant')
   await log($, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${tokens ?? '?'} tok | first ${isFirst} | ${clip(r.text, 200)}`)
   // The first prompt of a chat has nothing to leave: only its model and effort count.
   if (p && isFirst) return { ...p, where: 'here', first: { now: knownModel(model) } }
   const cur = knownModel(model)
-  if (p?.where === 'here' && cur && p.model !== cur && cfg.modelMode !== 'off') return { ...p, other: { now: cur } }
+  if (p?.where === 'here' && cur && p.model !== cur && cfg.midChatModelDetection !== 'off') return { ...p, other: { now: cur } }
   return p
 }
 
@@ -233,8 +236,8 @@ function switchCall(to: { model?: Model; effort?: Level }) {
 function hereChoice(name: string, p: Pick, now: Level | '', effort: boolean) {
   const switchHere = `"${name} (${NAMES[p.effort]})"`
   const keepHere = now ? `"${name} (keep ${NAMES[now]})"` : `"${name} (keep the effort)"`
-  if (!effort) return { options: `"${name}"`, then: `"${name}" = continue normally.` }
-  if (cfg.effortMode === 'ask') return { options: `${switchHere}, ${keepHere}`, then: `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt; ${keepHere} = continue normally.` }
+  if (!effort || cfg.effortDetection === 'off') return { options: `"${name}"`, then: `"${name}" = continue normally.` }
+  if (cfg.effortDetection === 'ask') return { options: `${switchHere}, ${keepHere}`, then: `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt; ${keepHere} = continue normally.` }
   return { options: switchHere, then: `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt.` }
 }
 
@@ -254,6 +257,17 @@ function otherNote(p: Pick, from: Model, now: Level | '') {
   const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
   const here = hereChoice('Stay here', p, now, p.effort !== now)
   return `Prompt Router: this prompt belongs to this chat but fits ${label} better than this chat's ${MODEL_NAMES[from]}${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options "Subagent (${label})", ${here.options}, the recommended one first. Write the question and options in ${userLang(cfg)}. Then: Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}"; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. ${here.then}`
+}
+
+// midChatModelDetection auto: no "Where should this go?"; staying here judges the effort as
+// effortDetection says (auto switches it, ask asks only about it, off leaves it).
+function otherAutoNote(p: Pick, from: Model, now: Level | '') {
+  const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
+  const here = hereChoice('Stay here', p, now, p.effort !== now)
+  const stay = cfg.effortDetection === 'off' || p.effort === now ? 'handle the prompt normally.'
+    : cfg.effortDetection === 'ask' ? `ask the user only about the effort with the AskUserQuestion tool (header "Prompt Router", the question "Effort?" with the reason in one sentence) with the options ${here.options}, in ${userLang(cfg)}; ${here.then}`
+    : `${switchCall({ effort: p.effort })}, then handle the prompt.`
+  return `Prompt Router: this prompt belongs to this chat but fits ${label} better than this chat's ${MODEL_NAMES[from]}${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. ${DECIDE_OTHER} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}"; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. Here = ${stay} ${TOLD_OTHER}`
 }
 
 // start_session is the desktop app's; in a terminal or VS Code the person opens the session.
@@ -314,27 +328,27 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   if (p.where === 'here') {
     // A prompt typed over a running turn belongs to that work: its model and effort stay.
     if (e.turnId) return e
-    if (p.other) return { ...e, text: `${e.text}\n\n[${otherNote(p, p.other.now, now)}]` }
+    if (p.other) return { ...e, text: `${e.text}\n\n[${(cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(p, p.other.now, now)}]` }
     const changes: string[] = []
     let askModel: { from: Model } | null = null
     let askEffort: { now: Level | '' } | null = null
     // A new chat: the model it starts on may not fit the task.
     const from = p.first?.now
-    if (from && p.model !== from && cfg.modelMode !== 'off') {
-      if (cfg.modelMode === 'ask') askModel = { from }
+    if (from && p.model !== from && cfg.firstChatDetection !== 'off') {
+      if (cfg.firstChatDetection === 'ask') askModel = { from }
       else {
         await applyModel($, p.model)
         changes.push(`Model: ${MODEL_NAMES[p.model]} (was ${MODEL_NAMES[from]})`)
       }
     }
-    if (p.effort !== now) {
-      if (cfg.effortMode === 'ask') askEffort = { now }
+    if (p.effort !== now && cfg.effortDetection !== 'off') {
+      if (cfg.effortDetection === 'ask') askEffort = { now }
       else {
         await applyLevel($, p.effort)
         changes.push(`Effort: ${NAMES[p.effort]}${now ? ` (was ${NAMES[now]})` : ''}`)
       }
     }
-    if (changes.length) {
+    if (changes.length && cfg.notifications === 'on') {
       try {
         await $.ui.toast(`${changes.join(', ')}${p.why ? `, ${p.why}` : ''}`)
       } catch {
@@ -352,28 +366,39 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
 // The engine reads options only under the full id (prompt-router@<marketplace>), so options saved
 // under the plain name were ignored without a word and the mod asked although they said auto.
 // They count here unless a full-id entry exists, and /router says where they belong.
-async function loadShortKey($: EngineInterface) {
+// The engine fills in the manifest defaults, so a switch at its default value may just be unset:
+// it gives way to its 0.7 key (effortMode, modelMode) unless settings.json names it.
+async function loadOptions($: EngineInterface) {
   cfgNote = ''
+  let saved: Record<string, unknown> = {}
   try {
     const all = (JSON.parse(String(await $.fs.read(`${home}/.claude/settings.json`))) as { pluginConfigs?: Record<string, { options?: unknown }> }).pluginConfigs ?? {}
-    if (Object.keys(all).some(k => k.startsWith(`${NAME}@`))) return
-    const opts = all[NAME]?.options
-    if (!opts || typeof opts !== 'object') return
-    // With no full-id entry the engine's values are only the defaults, so the saved ones win.
-    cfg = toConfig({ ...given, ...(opts as Record<string, unknown>) })
-    cfgNote = `Options come from "pluginConfigs" › "${NAME}" in ~/.claude/settings.json. Rename that key to "${NAME}@${NAME}", the name Claude Code reads them under.`
-    await log($, 'options', cfgNote)
+    const full = Object.keys(all).find(k => k.startsWith(`${NAME}@`))
+    const entry = all[full ?? NAME]?.options
+    if (entry && typeof entry === 'object') {
+      saved = entry as Record<string, unknown>
+      if (!full) cfgNote = `Options come from "pluginConfigs" › "${NAME}" in ~/.claude/settings.json. Rename that key to "${NAME}@${NAME}", the name Claude Code reads them under.`
+    }
   } catch {
     // No settings file, or one that does not parse: the engine's options stand.
   }
+  opts = { ...given, ...saved }
+  for (const k of Object.keys(SWITCHES) as Switch[]) {
+    if (!(k in saved) && opts[k] === SWITCHES[k][0]) delete opts[k]
+  }
+  cfg = toConfig(opts)
+  if (cfgNote) await log($, 'options', cfgNote)
+  // Once per session, so the log shows what this copy of the mod really goes by.
+  await log($, 'effective options', `${$.plugin.root} | ${optionsLine(opts)}`)
 }
 
 export const register: Register = (on, options) => {
   given = { ...options }
+  opts = given
   cfg = toConfig(given)
   on('session.start', async ($, e, next) => {
     home = $.plugin.root.split('/.claude/')[0] ?? ''
-    await loadShortKey($)
+    await loadOptions($)
     await $.command.register({ name: 'router', description: 'Prompt Router: status, or off / on', argumentHint: '[off|on]' })
     await $.tool.register({
       name: 'test',
@@ -536,8 +561,10 @@ export const register: Register = (on, options) => {
     const { value } = await $.state.get(OVERRIDE)
     return {
       text: [
-        `Prompt Router is ${enabled ? 'on' : 'off'} (classifier ${cfg.classifier}, effort mode ${cfg.effortMode}, model mode ${cfg.modelMode}).`,
+        `Prompt Router is ${enabled ? 'on' : 'off'} (classifier ${cfg.classifier}, effort mode ${cfg.effortDetection}, model mode ${cfg.firstChatDetection}).`,
         `This chat runs on ${seenModel || 'an unknown model so far'}${modelHold ? ' (held by the router)' : ''}, effort ${now ? NAMES[now] : 'unknown so far'}${value ? ` (held by the router: ${NAMES[value]})` : ''}.`,
+        'Options (value and where it came from):',
+        ...describeOptions(opts).map(l => `  ${l}`),
         cfgNote,
         'Commands: /router off, /router on.',
       ].filter(Boolean).join('\n'),
@@ -546,7 +573,7 @@ export const register: Register = (on, options) => {
 
   // The app's effort menu does not move, so the footer names the level the mod really sends.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    if (!enabled) return next(e)
+    if (!enabled || cfg.notifications === 'off') return next(e)
     const { value } = await $.state.get(OVERRIDE)
     const { value: model } = await $.state.get(MODEL_HOLD)
     if (!value && !model) return next(e)

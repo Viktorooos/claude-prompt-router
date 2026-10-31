@@ -4,8 +4,8 @@
 
 **The right place, the right model and the right effort for every prompt, decided before the agent starts working.**
 
-![version](https://img.shields.io/badge/version-0.7.0-blue?style=flat-square)
-![unit tests](https://img.shields.io/badge/unit_tests-123_passing-brightgreen?style=flat-square)
+![version](https://img.shields.io/badge/version-0.8.0-blue?style=flat-square)
+![unit tests](https://img.shields.io/badge/unit_tests-188_passing-brightgreen?style=flat-square)
 ![eval](https://img.shields.io/badge/eval-123_cases-8a63d2?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 <br>
@@ -13,7 +13,7 @@
 ![Codex](https://img.shields.io/badge/Codex-CLI_+_desktop-10a37f?style=flat-square)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-4b5563?style=flat-square)
 
-<sub>Unit tests: Claude Code 55 · Codex 41 · OpenCode 27</sub>
+<sub>Unit tests: Claude Code 79 · Codex 62 · OpenCode 47</sub>
 
 [How it works](#how-it-works) •
 [Quick start](#quick-start) •
@@ -85,13 +85,13 @@ When a prompt does not belong in this chat, the agent asks before it starts (her
 ╰─────────────────────────────────────────────────────────────────────╯
 ```
 
-When the prompt stays here but needs more or less thinking, you get **Switch / Keep as is**. With `effortMode: auto` it just switches and tells you:
+When the prompt stays here but needs more or less thinking, you get **Switch / Keep as is**. With `effortDetection: auto` it just switches and tells you:
 
 ```
 Effort: Low (was Medium), small follow-up to the last fix
 ```
 
-On a new chat's **first prompt** it also checks the model: Opus picked for a rename? Haiku for debugging? It offers the switch (or makes it, with `modelMode: auto`).
+On a new chat's **first prompt** it also checks the model: Opus picked for a rename? Haiku for debugging? It offers the switch (or makes it, with `firstChatDetection: auto`).
 
 Approvals (`yes`, `go on`, `option 2`), answers to the agent's questions, slash commands and prompts where nothing needs to change pass through untouched.
 
@@ -122,9 +122,9 @@ The decisions are the same everywhere. What each platform lets a plugin do diffe
 | **Subagent** | ✅ Agent tool with model and effort | ✅ `spawn_agent` with `model` and `reasoning_effort` | ✅ `task` with a `router-<model>` subagent |
 | **New session** | ✅ `start_session` in the app; ⚠️ a `claude …` command elsewhere | ⚠️ a `codex -m …` command to run | ✅ `router_session` tool (fallback: an `opencode` command) |
 | **Model check on first prompt** | ✅ | ⚠️ as a suggestion | ✅ |
-| **Here on another model** (later prompts) | ✅ asks Subagent or Stay here | ❌ not yet | ❌ not yet |
-| **Notice** (`auto`) | toast | system message + `/model` line | toast |
-| **`/router` command** | ✅ | ⚠️ typed as a prompt; the TUI may take it as unknown | ✅ config command + toast |
+| **Here on another model** (later prompts) | ✅ asks Subagent or Stay here | ✅ asks Subagent (`spawn_agent`) or Stay here | ✅ asks Subagent (`task`) or Stay here |
+| **Notice** (`auto`, `notifications`) | toast + footer label | system message + `/model` line | toast |
+| **`/router` command** (lists every option and where it came from) | ✅ | ⚠️ typed as a prompt; the TUI may take it as unknown | ✅ config command + toast |
 | **Default classifier** | Sonnet | `gpt-6-luna` (class `haiku`) | `anthropic/claude-sonnet-5-5` |
 | **Options live in** | `~/.claude/settings.json` (`pluginConfigs`) or `/plugin` | `~/.codex/prompt-router.json` | `~/.config/opencode/prompt-router.json` or `opencode.json` |
 | **Status** | used daily | unit-tested; hook run with the real classifier | ⚠️ unit-tested only |
@@ -143,7 +143,7 @@ Shared by all three platforms.
 | **subagent** | A self-contained search, read, build or test run whose short result is needed here. |
 | **session** | Unrelated to this chat, or long mechanical work better done with a fresh context. In a chat over **60k tokens**, even a trivial unrelated task goes here. |
 
-**Here on another model** (Claude Code). The chat's model is set only on its first prompt. Later, switching it would break the prompt cache and the new model would read the whole context again at full price. So when a prompt belongs here but fits a stronger or a cheaper model, the router asks: **Subagent (model · effort)**, which gets what it needs from the chat and returns a short result, or **Stay here**, where only the effort is judged again (`effortMode`). With `modelMode: off` it only judges the effort.
+**Here on another model** (all three platforms). The chat's model is set only on its first prompt. Later, switching it would break the prompt cache and the new model would read the whole context again at full price. So when a prompt belongs here but fits a stronger or a cheaper model, the router asks: **Subagent (model · effort)**, which gets what it needs from the chat and returns a short result, or **Stay here**, where only the effort is judged again (`effortDetection`). With `midChatModelDetection: off` it only judges the effort.
 
 ### Models
 
@@ -190,19 +190,36 @@ Words like *important*, *carefully* or *do it properly* never raise it beyond **
 <a id="options"></a>
 ### Options
 
-The same keys on every platform. Where they live is in each platform's section.
+The same keys on every platform. Each feature has its own switch. The defaults keep the behaviour of 0.7.
 
-| Option | What it does | Default |
+| Option | Values (default first) | What it does |
 | --- | --- | --- |
-| `project` | What your chats are about, in a few words | empty (a software project) |
-| `rules` | Your own routing rules; they win over the built-in ones | empty |
-| `language` | Language of the reason and of the questions the agent asks | `auto` (each prompt's language) |
-| `classifier` | Model class that makes the call: `sonnet`, `haiku` (cheaper, less accurate) or `opus` (most accurate, most expensive) | `sonnet` (Codex: `haiku`) |
-| `effortMode` | `ask`: a question before the effort changes · `auto`: just do it | `ask` |
-| `modelMode` | New chat's first prompt: `ask` · `auto` · `off` (never touch the model) | `ask` |
+| `project` | text (empty: a software project) | What your chats are about, in a few words. |
+| `rules` | text (empty) | Your own routing rules. They win over the built-in ones. |
+| `language` | `auto`, or a language name | The language of the reason and of the questions. `auto` uses each prompt's language. |
+| `classifier` | `sonnet`, `haiku`, `opus` (Codex default: `haiku`) | The model class that makes the call. Haiku is cheaper and less accurate, Opus the most accurate and expensive. |
+| `effortDetection` | `ask`, `auto`, `off` | The effort for a prompt that stays here. `ask`: a question first. `auto`: just switch. `off`: never touch the effort; "Do it here" and "Stay here" have no level. |
+| `firstChatDetection` | `ask`, `auto`, `off` | The model on a new chat's first prompt. `ask`: a question first. `auto`: just switch. `off`: keep the model. |
+| `midChatModelDetection` | `ask`, `auto`, `off` | A later prompt that stays here but fits another model. `ask`: offer Subagent or Stay here. `auto`: no question; the agent uses the subagent only for a larger self-contained job that needs the other model, keeps a quick question or short answer here (the effort judged as `effortDetection` says) and tells you in one sentence what it chose. The chat's model never changes. `off`: judge only the effort. Not in the Codex desktop app, which has no subagents. |
+| `subagentSuggestions` | `ask`, `off` | `ask`: offer a subagent for a self-contained task. `off`: the prompt stays here (effort and the other-model offer still apply). |
+| `sessionSuggestions` | `ask`, `off` | `ask`: offer a new session for an unrelated task. `off`: the prompt stays here. |
+| `notifications` | `on`, `off` | `on`: a toast after an automatic change, and a footer label in Claude Code (Codex: a system message). `off`: none of these; the changes still happen. |
+
+Where to put them:
+
+| Platform | File | Key |
+| --- | --- | --- |
+| 🟠 Claude Code | `~/.claude/settings.json`, or `/plugin` → prompt-router → Configure | `pluginConfigs` › `prompt-router@prompt-router` › `options` |
+| ⚫ Codex | `~/.codex/prompt-router.json` | top level |
+| 🔵 OpenCode | `~/.config/opencode/prompt-router.json`, or the plugin's options in `opencode.json` | top level |
+
+`/router` shows the value of every option and where it came from: set, an old key, or the default. Each session also writes them once to the log.
+
+> [!NOTE]
+> **Old names still work.** Before 0.8.0 there were two keys. `effortMode` (`ask`, `auto`) is now `effortDetection`. `modelMode` (`ask`, `auto`, `off`) is now `firstChatDetection`, and `modelMode: off` also turns off `midChatModelDetection`, as it did in 0.7. An old key counts only when the new key is missing. `/router` tells you to rename it.
 
 > [!TIP]
-> Want no questions about effort or model at all? Set both `effortMode` and `modelMode` to `auto`. "Where should this go?" is still asked, since moving work to another session is always your call.
+> Want no questions about effort or model at all? Set `effortDetection` and `firstChatDetection` to `auto` and `midChatModelDetection` to `off`. "Where should this go?" is still asked; to stop it, set `subagentSuggestions` and `sessionSuggestions` to `off`.
 
 ### Your own rules
 
@@ -258,8 +275,9 @@ Set the [options](#options) in `/plugin` → prompt-router → Configure, or in 
       "project": "a React web app and a React Native mobile app for sharing recipes, Node.js backend",
       "rules": "Database migrations: opus, high. Copy changes on the marketing site: haiku, low.",
       "language": "English",
-      "effortMode": "auto",
-      "modelMode": "auto"
+      "effortDetection": "auto",
+      "firstChatDetection": "auto",
+      "notifications": "on"
     }
   }
 }
@@ -351,8 +369,12 @@ All in `~/.codex` (`$CODEX_HOME` is respected), each file after a backup:
 ```json
 {
   "classifier": "haiku",
-  "effortMode": "ask",
-  "modelMode": "ask",
+  "effortDetection": "ask",
+  "firstChatDetection": "ask",
+  "midChatModelDetection": "ask",
+  "subagentSuggestions": "ask",
+  "sessionSuggestions": "ask",
+  "notifications": "on",
   "project": "",
   "rules": "",
   "language": "auto",
@@ -402,7 +424,7 @@ Removes only the router's entry from `hooks.json`, the MCP server block from `co
 For the OpenCode CLI / TUI and desktop.
 
 > [!WARNING]
-> The OpenCode adapter is **unit-tested only** (27 tests with a mock client). It has not been run against a real OpenCode yet.
+> The OpenCode adapter is **unit-tested only** (47 tests with a mock client). It has not been run against a real OpenCode yet.
 
 ### Requirements
 
@@ -436,8 +458,12 @@ The [shared keys](#options) plus the OpenCode ones, in **one** of two places:
 ```json
 {
   "classifier": "sonnet",
-  "effortMode": "ask",
-  "modelMode": "ask",
+  "effortDetection": "ask",
+  "firstChatDetection": "ask",
+  "midChatModelDetection": "ask",
+  "subagentSuggestions": "ask",
+  "sessionSuggestions": "ask",
+  "notifications": "on",
   "project": "",
   "rules": "",
   "language": "auto",
@@ -449,7 +475,7 @@ The [shared keys](#options) plus the OpenCode ones, in **one** of two places:
 `opencode.json`:
 
 ```json
-"plugin": [["file:///Users/<you>/.config/opencode/prompt-router.ts", { "effortMode": "auto", "timeoutMs": 20000 }]]
+"plugin": [["file:///Users/<you>/.config/opencode/prompt-router.ts", { "effortDetection": "auto", "timeoutMs": 20000 }]]
 ```
 
 | Key | What it does |
@@ -488,6 +514,7 @@ Removes the shim (only if it is the router's) and puts back the newest file it r
 <summary><b>It asks me even though I set <code>auto</code>.</b></summary>
 
 - Options are read when a session starts, so open a new chat.
+- Run `/router`. It lists every option, its value and where it came from. The log has the same line for each session, with the folder of the copy that wrote it.
 - In Claude Code, put them under the full id `prompt-router@prompt-router` in `pluginConfigs`. An entry under plain `prompt-router` is used only when there is no full-id entry, and `/router` tells you to rename it.
 - Check that no second copy of the mod runs (`claude plugin list`, and any dev copy under `~/.claude/dev-mods/`). A copy without your options falls back to `ask`.
 - In Codex, `auto` still cannot switch the chat; you get the `/model` line instead of a question.
@@ -538,10 +565,10 @@ Use one of them, not both: they both set effort per prompt.
 Canned classifier replies, no model calls. From the repo root:
 
 ```bash
-claude plugin test plugins/prompt-router       # Claude Code mod: 55
+claude plugin test plugins/prompt-router       # Claude Code mod: 79
 claude plugin validate plugins/prompt-router   # manifest and options check
-node --test adapters/codex/test/               # Codex: 41
-node --test adapters/opencode/test/            # OpenCode: 27 (mock client)
+node --test adapters/codex/test/               # Codex: 62
+node --test adapters/opencode/test/            # OpenCode: 47 (mock client)
 ```
 
 ### Live eval
@@ -579,6 +606,7 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 
 | Version | Changes |
 | --- | --- |
+| **0.8.0** | One switch per feature: `effortDetection`, `firstChatDetection`, `midChatModelDetection`, `subagentSuggestions`, `sessionSuggestions`, `notifications`. The old `effortMode` and `modelMode` still work. `/router` lists every option and where it came from, and the log records them once per session. Codex and OpenCode: a prompt that stays here but fits another model offers a subagent on that model or staying here. `midChatModelDetection: auto` lets the agent choose between the two itself, with no question. |
 | **0.7.0** | Claude Code: a prompt that stays here but fits another model offers a subagent on that model or staying here; the chat's model never changes mid-chat (it would break the prompt cache) |
 | **0.6.0** | Codex and OpenCode adapters (`adapters/`), the router logic moved to a shared `core/router.ts` |
 | **0.5.1** | Options under the short key `prompt-router` are read (with a hint to rename it); the classifier sees only the typed text (the app's reminder blocks are stripped); `start_session` is offered only where it exists, the terminal gets a `claude --model … --effort …` command |

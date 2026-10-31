@@ -1,5 +1,5 @@
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { NAMES } from '../../plugins/prompt-router/core/router.ts'
+import { DECIDE_OTHER, NAMES, TOLD_OTHER } from '../../plugins/prompt-router/core/router.ts'
 import type { Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import { userLang } from '../../plugins/prompt-router/core/router.ts'
 
@@ -32,26 +32,55 @@ export function sessionCommand(ctx: NoteCtx, p: Pick) {
   return `codex -m ${slug} -c model_reasoning_effort=${ctx.effortOf(slug, p.effort)} "<the task from this message, with what it needs to know, in one line>"`
 }
 
-// Here keeps its own effort choice: a lower effort fits a task even when it stays in this chat.
+// The "do it here" options: here keeps its own effort choice, a lower effort fits a task even
+// when it stays in this chat. Without an effort change the option just goes on.
+function hereChoice(ctx: NoteCtx, name: string, p: Pick, cur: { model: string; now: Level | '' }, effort: boolean) {
+  const switchHere = `"${name} (${NAMES[p.effort]})"`
+  const keepHere = cur.now ? `"${name} (keep ${NAMES[cur.now]})"` : `"${name} (keep the effort)"`
+  if (!effort || ctx.cfg.effortDetection === 'off') return { options: `"${name}"`, then: `"${name}" = continue normally.` }
+  const switchLine = `give the user the line "${line(ctx, cur.model, p.effort, '')}" (this chat cannot be switched from inside it), then handle the prompt at the current setting`
+  if (ctx.cfg.effortDetection === 'ask') return { options: `${switchHere}, ${keepHere}`, then: `${switchHere} = ${switchLine}; ${keepHere} = continue normally.` }
+  return { options: switchHere, then: `${switchHere} = ${switchLine}.` }
+}
+
+function subagentCall(ctx: NoteCtx, p: Pick, brief = '') {
+  const slug = ctx.models[p.model]
+  return `call the ${SUBAGENT_TOOL} tool with model "${slug}" and reasoning_effort "${ctx.effortOf(slug, p.effort)}"${brief} and have it return only a short result; if this session has no ${SUBAGENT_TOOL} tool, say so in one line and do it here.`
+}
+
+function label(ctx: NoteCtx, p: Pick) {
+  const slug = ctx.models[p.model]
+  return `${slug} · ${ctx.effortOf(slug, p.effort)}`
+}
+
 export function askNote(ctx: NoteCtx, p: Pick, cur: { model: string; now: Level | '' }, midTurn = false) {
   const { cfg } = ctx
-  const slug = ctx.models[p.model]
-  const label = `${slug} · ${ctx.effortOf(slug, p.effort)}`
+  const l = label(ctx, p)
   const where = p.where === 'session' ? 'a new session' : 'a subagent'
-  const session = `"New session (${label})"`
-  const agent = `"Subagent (${label})"`
-  const effort = !midTurn && p.effort !== cur.now && !!cur.model
-  const switchHere = `"Do it here (${NAMES[p.effort]})"`
-  const keepHere = cur.now ? `"Do it here (keep ${NAMES[cur.now]})"` : `"Do it here (keep the effort)"`
-  const here = !effort ? `"Do it here"` : cfg.effortMode === 'ask' ? `${switchHere}, ${keepHere}` : switchHere
-  const options = p.where === 'session' ? `${session}, ${agent}, ${here}` : `${agent}, ${here}`
-  const switchLine = effort ? `give the user the line "${line(ctx, cur.model, p.effort, '')}" (this chat cannot be switched from inside it), then handle the prompt at the current setting` : ''
-  const hereThen = !effort
-    ? 'Do it here = continue normally.'
-    : cfg.effortMode === 'ask'
-      ? `${switchHere} = ${switchLine}; ${keepHere} = continue normally.`
-      : `${switchHere} = ${switchLine}.`
-  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs on ${cur.model || 'an unknown model'} at effort ${cur.now || 'unknown'}. Before doing anything, ${ask('Where should this go?')} with the options ${options}. Write the question and options in ${userLang(cfg)}. Then: New session = give the user, in a bash code block, the command to run in a new terminal: ${sessionCommand(ctx, p)}, then stop here. Subagent = call the ${SUBAGENT_TOOL} tool with model "${slug}" and reasoning_effort "${ctx.effortOf(slug, p.effort)}" and have it return only a short result; if this session has no ${SUBAGENT_TOOL} tool, say so in one line and do it here. ${hereThen}`
+  const session = `"New session (${l})"`
+  const agent = `"Subagent (${l})"`
+  const here = hereChoice(ctx, 'Do it here', p, cur, !midTurn && p.effort !== cur.now && !!cur.model)
+  const options = p.where === 'session' ? `${session}, ${agent}, ${here.options}` : `${agent}, ${here.options}`
+  return `Prompt Router suggests running this prompt in ${where} (${l})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs on ${cur.model || 'an unknown model'} at effort ${cur.now || 'unknown'}. Before doing anything, ${ask('Where should this go?')} with the options ${options}. Write the question and options in ${userLang(cfg)}. Then: New session = give the user, in a bash code block, the command to run in a new terminal: ${sessionCommand(ctx, p)}, then stop here. Subagent = ${subagentCall(ctx, p)} ${here.then}`
+}
+
+// A prompt that stays here but fits another model: a subagent on that model, or here on the chat's
+// model with only the effort judged again. The chat's model never changes mid-chat.
+export function otherNote(ctx: NoteCtx, p: Pick, cur: { model: string; now: Level | '' }, effort: boolean) {
+  const l = label(ctx, p)
+  const here = hereChoice(ctx, 'Stay here', p, cur, effort)
+  return `Prompt Router: this prompt belongs to this chat but fits ${l} better than this chat's ${cur.model}${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${cur.now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. Before doing anything, ${ask('Where should this go?')} with the options "Subagent (${l})", ${here.options}. Write the question and options in ${userLang(ctx.cfg)}. Then: Subagent = ${subagentCall(ctx, p, '; it does not see this chat, so give it everything it needs from this chat in its message,')} ${here.then}`
+}
+
+// midChatModelDetection auto: no "Where should this go?"; staying here judges the effort as
+// effortDetection says (auto names the switch line, ask asks only about it, off leaves it).
+export function otherAutoNote(ctx: NoteCtx, p: Pick, cur: { model: string; now: Level | '' }, effort: boolean) {
+  const l = label(ctx, p)
+  const here = hereChoice(ctx, 'Stay here', p, cur, effort)
+  const stay = !effort || ctx.cfg.effortDetection === 'off' ? 'handle the prompt normally.'
+    : ctx.cfg.effortDetection === 'ask' ? `${ask('Effort?')} about the effort only, with the options ${here.options}, in ${userLang(ctx.cfg)}; ${here.then}`
+    : `give the user the line "${line(ctx, cur.model, p.effort, '')}" (this chat cannot be switched from inside it), then handle the prompt at the current setting.`
+  return `Prompt Router: this prompt belongs to this chat but fits ${l} better than this chat's ${cur.model}${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${cur.now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. ${DECIDE_OTHER} Subagent = ${subagentCall(ctx, p, '; it does not see this chat, so give it everything it needs from this chat in its message,')} Here = ${stay} ${TOLD_OTHER}`
 }
 
 // Mode auto: Codex cannot switch the chat, so the agent names the switch in one line and goes on.

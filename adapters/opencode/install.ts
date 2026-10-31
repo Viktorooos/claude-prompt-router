@@ -17,8 +17,12 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 
 export const DEFAULT_OPTIONS = {
   classifier: 'sonnet',
-  effortMode: 'ask',
-  modelMode: 'ask',
+  effortDetection: 'ask',
+  firstChatDetection: 'ask',
+  midChatModelDetection: 'ask',
+  subagentSuggestions: 'ask',
+  sessionSuggestions: 'ask',
+  notifications: 'on',
   project: '',
   rules: '',
   language: 'auto',

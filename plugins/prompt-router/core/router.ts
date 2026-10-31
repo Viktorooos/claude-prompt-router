@@ -18,7 +18,21 @@ export const ALL_MODELS = Object.keys(MODELS) as Model[]
 
 export type Where = 'here' | 'subagent' | 'session'
 
-export type Config = { project: string; rules: string; language: string; classifier: 'sonnet' | 'haiku' | 'opus'; effortMode: 'auto' | 'ask'; modelMode: 'auto' | 'ask' | 'off' }
+// One switch per feature; the first value of each is the default (today's behaviour).
+export const SWITCHES = {
+  effortDetection: ['ask', 'auto', 'off'],
+  firstChatDetection: ['ask', 'auto', 'off'],
+  midChatModelDetection: ['ask', 'auto', 'off'],
+  subagentSuggestions: ['ask', 'off'],
+  sessionSuggestions: ['ask', 'off'],
+  notifications: ['on', 'off'],
+} as const
+
+export type Switch = keyof typeof SWITCHES
+
+type Switches = { [K in Switch]: (typeof SWITCHES)[K][number] }
+
+export type Config = { project: string; rules: string; language: string; classifier: 'sonnet' | 'haiku' | 'opus' } & Switches
 
 export type Model = keyof typeof MODELS
 
@@ -109,6 +123,10 @@ The new prompt:
 
 Reply with JSON only: {"where": "keep|here|subagent|session", "model": "{{models}}", "effort": "low|medium|high|xhigh|max", "why": "the reason in under 12 plain words, in {{lang}}"}`
 
+// midChatModelDetection auto: the agent picks the subagent or here itself, with no question.
+export const DECIDE_OTHER = `Do not ask the user; decide yourself: use the subagent only when it is worth it: a larger self-contained piece of work that needs the other model (for example hard design or debugging on a weaker chat model, or long mechanical work on a strong one); a quick question, a short answer or a short message stays here.`
+export const TOLD_OTHER = 'Afterwards, tell the user in one sentence what you chose (the subagent or here) and why.'
+
 export const MODEL_HEAD_FIRST = 'MODEL (this is the FIRST prompt of a new chat: pick the model the whole chat should run on, by the rules below; for a greeting or an opener with no task yet, answer the current model)'
 
 export const MODEL_HEAD = 'MODEL (for subagent or session; for here use the current one)'
@@ -122,7 +140,9 @@ export function pickPrompt(text: string, c: Chat, template = TEMPLATE) {
   const conf = c.conf
   const slots: Record<string, string> = {
     project: conf.project.trim() || 'a software project',
-    model_head: conf.modelMode === 'off' ? MODEL_HEAD : c.isFirst ? MODEL_HEAD_FIRST : c.hereModel ? MODEL_HEAD_HERE : MODEL_HEAD,
+    model_head: c.isFirst
+      ? conf.firstChatDetection === 'off' ? MODEL_HEAD : MODEL_HEAD_FIRST
+      : c.hereModel && conf.midChatModelDetection !== 'off' ? MODEL_HEAD_HERE : MODEL_HEAD,
     models: c.models.join('|'),
     fable: c.models.includes('fable') ? FABLE_RULE : '',
     rules: conf.rules.trim() ? `\n\nPROJECT RULES (they take precedence over the rules above)\n${conf.rules.trim()}` : '',
@@ -157,15 +177,77 @@ export function str(v: unknown, fallback: string) {
   return typeof v === 'string' ? v : fallback
 }
 
+export const OPTIONS = ['project', 'rules', 'language', 'classifier', ...(Object.keys(SWITCHES) as Switch[])] as const
+
+export type Option = (typeof OPTIONS)[number]
+
+// Where an option's value came from: its own key, the 0.7 key it replaced, or the default.
+export type Source = { value: string; from: 'new' | 'old' | 'default'; key: string }
+
+function choice(v: unknown, values: readonly string[]) {
+  return typeof v === 'string' && values.includes(v) ? v : ''
+}
+
+// The 0.7 keys still count when the new key is missing: effortMode (ask, auto) for effortDetection,
+// modelMode (ask, auto, off) for firstChatDetection, and modelMode off also for midChatModelDetection.
+function oldValue(k: Switch, o: Record<string, unknown>): { value: string; key: string } | null {
+  if (k === 'effortDetection' && choice(o.effortMode, ['ask', 'auto'])) return { value: o.effortMode as string, key: 'effortMode' }
+  if (k === 'firstChatDetection' && choice(o.modelMode, ['ask', 'auto', 'off'])) return { value: o.modelMode as string, key: 'modelMode' }
+  if (k === 'midChatModelDetection' && o.modelMode === 'off') return { value: 'off', key: 'modelMode' }
+  return null
+}
+
+export function switchSource(k: Switch, o: Record<string, unknown>): Source {
+  const v = choice(o[k], SWITCHES[k])
+  if (v) return { value: v, from: 'new', key: k }
+  const old = oldValue(k, o)
+  return old ? { ...old, from: 'old' } : { value: SWITCHES[k][0], from: 'default', key: k }
+}
+
+// defaults: a platform's own defaults (the Codex classifier is haiku).
+export function optionSources(o: Record<string, unknown>, defaults: Record<string, string> = {}): Record<Option, Source> {
+  const d: Record<string, string> = { project: '', rules: '', language: 'auto', classifier: 'sonnet', ...defaults }
+  const cfg = toConfig({ ...defaults, ...o })
+  const out = {} as Record<Option, Source>
+  for (const k of OPTIONS) {
+    out[k] = k in SWITCHES
+      ? switchSource(k as Switch, o)
+      : { value: cfg[k as 'project'], from: typeof o[k] === 'string' && o[k] !== d[k] ? 'new' : 'default', key: k }
+  }
+  return out
+}
+
 export function toConfig(options: Record<string, unknown>): Config {
+  const sw = Object.fromEntries((Object.keys(SWITCHES) as Switch[]).map(k => [k, switchSource(k, options).value])) as Switches
   return {
     project: str(options.project, ''),
     rules: str(options.rules, ''),
     language: str(options.language, 'auto').trim() || 'auto',
     classifier: options.classifier === 'haiku' || options.classifier === 'opus' ? options.classifier : 'sonnet',
-    effortMode: options.effortMode === 'auto' ? 'auto' : 'ask',
-    modelMode: options.modelMode === 'auto' ? 'auto' : options.modelMode === 'off' ? 'off' : 'ask',
+    ...sw,
   }
+}
+
+// What the classifier's pick turns into when its feature is off: a subagent or session pick stays here.
+export function allowed(p: Pick, cfg: Config): Pick {
+  if (p.where === 'subagent' && cfg.subagentSuggestions === 'off') return { ...p, where: 'here' }
+  if (p.where === 'session' && cfg.sessionSuggestions === 'off') return { ...p, where: 'here' }
+  return p
+}
+
+// One line per option for /router and the log: value and where it came from.
+export function describeOptions(o: Record<string, unknown>, defaults: Record<string, string> = {}) {
+  return Object.entries(optionSources(o, defaults)).map(([k, s]) => {
+    const v = k === 'project' || k === 'rules' ? (s.value ? JSON.stringify(clip(s.value, 60)) : '(empty)') : s.value
+    const from = s.from === 'old' ? `old key ${s.key}; rename it to ${k}` : s.from === 'new' ? 'set' : 'default'
+    return `${k}: ${v} (${from})`
+  })
+}
+
+// The same on one line, for the log: what this copy of the router really goes by.
+export function optionsLine(o: Record<string, unknown>, defaults: Record<string, string> = {}) {
+  const s = optionSources(o, defaults)
+  return OPTIONS.map(k => `${k}=${k === 'project' || k === 'rules' ? JSON.stringify(clip(s[k].value, 40)) : s[k].value}${s[k].from === 'old' ? `(old ${s[k].key})` : ''}`).join(' ')
 }
 
 // The language the agent writes its questions in.

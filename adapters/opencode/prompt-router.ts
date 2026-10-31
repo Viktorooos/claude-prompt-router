@@ -8,15 +8,16 @@
 // a shim that passes `tool` from @opencode-ai/plugin (installed by OpenCode in its config dir) to
 // routerPlugin below. `--uninstall` removes it and puts back what it replaced.
 //
-// Options, read like the mod's toConfig (project, rules, language, classifier, effortMode, modelMode)
-// plus the mapping to OpenCode models and variants:
+// Options, read like the mod's toConfig (project, rules, language, classifier, effortDetection,
+// firstChatDetection, midChatModelDetection, subagentSuggestions, sessionSuggestions, notifications;
+// the 0.7 effortMode and modelMode still count) plus the mapping to OpenCode models and variants:
 //   - ~/.config/opencode/prompt-router.json (install.ts creates it with the defaults). The shim in
 //     plugins/ is auto-loaded, and OpenCode passes no options to auto-loaded plugins.
 //   - or opencode.json: move the shim out of plugins/ (else it loads twice) and list it there,
 //     "plugin": [["file:///Users/<you>/.config/opencode/prompt-router.ts", { ...options }]];
 //     options given this way win and the JSON file is not read.
-//   { "classifier": "sonnet", "effortMode": "auto", "modelMode": "ask", "project": "", "rules": "",
-//     "language": "auto",
+//   { "classifier": "sonnet", "effortDetection": "auto", "firstChatDetection": "ask", "project": "",
+//     "rules": "", "language": "auto", "notifications": "on",
 //     "models": { "haiku": "anthropic/claude-haiku-5-5", "sonnet": "anthropic/claude-sonnet-5-5",
 //                 "opus": "anthropic/claude-opus-5-5", "fable": "anthropic/claude-fable-5-1" },
 //     "variants": { "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } }
@@ -27,9 +28,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, MODEL_NAMES, NAMES, asLevel, clip, knownModel, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, MODEL_NAMES, NAMES, allowed, asLevel, clip, describeOptions, knownModel, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
-import { SESSION_TOOL, SWITCH_TOOL, agentFor, askNote, switchNote } from './notes.ts'
+import { SESSION_TOOL, SWITCH_TOOL, agentFor, askNote, otherAutoNote, otherNote, switchNote } from './notes.ts'
 import type { NoteCtx } from './notes.ts'
 
 // `tool` from @opencode-ai/plugin: the shim hands it in, since the repo has no node_modules.
@@ -146,6 +147,9 @@ export function routerPlugin(tool: ToolFn) {
         // No TUI (opencode run, the server alone).
       }
     }
+
+    // Once per load, so the log shows what this copy of the plugin really goes by.
+    await log('effective options', `${source} | ${optionsLine(given)}`)
 
     function chat(sid: string) {
       let st = chats.get(sid)
@@ -268,6 +272,7 @@ export function routerPlugin(tool: ToolFn) {
         tokens,
         conf: cfg,
         isFirst: !messages.some(m => m.info.role === 'assistant'),
+        hereModel: true,
         models: avail,
       }
     }
@@ -318,11 +323,14 @@ export function routerPlugin(tool: ToolFn) {
       const avail = await availableModels(model)
       const c = chatOf(messages, text, now, tokens, model, avail)
       const reply = await classify(text, c)
-      const p = parsePick(reply, avail)
-      if (!p && !/"where"\s*:\s*"keep"/.test(reply)) await log('parse', 'reply could not be parsed')
+      const parsed = parsePick(reply, avail)
+      if (!parsed && !/"where"\s*:\s*"keep"/.test(reply)) await log('parse', 'reply could not be parsed')
+      const p = parsed && allowed(parsed, cfg)
       await log('pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${tokens ?? '?'} tok | first ${c.isFirst} | ${clip(reply, 200)}`)
       // The first prompt of a chat has nothing to leave: only its model and effort count.
       if (p && c.isFirst) return { ...p, where: 'here', first: { now: routerModel(model) } }
+      const cur = routerModel(model)
+      if (p?.where === 'here' && cur && p.model !== cur && cfg.midChatModelDetection !== 'off') return { ...p, other: { now: cur } }
       return p
     }
 
@@ -350,26 +358,28 @@ export function routerPlugin(tool: ToolFn) {
       if (p.where === 'here') {
         // A prompt typed over a running turn belongs to that work: its model and effort stay.
         if (midTurn) return
+        // Another model than the chat's: ask before anything is applied, the chat's model stays.
+        if (p.other) return addNote(parts, (cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(ctx, p, p.other.now, now))
         const changes: string[] = []
         let askModel: { from: Model } | null = null
         let askEffort: { now: Level | '' } | null = null
         // A new chat: the model it starts on may not fit the task.
         const from = p.first?.now
-        if (from && p.model !== from && cfg.modelMode !== 'off') {
-          if (cfg.modelMode === 'ask') askModel = { from }
+        if (from && p.model !== from && cfg.firstChatDetection !== 'off') {
+          if (cfg.firstChatDetection === 'ask') askModel = { from }
           else {
             applyModel(st, p.model)
             changes.push(`Model: ${MODEL_NAMES[p.model]} (was ${MODEL_NAMES[from]})`)
           }
         }
-        if (p.effort !== now) {
-          if (cfg.effortMode === 'ask') askEffort = { now }
+        if (p.effort !== now && cfg.effortDetection !== 'off') {
+          if (cfg.effortDetection === 'ask') askEffort = { now }
           else {
             applyLevel(st, p.effort)
             changes.push(`Effort: ${NAMES[p.effort]}${now ? ` (was ${NAMES[now]})` : ''}`)
           }
         }
-        if (changes.length) await toast(`${changes.join(', ')}${p.why ? `, ${p.why}` : ''}`)
+        if (changes.length && cfg.notifications === 'on') await toast(`${changes.join(', ')}${p.why ? `, ${p.why}` : ''}`)
         if (askModel || askEffort) addNote(parts, switchNote(ctx, p, askModel, askEffort))
         return
       }
@@ -393,9 +403,10 @@ export function routerPlugin(tool: ToolFn) {
       const st = chats.get(sid)
       const now = st?.seen ?? ''
       return [
-        `Prompt Router is ${enabled ? 'on' : 'off'} (classifier ${cfg.classifier}, effort mode ${cfg.effortMode}, model mode ${cfg.modelMode}).`,
+        `Prompt Router is ${enabled ? 'on' : 'off'} (classifier ${cfg.classifier}, effort mode ${cfg.effortDetection}, model mode ${cfg.firstChatDetection}).`,
         `This chat runs on ${st?.seenModel || 'an unknown model so far'}${st?.modelHold ? ' (held by the router)' : ''}, effort ${now ? NAMES[now] : 'unknown so far'}${st?.hold ? ` (held by the router: ${NAMES[st.hold.level]})` : ''}.`,
         `Options: ${source}.`,
+        ...describeOptions(given).map(l => `  ${l}`),
         'Commands: /router off, /router on.',
       ].join('\n')
     }

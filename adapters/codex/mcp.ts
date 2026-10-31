@@ -55,8 +55,9 @@ export async function route(args: { prompt?: unknown }, deps: Deps = {}): Promis
   try {
     const transcript = await findTranscript(home, prompt)
     const h = await readHistory(transcript)
-    // The routed prompt's own turn is open already; it is not a running one.
-    const r = await handle({ prompt, transcript_path: transcript, turn_id: h.openTurns.at(-1), model: h.model || undefined }, { ...deps, codexHome: home })
+    // The routed prompt's own turn is open already; it is not a running one. The desktop has no
+    // spawn_agent, so a here prompt on another model only judges the effort, as before.
+    const r = await handle({ prompt, transcript_path: transcript, turn_id: h.openTurns.at(-1), model: h.model || undefined }, { ...deps, codexHome: home, noSubagent: true })
     return r?.hookSpecificOutput?.additionalContext ?? GO_ON
   } catch {
     return GO_ON
@@ -77,7 +78,7 @@ type Msg = { jsonrpc?: string; id?: number | string; method?: string; params?: a
 async function answer(m: Msg, deps: Deps): Promise<unknown> {
   switch (m.method) {
     case 'initialize':
-      return { protocolVersion: m.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'prompt-router', version: '0.6.0' } }
+      return { protocolVersion: m.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'prompt-router', version: '0.8.0' } }
     case 'ping':
       return {}
     case 'tools/list':

@@ -20,8 +20,12 @@ const EVENT = 'UserPromptSubmit'
 
 export const DEFAULT_OPTIONS = {
   classifier: 'haiku',
-  effortMode: 'ask',
-  modelMode: 'ask',
+  effortDetection: 'ask',
+  firstChatDetection: 'ask',
+  midChatModelDetection: 'ask',
+  subagentSuggestions: 'ask',
+  sessionSuggestions: 'ask',
+  notifications: 'on',
   project: '',
   rules: '',
   language: 'auto',

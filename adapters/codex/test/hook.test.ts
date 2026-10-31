@@ -211,3 +211,169 @@ test('the classifier child gets node and codex folders on PATH', () => {
   assert.deepEqual(p.slice(0, 2), ['/n/bin', '/b'])
   assert.ok(p.includes('/usr/bin'))
 })
+
+// Here on another model: switching this chat's model would break the prompt cache, so the router
+// offers a subagent on that model or staying here with only the effort judged again.
+const OTHER = {
+  lower: '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}',
+  lowerSame: '{"where": "here", "model": "sonnet", "effort": "medium", "why": "a mechanical edit"}',
+  higher: '{"where": "here", "model": "opus", "effort": "high", "why": "new logic"}',
+}
+
+test('mid-chat, the classifier is asked which model the task needs, also for here', async () => {
+  const { calls } = await send('rename the keys we just found', { reply: OTHER.lower })
+  assert.doesNotMatch(calls[0].prompt, /for here use the current one/)
+  assert.match(calls[0].prompt, /MODEL \(the model the task needs, also for here/)
+})
+
+test('here on a cheaper model (ask): offers a subagent or staying here, switches nothing', async () => {
+  const { context, system } = await send('rename the keys we just found', { reply: OTHER.lower, options: { effortMode: 'ask', modelMode: 'ask' } })
+  assert.match(context, /^\[Prompt Router/)
+  assert.match(context, /fits gpt-6\.1-terra · low better than this chat's gpt-6\.1-sol, because: a mechanical edit/)
+  assert.match(context, /ask the user in one short message/)
+  assert.match(context, /"Subagent \(gpt-6\.1-terra · low\)", "Stay here \(Low\)", "Stay here \(keep Medium\)"/)
+  assert.match(context, /spawn_agent tool with model "gpt-6\.1-terra" and reasoning_effort "low"/)
+  assert.match(context, /give it everything it needs from this chat/)
+  assert.match(context, /if this session has no spawn_agent tool, say so in one line and do it here/)
+  assert.match(context, /"Stay here \(Low\)" = give the user the line "Prompt Router: for this, switch with `\/model gpt-6\.1-sol low`"/)
+  assert.match(context, /never switch this chat's model/)
+  assert.doesNotMatch(context, /\/model gpt-6\.1-terra/)
+  assert.doesNotMatch(context, /New session/)
+  assert.doesNotMatch(context, /AskUserQuestion/)
+  assert.equal(system, 'Prompt Router: suggests a subagent on gpt-6.1-terra · low (a mechanical edit)')
+})
+
+test('here on a stronger model: the same offer, the chat model stays', async () => {
+  const { context } = await send('now work out the sync logic for it', { reply: OTHER.higher, model: 'gpt-6-luna' })
+  assert.match(context, /fits gpt-6\.1-sol · high better than this chat's gpt-6-luna, because: new logic/)
+  assert.match(context, /"Subagent \(gpt-6\.1-sol · high\)", "Stay here \(High\)", "Stay here \(keep Medium\)"/)
+  assert.match(context, /spawn_agent tool with model "gpt-6\.1-sol" and reasoning_effort "high"/)
+  assert.match(context, /`\/model gpt-6-luna high`/)
+  assert.doesNotMatch(context, /\/model gpt-6\.1-sol/)
+})
+
+test('here on another model (auto): one Stay here option that switches only the effort', async () => {
+  const { context } = await send('rename the keys we just found', { reply: OTHER.lower, options: { effortMode: 'auto', modelMode: 'auto' } })
+  assert.match(context, /"Subagent \(gpt-6\.1-terra · low\)", "Stay here \(Low\)"/)
+  assert.doesNotMatch(context, /keep Medium/)
+  assert.match(context, /"Stay here \(Low\)" = give the user the line "Prompt Router: for this, switch with `\/model gpt-6\.1-sol low`"/)
+  // The question comes first: no "begin your reply with" line before the user picks.
+  assert.doesNotMatch(context, /Begin your reply with/)
+})
+
+test('here on another model at the same effort: Stay here just goes on', async () => {
+  const { context } = await send('rename the keys we just found', { reply: OTHER.lowerSame })
+  assert.match(context, /"Subagent \(gpt-6\.1-terra · medium\)", "Stay here"/)
+  assert.match(context, /"Stay here" = continue normally/)
+  assert.doesNotMatch(context, /\/model/)
+})
+
+test('modelMode off: here on another model only judges the effort, as before', async () => {
+  const { context, system, calls } = await send('rename the keys we just found', { reply: OTHER.lower, options: { effortMode: 'auto', modelMode: 'off' } })
+  assert.match(calls[0].prompt, /for here use the current one/)
+  assert.equal(system, 'Prompt Router: for this, switch with `/model gpt-6.1-sol low` (a mechanical edit)')
+  assert.match(context, /Begin your reply with/)
+  assert.doesNotMatch(context, /Subagent/)
+})
+
+test('here on another model typed over a running turn: nothing changes', async () => {
+  assert.equal((await send('and rename these too', { reply: OTHER.lower, turn: 't3' })).r, null)
+})
+
+test('here on another model when the chat model is unknown: as before', async () => {
+  const { context, system, calls } = await send('rename the keys we just found', { reply: OTHER.lower, model: 'some-custom-model', options: { effortMode: 'auto', modelMode: 'auto' } })
+  assert.match(calls[0].prompt, /for here use the current one/)
+  assert.equal(system, 'Prompt Router: for this, switch with `/model some-custom-model low` (a mechanical edit)')
+  assert.doesNotMatch(context, /Subagent/)
+})
+
+// One switch per feature (0.8.0), read from ~/.codex/prompt-router.json like the real hook.
+test('effortDetection off: no effort line and no level in the options', async () => {
+  assert.equal((await send('rename that variable', { reply: PICK.here, options: { effortDetection: 'off' } })).r, null)
+  const s = await send('run the tests', { reply: PICK.subagent, options: { effortDetection: 'off' } })
+  assert.match(s.context, /"Subagent \(gpt-6-luna · low\)", "Do it here"\./)
+  assert.doesNotMatch(s.context, /Do it here \(/)
+  const o = await send('rename the keys we just found', { reply: OTHER.lower, options: { effortDetection: 'off' } })
+  assert.match(o.context, /"Subagent \(gpt-6\.1-terra · low\)", "Stay here"\./)
+  assert.doesNotMatch(o.context, /\/model/)
+})
+
+test('firstChatDetection off: the first prompt keeps the model, the effort is still judged', async () => {
+  const { context, system } = await send('rename foo', { reply: PICK.first, transcript: null, options: { firstChatDetection: 'off', effortDetection: 'auto' } })
+  assert.equal(system, 'Prompt Router: for this, switch with `/model gpt-6.1-sol low` (mechanical rename)')
+  assert.doesNotMatch(context, /gpt-6\.1-terra/)
+})
+
+test('midChatModelDetection off: no Subagent / Stay here question, only the effort', async () => {
+  const { context, calls } = await send('rename the keys we just found', { reply: OTHER.lower, options: { midChatModelDetection: 'off' } })
+  assert.match(calls[0].prompt, /for here use the current one/)
+  assert.doesNotMatch(context, /Subagent|Stay here/)
+  assert.match(context, /suggests effort low instead of medium/)
+})
+
+test('midChatModelDetection auto: no question, the agent decides between spawn_agent and here', async () => {
+  const { context } = await send('rename the keys we just found', { reply: OTHER.lower, options: { midChatModelDetection: 'auto', effortDetection: 'auto' } })
+  assert.doesNotMatch(context, /ask the user in one short message|Where should this go/)
+  assert.match(context, /Do not ask the user; decide yourself/)
+  assert.match(context, /only when it is worth it: a larger self-contained piece of work/)
+  assert.match(context, /a quick question, a short answer or a short message stays here/)
+  assert.match(context, /Subagent = call the spawn_agent tool with model "gpt-6\.1-terra" and reasoning_effort "low"/)
+  assert.match(context, /Here = give the user the line "Prompt Router: for this, switch with `\/model gpt-6\.1-sol low`"/)
+  assert.match(context, /never switch this chat's model/)
+  assert.match(context, /tell the user in one sentence what you chose/)
+})
+
+test('midChatModelDetection auto with effortDetection off: staying here changes nothing', async () => {
+  const { context } = await send('rename the keys we just found', { reply: OTHER.lower, options: { midChatModelDetection: 'auto', effortDetection: 'off' } })
+  assert.doesNotMatch(context, /ask the user in one short message|\/model /)
+  assert.match(context, /Here = handle the prompt normally/)
+})
+
+test('subagentSuggestions off: a subagent pick is handled as here', async () => {
+  const { context } = await send('run the tests', { reply: '{"where": "subagent", "model": "opus", "effort": "low", "why": "just run the tests"}', options: { subagentSuggestions: 'off' } })
+  assert.doesNotMatch(context, /in a subagent|spawn_agent/)
+  assert.match(context, /suggests effort low instead of medium/)
+})
+
+test('sessionSuggestions off: a session pick is handled as here', async () => {
+  assert.equal((await send('build the billing page', { reply: '{"where": "session", "model": "opus", "effort": "medium", "why": "unrelated"}', options: { sessionSuggestions: 'off' } })).r, null)
+})
+
+test('notifications off: the auto line is still given, but no system message', async () => {
+  const { context, system } = await send('rename that variable', { reply: PICK.here, options: { effortDetection: 'auto', notifications: 'off' } })
+  assert.equal(system, '')
+  assert.match(context, /Begin your reply with exactly this one line/)
+})
+
+test('old keys still work when the new ones are missing; modelMode off turns off both model checks', async () => {
+  const a = await send('rename that variable', { reply: PICK.here, options: { effortMode: 'auto' } })
+  assert.match(a.context, /Begin your reply with/)
+  const first = await send('rename foo', { reply: PICK.first, transcript: null, options: { modelMode: 'off', effortMode: 'auto' } })
+  assert.doesNotMatch(first.context, /gpt-6\.1-terra/)
+  const mid = await send('rename the keys we just found', { reply: OTHER.lower, options: { modelMode: 'off', effortMode: 'auto' } })
+  assert.doesNotMatch(mid.context, /Subagent/)
+  const both = await send('rename that variable', { reply: PICK.here, options: { effortDetection: 'ask', effortMode: 'auto' } })
+  assert.match(both.context, /"Switch \(Low\)", "Keep as is"/)
+})
+
+test('/router prints every option with its value and where it came from', async () => {
+  const { system } = await send('/router', { options: { effortMode: 'auto', notifications: 'off' } })
+  assert.match(system, /effortDetection: auto \(old key effortMode; rename it to effortDetection\)/)
+  assert.match(system, /notifications: off \(set\)/)
+  assert.match(system, /classifier: haiku \(default\)/)
+  for (const k of ['project', 'rules', 'language', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions']) assert.match(system, new RegExp(`${k}: .*\\(default\\)`))
+})
+
+test('the first prompt of a chat logs the effective options', async () => {
+  const { home: h } = await send('rename foo', { reply: PICK.first, transcript: null, options: { effortDetection: 'off' } })
+  const log = readFileSync(join(h, 'log', 'prompt-router.log'), 'utf8')
+  assert.match(log, /effective options: .*effortDetection=off/)
+  const later = await send('rename that', { reply: PICK.same, options: { effortDetection: 'off' } })
+  let text = ''
+  try {
+    text = readFileSync(join(later.home, 'log', 'prompt-router.log'), 'utf8')
+  } catch {
+    text = ''
+  }
+  assert.doesNotMatch(text, /effective options/)
+})
