@@ -20,8 +20,8 @@ export const PICK = {
 export type Call = { name: string; args: any }
 
 // A client that records every call. `reply` is what the classifier answers (a string, an Error to
-// throw, or 'hang' to never answer).
-export function mockClient(o: { reply?: string | Error | 'hang'; history?: Record<string, any[]>; parents?: Record<string, string>; busy?: string[]; providers?: any[] } = {}) {
+// throw, or 'hang' to never answer). `classifierInfo` goes on the classifier's reply info (tokens, cost).
+export function mockClient(o: { reply?: string | Error | 'hang'; history?: Record<string, any[]>; parents?: Record<string, string>; busy?: string[]; providers?: any[]; classifierInfo?: Record<string, unknown> } = {}) {
   const calls: Call[] = []
   let n = 0
   const rec = (name: string, fn: (args: any) => any = () => ({ data: true })) => async (args: any) => {
@@ -37,7 +37,7 @@ export function mockClient(o: { reply?: string | Error | 'hang'; history?: Recor
         const r = client.reply
         if (r instanceof Error) throw r
         if (r === 'hang') return new Promise(() => {})
-        return { data: { info: { role: 'assistant' }, parts: [{ type: 'text', text: r }] } }
+        return { data: { info: { role: 'assistant', ...o.classifierInfo }, parts: [{ type: 'text', text: r }] } }
       }),
       promptAsync: rec('session.promptAsync'),
       delete: rec('session.delete'),

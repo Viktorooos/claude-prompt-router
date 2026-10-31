@@ -1,0 +1,217 @@
+import assert from 'node:assert/strict'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { test } from 'node:test'
+
+import { agentFor } from '../notes.ts'
+import { PICK, named, ongoing, said, send, setup, tmp } from './helpers.ts'
+
+const S = 'ses_main'
+const DAY = 86_400_000
+
+const CLASSIFIER = { tokens: { input: 1200, output: 30, reasoning: 10, cache: { read: 0, write: 0 } }, cost: 0.0042 }
+
+function stats(dir: string): any[] {
+  const path = join(dir, 'prompt-router-stats.jsonl')
+  if (!existsSync(path)) return []
+  return readFileSync(path, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
+}
+const decisions = (dir: string) => stats(dir).filter(r => r.kind === 'decision')
+const turns = (dir: string) => stats(dir).filter(r => r.kind === 'turn')
+
+// A finished assistant message, the way OpenCode sends message.updated.
+function done(sid: string, id: string, o: { model?: string; agent?: string; tokens?: any; cost?: number; completed?: boolean; error?: unknown } = {}) {
+  return {
+    event: {
+      type: 'message.updated',
+      properties: {
+        info: {
+          id,
+          sessionID: sid,
+          role: 'assistant',
+          providerID: 'anthropic',
+          modelID: o.model ?? 'claude-opus-5-5',
+          mode: o.agent ?? 'build',
+          cost: o.cost ?? 0.5,
+          tokens: 'tokens' in o ? o.tokens : { input: 1000, output: 200, reasoning: 50, cache: { read: 30_000, write: 2000 } },
+          time: o.completed === false ? { created: 1 } : { created: 1, completed: 2 },
+          ...(o.error ? { error: o.error } : {}),
+        },
+      },
+    },
+  }
+}
+
+test('stats: an applied decision is logged with what the classifier cost', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.here, history: ongoing(S), classifierInfo: CLASSIFIER }, { effortMode: 'auto' })
+  await send(hooks, S, 'rename that variable')
+  const [d] = decisions(dir)
+  assert.equal(d.platform, 'opencode')
+  assert.equal(d.chat, S)
+  assert.equal(d.where, 'here')
+  assert.equal(d.outcome, 'applied')
+  assert.deepEqual(d.from, { model: 'opus', effort: 'medium' })
+  assert.deepEqual(d.to, { model: 'opus', effort: 'low' })
+  assert.equal(typeof d.ts, 'number')
+  assert.equal(d.classifier.model, 'anthropic/claude-sonnet-5-5')
+  // Reasoning counts as output.
+  assert.deepEqual(d.classifier.usage, { input: 1200, output: 40, cacheRead: 0, cacheWrite: 0 })
+  assert.equal(d.classifier.usd, 0.0042)
+})
+
+test('stats: a suggestion in ask mode is logged as asked, with what was proposed', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.first, classifierInfo: CLASSIFIER })
+  await send(hooks, S, 'rename foo to bar everywhere')
+  const [d] = decisions(dir)
+  assert.equal(d.outcome, 'asked')
+  assert.deepEqual(d.from, { model: 'opus', effort: 'medium' })
+  assert.deepEqual(d.to, { model: 'sonnet', effort: 'low' })
+})
+
+test('stats: a subagent offer is logged as asked, a keep as keep', async () => {
+  const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) })
+  await send(hooks, S, 'run the tests')
+  client.reply = PICK.keep
+  await send(hooks, S, 'yes, go on')
+  const [a, b] = decisions(dir)
+  assert.equal(a.where, 'subagent')
+  assert.equal(a.outcome, 'asked')
+  assert.deepEqual(a.to, { model: 'haiku', effort: 'low' })
+  assert.equal(b.where, 'keep')
+  // No classifier tokens in the reply: no classifier cost is made up.
+  assert.equal(a.classifier.usage.input, 0)
+  assert.equal(a.classifier.usd, undefined)
+})
+
+test('stats: a finished reply in the main chat is logged once, reasoning as output, cost as usd', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.same, history: ongoing(S) })
+  await send(hooks, S, 'go on')
+  await hooks.event(done(S, 'msg_1', { completed: false }))
+  assert.equal(turns(dir).length, 0)
+  await hooks.event(done(S, 'msg_1'))
+  await hooks.event(done(S, 'msg_1'))
+  const t = turns(dir)
+  assert.equal(t.length, 1)
+  assert.equal(t[0].platform, 'opencode')
+  assert.equal(t[0].chat, S)
+  assert.equal(t[0].agentId, undefined)
+  assert.equal(t[0].model, 'claude-opus-5-5')
+  assert.equal(t[0].baseline, 'claude-opus-5-5')
+  assert.deepEqual(t[0].usage, { input: 1000, output: 250, cacheRead: 30_000, cacheWrite: 2000 })
+  assert.equal(t[0].usd, 0.5)
+})
+
+test('stats: user messages and the classifier session are not turns', async () => {
+  const { hooks, dir, calls } = await setup({ reply: PICK.same, history: ongoing(S) })
+  await send(hooks, S, 'go on')
+  // The mock names the classifier's throwaway session scratch-1.
+  assert.equal(named(calls, 'session.create').length, 1)
+  await hooks.event(done('scratch-1', 'msg_c'))
+  const user = done(S, 'msg_u')
+  user.event.properties.info.role = 'user'
+  await hooks.event(user)
+  await hooks.event({ event: { type: 'session.idle', properties: { sessionID: S } } })
+  assert.equal(turns(dir).length, 0)
+})
+
+test('stats: a turn on the model the router picked is measured against the model the chat started on', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.first }, { effortMode: 'auto', modelMode: 'auto' })
+  await send(hooks, S, 'rename foo to bar everywhere')
+  await hooks.event(done(S, 'msg_1', { model: 'claude-sonnet-5-5' }))
+  const [t] = turns(dir)
+  assert.equal(t.model, 'claude-sonnet-5-5')
+  assert.equal(t.baseline, 'claude-opus-5-5')
+})
+
+test('stats: a model the person picked themselves is not a saving', async () => {
+  const { hooks, client, dir } = await setup({ reply: PICK.first }, { effortMode: 'auto', modelMode: 'auto' })
+  await send(hooks, S, 'rename foo to bar everywhere')
+  client.reply = PICK.keep
+  // The person moves the picker to Haiku: the router lets go.
+  await send(hooks, S, 'ok', { model: 'anthropic/claude-haiku-5-5' })
+  await hooks.event(done(S, 'msg_2', { model: 'claude-haiku-5-5' }))
+  const [t] = turns(dir)
+  assert.equal(t.baseline, 'claude-haiku-5-5')
+})
+
+test('stats: a router subagent is measured against the main chat model', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.same, history: ongoing(S), parents: { ses_child: S, ses_other: S } })
+  await send(hooks, S, 'go on')
+  await hooks.event(done('ses_child', 'msg_c1', { model: 'claude-haiku-5-5', agent: agentFor('haiku') }))
+  // A subagent the router did not send runs on what the person set up: no saving claimed.
+  await hooks.event(done('ses_other', 'msg_o1', { model: 'claude-haiku-5-5', agent: 'explore' }))
+  const [a, b] = turns(dir)
+  assert.equal(a.chat, S)
+  assert.equal(a.agentId, 'ses_child')
+  assert.equal(a.model, 'claude-haiku-5-5')
+  assert.equal(a.baseline, 'claude-opus-5-5')
+  assert.equal(b.agentId, 'ses_other')
+  assert.equal(b.baseline, 'claude-haiku-5-5')
+})
+
+test('stats: a cut-off reply has no usage', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.same, history: ongoing(S) })
+  await send(hooks, S, 'go on')
+  await hooks.event(done(S, 'msg_1', { tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, error: { name: 'MessageAbortedError' } }))
+  const [t] = turns(dir)
+  assert.equal(t.usage, undefined)
+  assert.equal(t.usd, undefined)
+})
+
+test('stats: the stats tool shows today, 7 days and total, with the net saving and the extra cost apart', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.here, history: ongoing(S), classifierInfo: CLASSIFIER }, { effortMode: 'auto', modelMode: 'auto' })
+  await send(hooks, S, 'rename that variable')
+  const now = Date.now()
+  const lines = [
+    { kind: 'turn', ts: now - 3 * DAY, platform: 'opencode', chat: 'old', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { kind: 'turn', ts: now - 3 * DAY, platform: 'opencode', chat: 'old', model: 'claude-fable-5-1', baseline: 'claude-opus-5-5', usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    { kind: 'turn', ts: now - 3 * DAY, platform: 'opencode', chat: 'old', model: 'gpt-5', baseline: 'claude-opus-5-5', usage: { input: 1000, output: 0, cacheRead: 0, cacheWrite: 0 }, usd: 0.01 },
+  ]
+  writeFileSync(join(dir, 'prompt-router-stats.jsonl'), readFileSync(join(dir, 'prompt-router-stats.jsonl'), 'utf8') + lines.map(l => JSON.stringify(l)).join('\n') + '\n')
+  const out: string = await hooks.tool.router_stats.execute({}, { sessionID: S })
+  assert.match(out, /Today/)
+  assert.match(out, /7 days/)
+  assert.match(out, /Total/)
+  // Haiku instead of Opus on 1M input: $3.90 saved; Fable instead of Opus: $6.00 extra, shown apart.
+  assert.match(out, /Saved .*\$3\.90/)
+  assert.match(out, /Stronger model .*\$6\.00/)
+  assert.match(out, /Classifier .*\$0\.0042/)
+  assert.match(out, /Net saving .*\$3\.90/)
+  assert.match(out, /Effort lowered .* 1 /)
+  assert.match(out, /Unpriced turns .* 1/)
+  assert.match(out, /estimate/i)
+})
+
+test('stats: /router stats answers with the same table', async () => {
+  const { hooks } = await setup({ reply: PICK.same, history: ongoing(S) })
+  const out = await send(hooks, S, '/router stats')
+  assert.match(said(out), /Net saving/)
+})
+
+test('stats: the log drops records older than 90 days and stays under 5 MB', async () => {
+  const dir = tmp()
+  const path = join(dir, 'prompt-router-stats.jsonl')
+  const now = Date.now()
+  const row = (ts: number) => JSON.stringify({ kind: 'turn', ts, platform: 'opencode', chat: 'x'.repeat(200), model: 'claude-opus-5-5', baseline: 'claude-opus-5-5' })
+  const old = row(now - 100 * DAY)
+  const recent: string[] = []
+  for (let i = 0; i < 25_000; i++) recent.push(row(now - DAY))
+  writeFileSync(path, [old, ...recent].join('\n') + '\n')
+  assert.ok(statSync(path).size > 5_000_000)
+  const { hooks } = await setup({ reply: PICK.same, history: ongoing(S) }, { stateDir: dir })
+  await send(hooks, S, 'go on')
+  const text = readFileSync(path, 'utf8')
+  assert.ok(statSync(path).size < 5_000_000)
+  assert.ok(!text.includes(old))
+  // The newest records stay, the one just written among them.
+  assert.match(text.trimEnd().split('\n').at(-1) as string, /"kind":"decision"/)
+})
+
+test('stats: a router subagent is measured against the main chat model without the router, not the one it holds', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.first, parents: { ses_child: S } }, { effortMode: 'auto', modelMode: 'auto' })
+  // The router moves the main chat from Opus to Sonnet; a subagent then runs on Haiku.
+  await send(hooks, S, 'rename foo to bar everywhere')
+  await hooks.event(done('ses_child', 'msg_c1', { model: 'claude-haiku-5-5', agent: agentFor('haiku') }))
+  const [t] = turns(dir)
+  assert.equal(t.baseline, 'claude-opus-5-5')
+})
