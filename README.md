@@ -103,9 +103,9 @@ Approvals (`yes`, `go on`, `option 2`), answers to the agent's questions, slash 
 
 | Agent | Install | Then | Full guide |
 | --- | --- | --- | --- |
-| 🟠 **Claude Code** | `/plugin marketplace add Viktorooos/prompt-router`<br>`/plugin install prompt-router@prompt-router` | Open a new chat | [Claude Code](#claude-code) |
-| ⚫ **Codex** | `git clone https://github.com/Viktorooos/prompt-router.git`<br>`node prompt-router/adapters/codex/install.ts` | `codex` → `/hooks` → trust **"Routing..."**; restart the desktop app | [Codex](#codex) |
-| 🔵 **OpenCode** | `git clone https://github.com/Viktorooos/prompt-router.git`<br>`node prompt-router/adapters/opencode/install.ts` | Restart OpenCode | [OpenCode](#opencode) |
+| 🟠 **Claude Code** | `/plugin marketplace add Viktorooos/auto-model-router`<br>`/plugin install prompt-router@prompt-router` | Open a new chat | [Claude Code](#claude-code) |
+| ⚫ **Codex** | `git clone https://github.com/Viktorooos/auto-model-router.git`<br>`node auto-model-router/adapters/codex/install.ts` | `codex` → `/hooks` → trust **"Routing..."**; restart the desktop app | [Codex](#codex) |
+| 🔵 **OpenCode** | `git clone https://github.com/Viktorooos/auto-model-router.git`<br>`node auto-model-router/adapters/opencode/install.ts` | Restart OpenCode | [OpenCode](#opencode) |
 
 <a id="compare"></a>
 ## 📊 Feature comparison
@@ -238,7 +238,7 @@ Claude Code with mod (plugin) support: the desktop app, the terminal CLI, VS Cod
 ### Install
 
 ```
-/plugin marketplace add Viktorooos/prompt-router
+/plugin marketplace add Viktorooos/auto-model-router
 /plugin install prompt-router@prompt-router
 ```
 
@@ -312,8 +312,8 @@ The Codex CLI and the ChatGPT desktop app share `~/.codex`, so one install cover
 ### Install
 
 ```bash
-git clone https://github.com/Viktorooos/prompt-router.git
-node prompt-router/adapters/codex/install.ts
+git clone https://github.com/Viktorooos/auto-model-router.git
+node auto-model-router/adapters/codex/install.ts
 ```
 
 Then **trust the hook once**: run `codex`, type `/hooks`, trust **"Routing..."**, and start a new session.
@@ -385,7 +385,7 @@ The classifier is a read-only `codex exec` on the `classifier` class (`gpt-6-lun
 ### Uninstall
 
 ```bash
-node prompt-router/adapters/codex/install.ts --uninstall
+node auto-model-router/adapters/codex/install.ts --uninstall
 ```
 
 Removes only the router's entry from `hooks.json`, the MCP server block from `config.toml` and the rule from `AGENTS.md` (each after a backup). Your options file stays.
@@ -409,8 +409,8 @@ For the OpenCode CLI / TUI and desktop.
 ### Install
 
 ```bash
-git clone https://github.com/Viktorooos/prompt-router.git
-node prompt-router/adapters/opencode/install.ts
+git clone https://github.com/Viktorooos/auto-model-router.git
+node auto-model-router/adapters/opencode/install.ts
 ```
 
 Restart OpenCode to load it. The installer writes:
@@ -476,7 +476,7 @@ Other providers, or a mix, work the same way. Effort names differ per provider, 
 ### Uninstall
 
 ```bash
-node prompt-router/adapters/opencode/install.ts --uninstall
+node auto-model-router/adapters/opencode/install.ts --uninstall
 ```
 
 Removes the shim (only if it is the router's) and puts back the newest file it replaced. Your options file stays.
