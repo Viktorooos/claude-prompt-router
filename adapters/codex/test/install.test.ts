@@ -131,3 +131,17 @@ test('uninstall removes the MCP server and the rule only', async () => {
   assert.equal(readFileSync(join(h, 'config.toml'), 'utf8'), 'model = "gpt-6.1-sol"\n')
   assert.equal(readFileSync(join(h, 'AGENTS.md'), 'utf8'), 'Moje pravidlo.\n')
 })
+
+test('install also registers the Stop and SubagentStop hooks for the statistics; uninstall removes them', async () => {
+  const h = tmp('pr-cxhome-')
+  const p = paths(h)
+  writeFileSync(p.hooks, JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo theirs' }] }] } }))
+  const out = await install(h, 1)
+  const j = JSON.parse(readFileSync(p.hooks, 'utf8'))
+  assert.deepEqual(j.hooks.Stop, [{ hooks: [{ type: 'command', command: 'echo theirs' }] }, { hooks: [{ type: 'command', command: command(HOOK), timeout: 10 }] }])
+  assert.deepEqual(j.hooks.SubagentStop, [{ hooks: [{ type: 'command', command: command(HOOK), timeout: 10 }] }])
+  assert.ok(out.some(l => /Installed the Stop hook/.test(l)))
+  assert.equal((await install(h, 2))[0], `Already installed in ${p.hooks}`)
+  await uninstall(h, 3)
+  assert.deepEqual(JSON.parse(readFileSync(p.hooks, 'utf8')).hooks, { Stop: [{ hooks: [{ type: 'command', command: 'echo theirs' }] }] })
+})

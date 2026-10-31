@@ -9,6 +9,9 @@
 //   - the classifier is a child `codex exec` run with PROMPT_ROUTER_INNER=1, so this hook skips it.
 //   - a hook cannot switch a running session's model or effort, so the note has the agent give the
 //     user a `/model <model> <effort>` line (and the same line goes to systemMessage).
+// The same script is the Stop / SubagentStop hook: it logs each finished turn's tokens to
+// ~/.codex/log/prompt-router-stats.jsonl (stats.ts), next to a record of every routed prompt;
+// `/router stats` shows the savings table.
 // Any failure prints nothing: the prompt goes on untouched, and the reason goes to
 // ~/.codex/log/prompt-router.log.
 //
@@ -33,6 +36,9 @@ import { fromTiers, shownOptions, tierLine } from '../shared/tiers.ts'
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
 import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
+import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
+import type { Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
+import { appendStats, classifierUsage, readStats, statsReport, turnUsage } from './stats.ts'
 import { askNote, autoNote, line, otherAutoNote, otherNote, statusNote, switchNote } from './notes.ts'
 import type { NoteCtx } from './notes.ts'
 
@@ -41,13 +47,14 @@ export const DEFAULT_MODELS: Record<Model, string> = { haiku: 'gpt-6-luna', sonn
 // The Codex classifier defaults to the light tier (gpt-6-luna): toConfig's default is sonnet.
 const CODEX_DEFAULTS = { classifier: 'light' }
 
-export type Input = { session_id?: string; transcript_path?: string | null; cwd?: string; hook_event_name?: string; model?: string; turn_id?: string; prompt?: string; permission_mode?: string }
+export type Input = { session_id?: string; transcript_path?: string | null; cwd?: string; hook_event_name?: string; model?: string; turn_id?: string; prompt?: string; permission_mode?: string; agent_id?: string; agent_transcript_path?: string | null; stop_hook_active?: boolean }
 export type Output = { hookSpecificOutput?: { hookEventName: 'UserPromptSubmit'; additionalContext: string }; systemMessage?: string }
 // Runs the classifier: the prompt in, the model's reply text out (throws on failure or timeout).
-export type Runner = (prompt: string, o: { model: string; effort: string; timeoutMs: number }) => Promise<string>
+// onUsage: what the classifier call cost in tokens, when the runner can tell (for the statistics).
+export type Runner = (prompt: string, o: { model: string; effort: string; timeoutMs: number; onUsage?: (u: Usage) => void }) => Promise<string>
 // noSubagent: the client has no spawn_agent (the ChatGPT desktop through mcp.ts), so a here prompt
 // that fits another model is not offered to a subagent.
-export type Deps = { codexHome?: string; runner?: Runner; noSubagent?: boolean }
+export type Deps = { codexHome?: string; runner?: Runner; noSubagent?: boolean; now?: number }
 
 export function codexHome() {
   return process.env.CODEX_HOME || join(process.env.HOME || homedir(), '.codex')
@@ -270,6 +277,8 @@ export const codexRunner: Runner = async (prompt, o) => {
         resolve(c)
       })
     })
+    const usage = classifierUsage(stdout)
+    if (usage) o.onUsage?.(usage)
     let answer = ''
     try {
       answer = await readFile(t.out, 'utf8')
@@ -315,6 +324,7 @@ function out(context: string, system?: string): Output {
 
 async function routerCommand(home: string, o: Options, arg: string, cur: { model: string; now: Level | '' }): Promise<string> {
   const a = arg.trim().toLowerCase()
+  if (a === 'stats') return statsReport(readStats(home), Date.now())
   if (a === 'off' || a === 'on') {
     const enabled = a === 'on'
     let raw: Record<string, unknown> = {}
@@ -371,42 +381,71 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   const hereModel = !deps.noSubagent && !!curClass
   const c: Chat = { first: all[0] ?? '', recent: all.slice(-4, -1), reply: h.reply, model, now, tokens: h.tokens, conf: o.cfg, isFirst: h.isFirst, hereModel, models: avail }
   const runner = deps.runner ?? codexRunner
-  const reply = await runner(pickPrompt(text, c), { model: classifier, effort: effortOf(classifier, 'low'), timeoutMs: o.timeoutMs })
+  let usage: Usage | null = null
+  const reply = await runner(pickPrompt(text, c), { model: classifier, effort: effortOf(classifier, 'low'), timeoutMs: o.timeoutMs, onUsage: u => (usage = u) })
+  // One stats record per routed prompt. Codex cannot switch itself: "applied" means the router's
+  // line was given without a question (auto); whether the user then switched shows in the turns.
+  const from = { model, effort: now }
+  const decide = async (where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'] = 'applied') => {
+    const d: Decision = { kind: 'decision', ts: deps.now ?? Date.now(), platform: 'codex', chat: input.session_id ?? '', where, from, to, outcome, ...(usage ? { classifier: { model: classifier, usage } } : {}) }
+    await appendStats(home, d).catch(err => log(home, 'stats', err))
+  }
+  const keep = async () => {
+    await decide('keep', from)
+    return null
+  }
   const parsed = parsePick(reply, avail)
   if (!parsed && !/"where"\s*:\s*"keep"/.test(reply)) await log(home, 'parse', 'reply could not be parsed')
   // Once per chat, so the log shows what the hook really goes by.
   if (h.isFirst) await log(home, 'effective options', `${o.source} | ${tierLine(optionsLine(shownOptions(o.raw), fromTiers(CODEX_DEFAULTS) as Record<string, string>))}`)
   let p: Pick | null = parsed && allowed(parsed, o.cfg)
   await log(home, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${h.tokens ?? '?'} tok | first ${h.isFirst} | ${clip(reply, 200)}`)
-  if (!p) return null
+  if (!p) return keep()
   // The first prompt of a chat has nothing to leave: only its model and effort count.
   if (h.isFirst) p = { ...p, where: 'here', first: { now: routerModel(o.models, model) } }
   // A prompt typed over a running turn (steer) belongs to that work.
   const midTurn = h.openTurns.some(t => t !== input.turn_id)
 
   if (p.where === 'here') {
-    if (midTurn || !model) return null
+    if (midTurn || !model) return keep()
     if (hereModel && !h.isFirst && p.model !== curClass && o.cfg.midChatModelDetection !== 'off') {
       // Mapped to the same Codex effort: Stay here just goes on.
       const effort = p.effort !== now && !(now && effortOf(model, p.effort) === effortOf(model, now))
+      await decide('subagent', { model: o.models[p.model], effort: p.effort }, o.cfg.midChatModelDetection === 'auto' ? 'applied' : 'asked')
       return out(`[${(o.cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(ctx, p, cur, effort)}]`, suggests(o, effortOf, p))
     }
-    const from = p.first?.now
-    const changeModel = !!from && p.model !== from && o.cfg.firstChatDetection !== 'off'
+    const start = p.first?.now
+    const changeModel = !!start && p.model !== start && o.cfg.firstChatDetection !== 'off'
     const changeEffort = p.effort !== now && o.cfg.effortDetection !== 'off'
-    if (!changeModel && !changeEffort) return null
+    if (!changeModel && !changeEffort) return keep()
     const slug = changeModel ? o.models[p.model] : model
     const level = changeEffort ? p.effort : (now || p.effort)
     // Mapped to the same Codex setting: nothing to switch.
-    if (slug === model && now && effortOf(slug, level) === effortOf(model, now)) return null
+    if (slug === model && now && effortOf(slug, level) === effortOf(model, now)) return keep()
     // Codex cannot be switched from here: the same line both ways, auto goes on, ask asks first.
     const asks = (changeModel && o.cfg.firstChatDetection === 'ask') || (changeEffort && o.cfg.effortDetection === 'ask')
     const sys = line(ctx, slug, level, p.why)
+    await decide('here', { model: slug, effort: level }, asks ? 'asked' : 'applied')
     if (asks) return out(`[${switchNote(ctx, p, cur, changeModel ? { from: model } : null, changeEffort ? { now } : null)}]`, sys)
     // notifications off: the agent still gives the line, but no system message comes with it.
     return out(`[${autoNote(ctx, slug, level, p)}]`, o.cfg.notifications === 'on' ? sys : undefined)
   }
+  await decide(p.where, { model: o.models[p.model], effort: p.effort }, 'asked')
   return out(`[${askNote(ctx, p, cur, midTurn)}]`, suggests(o, effortOf, p))
+}
+
+// Stop / SubagentStop: the finished turn's tokens from the rollout, for the statistics. The
+// baseline is the model the chat started on; for a subagent, the main chat's current model.
+export async function handleStop(input: Input, deps: { codexHome?: string; now?: number } = {}) {
+  const home = deps.codexHome ?? codexHome()
+  const read = async (f: string | null | undefined) => (f ? turnUsage(await readFile(f, 'utf8')) : null)
+  const sub = input.hook_event_name === 'SubagentStop' && !!input.agent_transcript_path
+  const t = await read(sub ? input.agent_transcript_path : input.transcript_path).catch(() => null)
+  if (!t?.model) return
+  const parent = sub ? await read(input.transcript_path).catch(() => null) : null
+  const baseline = sub ? parent?.model || t.baseline : t.baseline
+  const rec: Turn = { kind: 'turn', ts: deps.now ?? Date.now(), platform: 'codex', chat: input.session_id ?? '', ...(sub && input.agent_id ? { agentId: input.agent_id } : {}), model: t.model, baseline, ...(t.usage ? { usage: t.usage } : {}) }
+  await appendStats(home, rec, deps.now)
 }
 
 async function readStdin() {
@@ -421,6 +460,7 @@ export async function main() {
   const home = codexHome()
   try {
     const input = JSON.parse(await readStdin()) as Input
+    if (input.hook_event_name === 'Stop' || input.hook_event_name === 'SubagentStop') return await handleStop(input, { codexHome: home })
     if (input.hook_event_name && input.hook_event_name !== 'UserPromptSubmit') return
     const r = await handle(input, { codexHome: home })
     if (r) process.stdout.write(JSON.stringify(r))

@@ -1,6 +1,7 @@
 // Installs Prompt Router for Codex: node adapters/codex/install.ts [--uninstall]
 //
-// Adds a UserPromptSubmit command hook (`node <this dir>/hook.ts`) to $CODEX_HOME/hooks.json
+// Adds the command hook `node <this dir>/hook.ts` for UserPromptSubmit (routing) and Stop /
+// SubagentStop (turn tokens for /router stats) to $CODEX_HOME/hooks.json
 // (~/.codex by default), keeping every other hook there. Before it changes the file it keeps a copy
 // as hooks.json.bak-prompt-router-<time>. --uninstall removes only the router's entry (again after a
 // backup). It also creates $CODEX_HOME/prompt-router.json with the default options when there is none.
@@ -17,7 +18,8 @@ import { toTiers } from '../shared/tiers.ts'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const HOOK = join(HERE, 'hook.ts')
 const MCP = join(HERE, 'mcp.ts')
-const EVENT = 'UserPromptSubmit'
+// UserPromptSubmit routes; Stop and SubagentStop log each turn's tokens for /router stats.
+const EVENTS = ['UserPromptSubmit', 'Stop', 'SubagentStop'] as const
 
 export const DEFAULT_OPTIONS = {
   classifier: 'light',
@@ -107,7 +109,8 @@ export function command(hook = HOOK) {
   return `${JSON.stringify(nodeBin())} ${JSON.stringify(hook)}`
 }
 
-export function entry(hook = HOOK) {
+export function entry(hook = HOOK, event: (typeof EVENTS)[number] = 'UserPromptSubmit') {
+  if (event !== 'UserPromptSubmit') return { type: 'command', command: command(hook), timeout: 10 }
   return { type: 'command', command: command(hook), timeout: 30, statusMessage: 'Routing...' }
 }
 
@@ -140,25 +143,30 @@ export async function install(home = codexHome(), now = Date.now(), hook = HOOK)
   const out: string[] = []
   await mkdir(home, { recursive: true })
   const j = await readHooks(p.hooks)
-  const want = entry(hook)
   const hooks = (j.hooks ??= {})
-  const groups = (hooks[EVENT] ??= [])
-  const found = groups.flatMap(g => (Array.isArray(g.hooks) ? g.hooks : [])).filter(isOurs)
-  if (found.length === 1 && JSON.stringify(found[0]) === JSON.stringify(want)) out.push(`Already installed in ${p.hooks}`)
-  else {
+  const done: string[] = []
+  for (const event of EVENTS) {
+    const want = entry(hook, event)
+    const groups = (hooks[event] ??= [])
+    const found = groups.flatMap(g => (Array.isArray(g.hooks) ? g.hooks : [])).filter(isOurs)
+    if (found.length === 1 && JSON.stringify(found[0]) === JSON.stringify(want)) continue
     // Drop old copies (another path, other settings), then add the current one at the end, so the
     // other hooks keep their place (Codex binds trust to each hook's position and command).
     for (const g of groups) if (Array.isArray(g.hooks)) g.hooks = g.hooks.filter(h => !isOurs(h))
-    hooks[EVENT] = [...groups.filter(g => !Array.isArray(g.hooks) || g.hooks.length), { hooks: [want] }]
+    hooks[event] = [...groups.filter(g => !Array.isArray(g.hooks) || g.hooks.length), { hooks: [want] }]
+    done.push(`${found.length ? 'Updated' : 'Installed'} the ${event} hook in ${p.hooks}: ${want.command}`)
+  }
+  if (!done.length) out.push(`Already installed in ${p.hooks}`)
+  else {
     await save(p.hooks, j, now, out)
-    out.push(`${found.length ? 'Updated' : 'Installed'} the ${EVENT} hook in ${p.hooks}: ${want.command}`)
+    out.push(...done)
   }
   if (!existsSync(p.options)) {
     await writeFile(p.options, `${JSON.stringify(DEFAULT_OPTIONS, null, 2)}\n`)
     out.push(`Options: ${p.options} (defaults written)`)
   } else out.push(`Options: ${p.options} (kept)`)
   out.push(...(await installDesktop(home, now)))
-  out.push('Codex runs the hook only once you trust it: start codex, type /hooks and trust "Routing..." (again after every change of the hook command). Then start a new session.')
+  out.push('Codex runs the hook only once you trust it: start codex, type /hooks and trust the Prompt Router hooks ("Routing..." and the two stop hooks; again after every change of the hook command). Then start a new session.')
   return out
 }
 
@@ -166,16 +174,18 @@ export async function uninstall(home = codexHome(), now = Date.now()) {
   const p = paths(home)
   const out: string[] = []
   const j = await readHooks(p.hooks)
-  const groups = j.hooks?.[EVENT] ?? []
-  const n = groups.flatMap(g => (Array.isArray(g.hooks) ? g.hooks : [])).filter(isOurs).length
-  if (!n) out.push(`Not installed: no Prompt Router hook in ${p.hooks}`)
-  else {
+  let n = 0
+  for (const event of EVENTS) {
+    const groups = j.hooks?.[event]
+    if (!groups) continue
+    n += groups.flatMap(g => (Array.isArray(g.hooks) ? g.hooks : [])).filter(isOurs).length
     for (const g of groups) if (Array.isArray(g.hooks)) g.hooks = g.hooks.filter(h => !isOurs(h))
     const left = groups.filter(g => !Array.isArray(g.hooks) || g.hooks.length)
-    if (j.hooks) {
-      if (left.length) j.hooks[EVENT] = left
-      else delete j.hooks[EVENT]
-    }
+    if (left.length) j.hooks![event] = left
+    else delete j.hooks![event]
+  }
+  if (!n) out.push(`Not installed: no Prompt Router hook in ${p.hooks}`)
+  else {
     await save(p.hooks, j, now, out)
     out.push(`Removed the Prompt Router hook from ${p.hooks}`)
   }
