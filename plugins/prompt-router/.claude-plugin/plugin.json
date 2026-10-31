@@ -72,6 +72,13 @@
       "description": "on: a toast after the router changes the model or effort by itself, and a label in the footer. off: neither; the changes still happen.",
       "default": "on",
       "options": ["on", "off"]
+    },
+    "stats": {
+      "type": "string",
+      "title": "Savings stats",
+      "description": "on: notes each routing decision and each turn's token use in ~/.claude/mods-logs/prompt-router-stats.jsonl (local only), shows the estimated saving in the footer and in /router stats. off: nothing is noted.",
+      "default": "on",
+      "options": ["on", "off"]
     }
   }
 }

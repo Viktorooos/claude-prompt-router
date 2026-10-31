@@ -26,6 +26,7 @@ export const SWITCHES = {
   subagentSuggestions: ['ask', 'off'],
   sessionSuggestions: ['ask', 'off'],
   notifications: ['on', 'off'],
+  stats: ['on', 'off'],
 } as const
 
 export type Switch = keyof typeof SWITCHES

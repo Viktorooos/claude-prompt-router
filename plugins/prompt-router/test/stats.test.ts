@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { byDay, parseLog, summarize } from '../core/stats.ts'
-import type { Decision, Turn } from '../core/stats.ts'
+import { byDay, parseLog, rotate, savingLabel, statsText, summarize } from '../core/stats.ts'
+import type { Accept, Decision, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
 function close(a: number | null, b: number) {
@@ -137,4 +137,41 @@ test('parseLog keeps the good lines and skips the broken ones', () => {
   const d = decision()
   const out = parseLog(`${JSON.stringify(t)}\nnot json\n{"kind":"other"}\n\n${JSON.stringify(d)}\n`)
   expect(out).toEqual([t, d])
+})
+
+test('an asked decision the user then took counts as applied, once', () => {
+  const asked = decision({ ts: NOW - 2 * HOUR, where: 'subagent', to: { model: 'haiku', effort: 'low' }, outcome: 'asked' })
+  const accept: Accept = { kind: 'accept', ts: NOW - HOUR, platform: 'claude-code', chat: 'c1', decision: asked.ts }
+  const other: Accept = { kind: 'accept', ts: NOW - HOUR, platform: 'claude-code', chat: 'c2', decision: asked.ts }
+  const s = summarize([asked, accept, accept, other], NOW).today
+  expect(s.prompts).toBe(1)
+  expect(s.asked).toBe(1)
+  expect(s.subagents).toBe(1)
+})
+
+test('rotate drops lines older than 90 days and the oldest lines over the size cap', () => {
+  const old = JSON.stringify(turn('haiku', 'opus', { ts: NOW - 91 * DAY }))
+  const a = JSON.stringify(turn('haiku', 'opus', { ts: NOW - 2 * DAY }))
+  const b = JSON.stringify(turn('haiku', 'opus', { ts: NOW - DAY }))
+  expect(rotate(`${old}\n${a}\nbroken\n${b}\n`, NOW)).toBe(`${a}\n${b}\n`)
+  expect(rotate(`${a}\n${b}\n`, NOW, b.length + 5)).toBe(`${b}\n`)
+  expect(rotate('', NOW)).toBe('')
+})
+
+test('statsText shows the three periods, the net saving and the extra cost apart', () => {
+  const t = statsText(summarize([turn('haiku', 'opus'), turn('opus', 'sonnet'), decision({ classifier: { model: 'haiku', usage: U, usd: 0.001 } })], NOW))
+  expect(t).toMatch(/Today\s+7 days\s+Total/)
+  expect(t).toMatch(/Net saving/)
+  expect(t).toMatch(/Classifier/)
+  expect(t).toMatch(/Extra cost \(stronger model\)/)
+  expect(t).toMatch(/estimate/i)
+  expect(t).toMatch(/Effort lower \/ higher/)
+})
+
+test('savingLabel is short, empty when there is nothing to show', () => {
+  expect(savingLabel(summarize([], NOW).today)).toBe('')
+  const s = summarize([turn('haiku', 'opus', { usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } })], NOW).today
+  expect(savingLabel(s)).toBe(`saved $${s.netUsd.toFixed(2)} today`)
+  const loss = summarize([decision({ classifier: { model: 'opus', usage: U, usd: 0.05 } })], NOW).today
+  expect(savingLabel(loss)).toBe('router cost $0.05 today')
 })

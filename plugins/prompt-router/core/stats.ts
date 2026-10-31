@@ -37,7 +37,10 @@ export type Turn = {
   usd?: number
 }
 
-export type Entry = Decision | Turn
+// The user took an asked decision (switched, or ran the suggested subagent). `decision` is its `ts`.
+export type Accept = { kind: 'accept'; ts: number; platform: string; chat: string; decision: number }
+
+export type Entry = Decision | Turn | Accept
 
 export type Summary = {
   prompts: number
@@ -80,11 +83,11 @@ function empty(): Summary {
   }
 }
 
-function addDecision(s: Summary, d: Decision) {
+function addDecision(s: Summary, d: Decision, taken: boolean) {
   s.prompts++
   if (d.outcome === 'asked') s.asked++
   if (d.outcome === 'declined') s.declined++
-  if (d.outcome !== 'applied') return
+  if (d.outcome !== 'applied' && !(d.outcome === 'asked' && taken)) return
   if (d.where === 'subagent') s.subagents++
   if (d.where === 'session') s.sessions++
   if (d.where !== 'here') return
@@ -137,10 +140,16 @@ function finish(s: Summary): Summary {
   return s
 }
 
-function add(s: Summary, r: Entry) {
+const takenKey = (chat: string, ts: number) => `${chat}\n${ts}`
+
+function takenSet(records: readonly Entry[]) {
+  return new Set(records.filter((r): r is Accept => r.kind === 'accept').map(r => takenKey(r.chat, r.decision)))
+}
+
+function add(s: Summary, r: Entry, taken: Set<string>) {
   if (r.kind === 'turn') addTurn(s, r)
-  else {
-    addDecision(s, r)
+  else if (r.kind === 'decision') {
+    addDecision(s, r, taken.has(takenKey(r.chat, r.ts)))
     s.classifierUsd += classifierUsd(r)
   }
 }
@@ -161,10 +170,11 @@ export function summarize(records: readonly Entry[], now: number): Report {
   const week = empty()
   const total = empty()
   const dayStart = startOfDay(now)
+  const taken = takenSet(records)
   for (const r of records) {
-    add(total, r)
-    if (r.ts >= now - 7 * DAY) add(week, r)
-    if (r.ts >= dayStart) add(today, r)
+    add(total, r, taken)
+    if (r.ts >= now - 7 * DAY) add(week, r, taken)
+    if (r.ts >= dayStart) add(today, r, taken)
   }
   return { today: finish(today), week: finish(week), total: finish(total) }
 }
@@ -174,9 +184,10 @@ export function byDay(records: readonly Entry[], now: number, days: number): ({ 
   const keys: string[] = []
   for (let i = days - 1; i >= 0; i--) keys.push(dayKey(startOfDay(now) - i * DAY + 12 * 3_600_000))
   const map = new Map(keys.map(k => [k, empty()]))
+  const taken = takenSet(records)
   for (const r of records) {
     const s = map.get(dayKey(r.ts))
-    if (s) add(s, r)
+    if (s) add(s, r, taken)
   }
   return keys.map(day => ({ day, ...finish(map.get(day)!) }))
 }
@@ -188,8 +199,62 @@ export function parseLog(text: string): Entry[] {
     if (!line.trim()) continue
     try {
       const r = JSON.parse(line)
-      if (r && (r.kind === 'turn' || r.kind === 'decision') && typeof r.ts === 'number') out.push(r)
+      if (r && (r.kind === 'turn' || r.kind === 'decision' || r.kind === 'accept') && typeof r.ts === 'number') out.push(r)
     } catch {}
   }
   return out
+}
+
+export const KEEP_DAYS = 90
+export const MAX_BYTES = 5_000_000
+
+// The log trimmed for writing: no lines older than KEEP_DAYS, none broken, the oldest dropped over maxBytes.
+export function rotate(text: string, now: number, maxBytes = MAX_BYTES): string {
+  const lines = text.split('\n').filter(l => {
+    try {
+      const ts = JSON.parse(l)?.ts
+      return typeof ts === 'number' && ts >= now - KEEP_DAYS * DAY
+    } catch {
+      return false
+    }
+  })
+  let size = lines.reduce((n, l) => n + l.length + 1, 0)
+  while (lines.length && size > maxBytes) size -= lines.shift()!.length + 1
+  return lines.length ? `${lines.join('\n')}\n` : ''
+}
+
+export const usd = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`
+
+// A plain text table of the three periods (for /router stats and the Codex and OpenCode adapters).
+export function statsText(r: Report): string {
+  const cols = [r.today, r.week, r.total]
+  const rows: [string, (s: Summary) => string][] = [
+    ['Prompts routed', s => String(s.prompts)],
+    ['Model changes', s => String(s.modelChanges)],
+    ['Effort lower / higher', s => `${s.effortDown} / ${s.effortUp}`],
+    ['Subagents', s => String(s.subagents)],
+    ['New sessions', s => String(s.sessions)],
+    ['Asked / declined', s => `${s.asked} / ${s.declined}`],
+    ['Cost', s => usd(s.actualUsd)],
+    ['Cost without router', s => usd(s.withoutUsd)],
+    ['Saved (cheaper model)', s => usd(s.savedUsd)],
+    ['Classifier', s => usd(-s.classifierUsd)],
+    ['Net saving', s => `${usd(s.netUsd)} (${Math.round(s.netPct)} %)`],
+    ['Extra cost (stronger model)', s => usd(s.extraUsd)],
+    ['Turns unknown / unpriced', s => `${s.unknownTurns} / ${s.unpricedTurns}`],
+  ]
+  const w = Math.max(...rows.map(([n]) => n.length)) + 2
+  const cell = (t: string) => t.padEnd(16)
+  return [
+    `${''.padEnd(w)}${cell('Today')}${cell('7 days')}Total`,
+    ...rows.map(([n, f]) => `${n.padEnd(w)}${cols.map((s, i) => (i < 2 ? cell(f(s)) : f(s))).join('')}`),
+    '',
+    'An estimate: tokens × list prices in core/prices.ts. The saving compares each turn with the model it would have run on without the router; the classifier is taken off; a stronger model is extra cost, not in the net; effort changes are counts only.',
+  ].join('\n')
+}
+
+// The footer's short line for a day: the net saving, or what the router cost; '' with nothing to show.
+export function savingLabel(s: Summary): string {
+  if (Math.abs(s.netUsd) < 0.005) return ''
+  return s.netUsd > 0 ? `saved ${usd(s.netUsd)} today` : `router cost ${usd(-s.netUsd)} today`
 }

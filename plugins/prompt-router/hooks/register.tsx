@@ -3,6 +3,10 @@ import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMe
 import type { Level } from '../types'
 import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, clip, describeOptions, knownModel, norm, optionsLine, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Model, Pick, Switch, Where } from '../core/router.ts'
+import { usageOf } from '../core/prices.ts'
+import type { Usage } from '../core/prices.ts'
+import { parseLog, rotate, savingLabel, statsText, summarize } from '../core/stats.ts'
+import type { Decision, Entry } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -31,6 +35,17 @@ let lastEffort = ''
 // The model the mod puts on main-chat requests when the model setting could not be changed,
 // and the model the engine named when it took over.
 let modelHold: { model: Model; base: string } | null = null
+// Stats: records not written yet, this chat's id, the model the chat would run on without the router
+// and the one the router put on the model setting, the last classifier call's tokens, the last
+// decision that asked the user, the router's subagents (their baseline), and today's footer line.
+let pending: Entry[] = []
+let chatId = ''
+let baseline = ''
+let routed = ''
+let lastClassifier: { model: string; usage: Usage } | null = null
+let lastAsked: { ts: number; where: Where; model: Model } | null = null
+const routedAgents = new Map<string, string>()
+let todayLabel = ''
 
 async function log($: EngineInterface, what: string, err: unknown) {
   try {
@@ -95,6 +110,8 @@ function isModelRow(r: ConfigRow) {
 // Switches the chat's model setting; when no setting takes it, the mod names the model on every
 // main-chat request until the person picks another one.
 async function applyModel($: EngineInterface, model: Model) {
+  if (!routed) baseline = seenModel || (await chatModel($)) || baseline
+  routed = MODELS[model]
   try {
     const row = (await $.config.list()).find(isModelRow)
     const opts = row?.options ?? []
@@ -199,6 +216,8 @@ async function availableModels($: EngineInterface, model: string): Promise<Model
   return [...BASE_MODELS]
 }
 
+let pickedFrom = ''
+
 async function pick($: EngineInterface, text: string, now: Level | ''): Promise<Pick | null> {
   const messages = await $.session.messages()
   let tokens: number | undefined
@@ -211,6 +230,10 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
   const models = await availableModels($, model)
   const r = await classify($, text, chatOf(messages, now, tokens, model, models))
   if (!r.isAnswered) throw new Error(`pick failed: ${r.reason}`)
+  const used = usageOf(r.usage)
+  lastClassifier = used ? { model: MODELS[cfg.classifier], usage: used } : null
+  pickedFrom = knownModel(model) || model
+  if (!baseline) baseline = model
   const parsed = parsePick(r.text, models)
   if (!parsed && !/"where"\s*:\s*"keep"/.test(r.text)) await log($, 'parse', 'reply could not be parsed')
   const p = parsed && allowed(parsed, cfg)
@@ -302,6 +325,55 @@ function switchNote(p: Pick, model: { from: Model } | null, effort: { now: Level
   return `Prompt Router suggests ${parts.join(' and ')} for this prompt${p.why ? `, because: ${p.why}` : ''}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Switch?" with the reason in one sentence) with the options "Switch (${label})", "Keep as is", the recommended one first. Write the question and options in ${userLang(cfg)}. On Switch, ${how}, then handle the prompt; on Keep as is, handle the prompt normally.`
 }
 
+const statsPath = () => `${home}/.claude/mods-logs/prompt-router-stats.jsonl`
+
+// Notes one routing decision (with what the classifier cost); returns its time stamp.
+async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '') {
+  const ts = await $.clock.now()
+  if (cfg.stats === 'on') {
+    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, outcome, ...(lastClassifier ? { classifier: lastClassifier } : {}) })
+  }
+  lastClassifier = null
+  return ts
+}
+
+async function noteAsked($: EngineInterface, where: Where, p: Pick, now: Level | '') {
+  lastAsked = { ts: await noteDecision($, where, { model: p.model, effort: p.effort }, 'asked', now), where, model: p.model }
+}
+
+async function noteAccept($: EngineInterface) {
+  if (!lastAsked) return
+  if (cfg.stats === 'on') pending.push({ kind: 'accept', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, decision: lastAsked.ts })
+  lastAsked = null
+}
+
+async function readStats($: EngineInterface) {
+  try {
+    return String(await $.fs.read(statsPath()))
+  } catch {
+    return ''
+  }
+}
+
+// Writes the pending records (the log trimmed to 90 days / 5 MB) and refreshes the footer line.
+async function flush($: EngineInterface) {
+  if (cfg.stats !== 'on' || !pending.length) return
+  const add = pending.map(r => `${JSON.stringify(r)}\n`).join('')
+  pending = []
+  try {
+    const now = await $.clock.now()
+    const text = rotate((await readStats($)) + add, now)
+    await $.fs.write(statsPath(), text)
+    const label = savingLabel(summarize(parseLog(text), now).today)
+    if (label !== todayLabel) {
+      todayLabel = label
+      redraw($)
+    }
+  } catch (err) {
+    await log($, 'stats', err)
+  }
+}
+
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
 async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!enabled || e.command || e.isMeta) return e
@@ -309,6 +381,8 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   const text = typed(e.text)
   if (!text || text.startsWith('/')) return e
   turnLevel = null
+  lastAsked = null
+  lastClassifier = null
   const now = await currentLevel($)
   let p: Pick | null = null
   try {
@@ -323,11 +397,18 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
       // Nothing to clear.
     }
   }
-  if (!p) return e
+  if (!p) {
+    if (lastClassifier) await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now)
+    return e
+  }
 
   if (p.where === 'here') {
     // A prompt typed over a running turn belongs to that work: its model and effort stay.
-    if (e.turnId) return e
+    if (e.turnId) {
+      await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now)
+      return e
+    }
+    if (p.other) await noteAsked($, 'subagent', p, now)
     if (p.other) return { ...e, text: `${e.text}\n\n[${(cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(p, p.other.now, now)}]` }
     const changes: string[] = []
     let askModel: { from: Model } | null = null
@@ -355,8 +436,12 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
         // The footer label still shows it.
       }
     }
+    const changed = { model: askModel || !changes.some(c => c.startsWith('Model')) ? pickedFrom : p.model, effort: askEffort || !changes.some(c => c.startsWith('Effort')) ? now : p.effort }
+    if (askModel || askEffort) await noteAsked($, 'here', p, now)
+    else await noteDecision($, 'here', changed, 'applied', now)
     return askModel || askEffort ? { ...e, text: `${e.text}\n\n[${switchNote(p, askModel, askEffort)}]` } : e
   }
+  await noteAsked($, p.where, p, now)
   // A mod's own dialog does not open at prompt time in the app, so Claude asks with the same options.
   // `context` does not reach the model for prompts from the app, so the note rides on the text.
   const inApp = p.where === 'session' ? await canStartSession($) : true
@@ -398,8 +483,20 @@ export const register: Register = (on, options) => {
   cfg = toConfig(given)
   on('session.start', async ($, e, next) => {
     home = $.plugin.root.split('/.claude/')[0] ?? ''
+    chatId = `${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
+    pending = []
+    baseline = ''
+    routed = ''
+    lastAsked = null
+    lastClassifier = null
+    routedAgents.clear()
+    try {
+      todayLabel = savingLabel(summarize(parseLog(await readStats($)), await $.clock.now()).today)
+    } catch {
+      todayLabel = ''
+    }
     await loadOptions($)
-    await $.command.register({ name: 'router', description: 'Prompt Router: status, or off / on', argumentHint: '[off|on]' })
+    await $.command.register({ name: 'router', description: 'Prompt Router: status, off / on, or stats', argumentHint: '[off|on|stats]' })
     await $.tool.register({
       name: 'test',
       description: 'Test the Prompt Router classifier: runs each case through the same model call as a live prompt and returns one line per case (id, where, model, effort, why).',
@@ -473,6 +570,11 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined || typeof e.effort !== 'string') return yield* next(e)
     lastEffort = e.effort
+    // Without the router the chat runs on the person's own pick; a model the router set keeps the old one.
+    if (!modelHold && !(routed && knownModel(e.model) === knownModel(routed))) {
+      routed = ''
+      baseline = e.model
+    }
     // The person picked another model: the mod lets go of the one it held.
     if (modelHold && !modelHold.base) modelHold = { ...modelHold, base: e.model }
     if (modelHold && e.model !== modelHold.base) {
@@ -498,6 +600,37 @@ export const register: Register = (on, options) => {
     return yield* next({ ...step, effort: want })
   })
 
+  // A subagent on the model the router offered: the user took the offer, and its turns are priced
+  // against the main chat's model. Other subagents count at their own price.
+  on('agent.spawn', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      if (enabled && lastAsked?.where === 'subagent' && 'model' in r && knownModel(r.model) === lastAsked.model) {
+        if (r.agentId) routedAgents.set(r.agentId, baseline || seenModel)
+        await noteAccept($)
+      }
+    } catch (err) {
+      await log($, 'stats', err)
+    }
+    return r
+  })
+
+  // Each finished turn (main chat or subagent): its tokens and the model it would have run on.
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if (!enabled || cfg.stats !== 'on') return r
+    try {
+      const usage = usageOf(r.usage)
+      const model = r.usage?.model ?? (e.agentId ? '' : seenModel)
+      const base = e.agentId ? (routedAgents.get(e.agentId) ?? model) : baseline || model
+      pending.push({ kind: 'turn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, ...(e.agentId ? { agentId: e.agentId } : {}), model, baseline: base, ...(usage ? { usage } : {}) })
+      await flush($)
+    } catch (err) {
+      await log($, 'stats', err)
+    }
+    return r
+  })
+
   on('tool.call', { tool: SWITCH_TOOL }, async ($, e) => {
     const input = e as unknown as { model?: string; effort?: string }
     const known = knownModel(input.model)
@@ -505,6 +638,7 @@ export const register: Register = (on, options) => {
     const level = asLevel(input.effort)
     if (model) await applyModel($, model)
     if (level) await applyLevel($, level)
+    if (model || level) await noteAccept($)
     const done = [model ? `model ${MODEL_NAMES[model]}` : '', level ? `effort ${NAMES[level]}` : ''].filter(Boolean)
     const skipped = [
       input.model && !model ? `model ${JSON.stringify(input.model)} (not offered in this chat)` : '',
@@ -557,6 +691,11 @@ export const register: Register = (on, options) => {
       }
       return { text: enabled ? 'Prompt Router is on.' : 'Prompt Router is off. Turn it back on with /router on.' }
     }
+    if (arg === 'stats') {
+      if (cfg.stats !== 'on') return { text: 'Prompt Router stats are off (option stats). Turn them on with "stats": "on".' }
+      await flush($)
+      return { text: statsText(summarize(parseLog(await readStats($)), await $.clock.now())) }
+    }
     const now = await currentLevel($)
     const { value } = await $.state.get(OVERRIDE)
     return {
@@ -566,7 +705,7 @@ export const register: Register = (on, options) => {
         'Options (value and where it came from):',
         ...describeOptions(opts).map(l => `  ${l}`),
         cfgNote,
-        'Commands: /router off, /router on.',
+        'Commands: /router off, /router on, /router stats.',
       ].filter(Boolean).join('\n'),
     }
   })
@@ -576,8 +715,9 @@ export const register: Register = (on, options) => {
     if (!enabled || cfg.notifications === 'off') return next(e)
     const { value } = await $.state.get(OVERRIDE)
     const { value: model } = await $.state.get(MODEL_HOLD)
-    if (!value && !model) return next(e)
-    const label = [model ? MODEL_NAMES[model] : '', value ? `Effort ${SHORT[value]}` : ''].filter(Boolean).join(' · ')
+    const saving = cfg.stats === 'on' ? todayLabel : ''
+    if (!value && !model && !saving) return next(e)
+    const label = [model ? MODEL_NAMES[model] : '', value ? `Effort ${SHORT[value]}` : '', saving].filter(Boolean).join(' · ')
     if (e.surface === 'desktop' || e.surface === 'vscode') {
       const { Text } = $.ui.resolve(e)
       return <Text color={ACCENT}>{label}</Text>

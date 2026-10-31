@@ -23,7 +23,7 @@ const EFFORT_ROW = {
 type Seen = { prompts: string[]; models: string[]; sent: string[]; sets: unknown[]; toasts: string[]; store: Map<string, unknown>; writes: string[]; modes: string[][] }
 
 // Stands for the engine beneath the plugin: each `$` call it makes is answered here.
-function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[]; noEffortRow?: boolean } = {}): Seen {
+function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[]; noEffortRow?: boolean; now?: number } = {}): Seen {
   const seen: Seen = { prompts: [], models: [], sent: [], sets: [], toasts: [], store: new Map(), writes: [], modes: [] }
   const messages = opts.messages ?? (opts.isFirst
     ? []
@@ -73,7 +73,7 @@ function engine(on: any, reply: string | (() => string), opts: { isFirst?: boole
     seen.modes.push(e.props?.modes ?? [])
     return { type: 'Text', props: {} }
   })
-  on('clock.now', () => ({ value: 0 }))
+  on('clock.now', () => ({ value: opts.now ?? 0 }))
   on('prompt.submit', (_: unknown, e: any) => {
     seen.sent.push(e.text)
     return { text: e.text }
@@ -301,7 +301,7 @@ test('/router off, on and status', async ($: any, on: any) => {
   expect(seen.prompts).toEqual([])
   const status = await $.command.run({ command: 'router', args: '' })
   expect(status.text).toMatch(/^Prompt Router is off \(classifier sonnet, effort mode ask, model mode ask\)\./)
-  expect(status.text).toMatch(/Commands: \/router off, \/router on\./)
+  expect(status.text).toMatch(/Commands: \/router off, \/router on, \/router stats\./)
   const back = await $.command.run({ command: 'router', args: 'on' })
   expect(back.text).toBe('Prompt Router is on.')
   await submit($, 'run the tests')
@@ -920,4 +920,90 @@ test('the session start logs the effective options once', saved({ effortDetectio
   expect(logs.length).toBe(1)
   expect(logs[0]).toMatch(/effortDetection=off/)
   expect(logs[0]).toMatch(/notifications=on/)
+})
+
+// Stats: the records the mod writes to prompt-router-stats.jsonl.
+function statsLines(seen: Seen) {
+  return seen.writes
+    .map(w => JSON.parse(w) as { path: string; text: string })
+    .filter(w => w.path.endsWith('prompt-router-stats.jsonl'))
+    .flatMap(w => w.text.split('\n').filter(Boolean).map(l => JSON.parse(l)))
+}
+
+const TURN_DONE = { answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' }
+
+test('stats: a routed first prompt and its turn are noted, priced against the model the chat began on', { options: { firstChatDetection: 'auto', effortDetection: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "low", "why": "quick"}', { isFirst: true })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 1000, output_tokens: 2000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-5-5' } }))
+  await start($)
+  await submit($, 'what does this regex match')
+  await $.turn.complete(TURN_DONE)
+  const [d, t] = statsLines(seen)
+  expect(d).toMatchObject({ kind: 'decision', platform: 'claude-code', where: 'here', from: { model: 'opus', effort: 'medium' }, to: { model: 'haiku', effort: 'low' }, outcome: 'applied' })
+  expect(d.classifier).toEqual({ model: 'claude-sonnet-5-5', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } })
+  expect(t).toMatchObject({ kind: 'turn', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 1000, output: 2000, cacheRead: 0, cacheWrite: 0 } })
+  expect(t.chat).toBe(d.chat)
+  await $.ui.render({ component: 'SessionMode', surface: 'terminal', props: { modes: [] } })
+  expect(seen.modes.at(-1)).toEqual(['Haiku · saved $0.04 today'])
+})
+
+test('stats: a subagent the user took is an accepted offer, priced against the main chat model', async ($: any, on: any) => {
+  const seen = engine(on, PICK.subagent)
+  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }))
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-5-5' } }))
+  await start($)
+  await submit($, 'run the whole test suite and tell me what fails')
+  await $.agent.spawn({ tool_use_id: 'x', prompt: 'run tests', description: 'tests', subagentType: 'general-purpose', provider: { kind: 'builtin' } })
+  await $.turn.complete({ ...TURN_DONE, agentId: 'a1' })
+  const [d, a, t] = statsLines(seen)
+  expect(d).toMatchObject({ kind: 'decision', where: 'subagent', outcome: 'asked', to: { model: 'haiku', effort: 'low' } })
+  expect(a).toMatchObject({ kind: 'accept', decision: d.ts, chat: d.chat })
+  expect(t).toMatchObject({ kind: 'turn', agentId: 'a1', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5' })
+})
+
+test('stats: a subagent the router did not offer counts at its own price', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same)
+  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a2' }))
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-haiku-5-5' } }))
+  await start($)
+  await submit($, 'and the mobile search too')
+  await $.agent.spawn({ tool_use_id: 'x', prompt: 'p', description: 'd', subagentType: 'general-purpose', provider: { kind: 'builtin' } })
+  await $.turn.complete({ ...TURN_DONE, agentId: 'a2' })
+  const lines = statsLines(seen)
+  expect(lines.some(l => l.kind === 'accept')).toBe(false)
+  expect(lines.find(l => l.kind === 'turn')).toMatchObject({ model: 'claude-haiku-5-5', baseline: 'claude-haiku-5-5' })
+})
+
+test('stats: a cut-off turn is noted without usage', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same)
+  on('turn.complete', () => ({ text: '' }))
+  await start($)
+  await $.turn.complete({ ...TURN_DONE, isAborted: true, reason: 'aborted' })
+  const t = statsLines(seen).find(l => l.kind === 'turn')
+  expect(t.usage).toBe(undefined)
+})
+
+test('/router stats shows the table from the log', async ($: any, on: any) => {
+  const now = Date.now()
+  const log = [
+    { kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } },
+    { kind: 'decision', ts: now, platform: 'claude-code', chat: 'c', where: 'here', from: { model: 'opus', effort: 'medium' }, to: { model: 'haiku', effort: 'low' }, outcome: 'applied' },
+  ].map(r => JSON.stringify(r)).join('\n')
+  engine(on, PICK.same, { now, files: { '*/prompt-router-stats.jsonl': `${log}\n` } })
+  await start($)
+  const r = await $.command.run({ command: 'router', args: 'stats' })
+  expect(r.text).toMatch(/Today\s+7 days\s+Total/)
+  expect(r.text).toMatch(/Net saving\s+\$19\.50 \(98 %\)/)
+  expect(r.text).toMatch(/Effort lower \/ higher\s+1 \/ 0/)
+})
+
+test('stats off: nothing is noted and /router stats says so', { options: { stats: 'off' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-opus-5-5' } }))
+  await start($)
+  await submit($, 'fix that too')
+  await $.turn.complete(TURN_DONE)
+  expect(statsLines(seen)).toEqual([])
+  const r = await $.command.run({ command: 'router', args: 'stats' })
+  expect(r.text).toMatch(/stats are off/)
 })
