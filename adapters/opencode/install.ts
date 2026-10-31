@@ -16,7 +16,7 @@ const MARK = '// prompt-router shim'
 const HERE = dirname(fileURLToPath(import.meta.url))
 
 export const DEFAULT_OPTIONS = {
-  classifier: 'sonnet',
+  classifier: 'standard',
   effortDetection: 'ask',
   firstChatDetection: 'ask',
   midChatModelDetection: 'ask',
@@ -26,7 +26,7 @@ export const DEFAULT_OPTIONS = {
   project: '',
   rules: '',
   language: 'auto',
-  models: { haiku: 'anthropic/claude-haiku-5-5', sonnet: 'anthropic/claude-sonnet-5-5', opus: 'anthropic/claude-opus-5-5', fable: 'anthropic/claude-fable-5-1' },
+  models: { light: 'anthropic/claude-haiku-5-5', standard: 'anthropic/claude-sonnet-5-5', strong: 'anthropic/claude-opus-5-5', top: 'anthropic/claude-fable-5-1' },
   variants: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
 }
 

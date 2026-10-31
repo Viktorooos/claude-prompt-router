@@ -360,7 +360,7 @@ test('/router prints every option with its value and where it came from', async 
   const { system } = await send('/router', { options: { effortMode: 'auto', notifications: 'off' } })
   assert.match(system, /effortDetection: auto \(old key effortMode; rename it to effortDetection\)/)
   assert.match(system, /notifications: off \(set\)/)
-  assert.match(system, /classifier: haiku \(default\)/)
+  assert.match(system, /classifier: light \(default\)/)
   for (const k of ['project', 'rules', 'language', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions']) assert.match(system, new RegExp(`${k}: .*\\(default\\)`))
 })
 

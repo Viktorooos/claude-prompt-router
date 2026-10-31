@@ -15,7 +15,8 @@
 // Options: ~/.codex/prompt-router.json (install.ts writes the defaults), read like the mod's toConfig
 // (project, rules, language, classifier, effortDetection, firstChatDetection, midChatModelDetection,
 // subagentSuggestions, sessionSuggestions, notifications; the 0.7 effortMode and modelMode still count) plus:
-//   "models": { "haiku": "gpt-6-luna", "sonnet": "gpt-6.1-terra", "opus": "gpt-6.1-sol", "fable": "gpt-6-astra" },
+//   "models": { "light": "gpt-6-luna", "standard": "gpt-6.1-terra", "strong": "gpt-6.1-sol", "top": "gpt-6-astra" },
+//                                                    the model of each tier (old keys haiku…fable still work)
 //   "efforts": { "low": "low", ... "max": "max" }   the Codex effort for each router level
 //   "enabled": true                                  /router off|on writes it
 //   "timeoutMs": 20000                               the classifier's time limit
@@ -27,6 +28,8 @@ import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { fromTiers, shownOptions, tierLine } from '../shared/tiers.ts'
+
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
 import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
@@ -35,8 +38,8 @@ import type { NoteCtx } from './notes.ts'
 
 export const DEFAULT_MODELS: Record<Model, string> = { haiku: 'gpt-6-luna', sonnet: 'gpt-6.1-terra', opus: 'gpt-6.1-sol', fable: 'gpt-6-astra' }
 
-// The Codex classifier defaults to the haiku class (gpt-6-luna): the shared default is sonnet.
-const CODEX_DEFAULTS = { classifier: 'haiku' }
+// The Codex classifier defaults to the light tier (gpt-6-luna): toConfig's default is sonnet.
+const CODEX_DEFAULTS = { classifier: 'light' }
 
 export type Input = { session_id?: string; transcript_path?: string | null; cwd?: string; hook_event_name?: string; model?: string; turn_id?: string; prompt?: string; permission_mode?: string }
 export type Output = { hookSpecificOutput?: { hookEventName: 'UserPromptSubmit'; additionalContext: string }; systemMessage?: string }
@@ -88,12 +91,14 @@ export async function loadOptions(home: string): Promise<Options> {
   } catch {
     // The defaults.
   }
-  const cfg = toConfig({ ...CODEX_DEFAULTS, ...raw })
+  // `raw` stays as written (/router off|on writes it back); the parsing reads tier keys.
+  const given = fromTiers({ ...CODEX_DEFAULTS, ...raw })
+  const cfg = toConfig(given)
   return {
     raw,
     source,
     cfg,
-    models: strMap(ALL_MODELS, raw.models, DEFAULT_MODELS),
+    models: strMap(ALL_MODELS, given.models, DEFAULT_MODELS),
     efforts: strMap(LEVELS, raw.efforts, Object.fromEntries(LEVELS.map(l => [l, l])) as Record<Level, string>),
     enabled: raw.enabled !== false,
     timeoutMs: typeof raw.timeoutMs === 'number' && raw.timeoutMs > 0 ? raw.timeoutMs : 20_000,
@@ -326,7 +331,7 @@ async function routerCommand(home: string, o: Options, arg: string, cur: { model
     `Prompt Router is ${o.enabled ? 'on' : 'off'} (classifier ${o.models[o.cfg.classifier]}, effort mode ${o.cfg.effortDetection}, model mode ${o.cfg.firstChatDetection}).`,
     `This chat runs on ${cur.model || 'an unknown model'}, effort ${cur.now ? NAMES[cur.now] : 'unknown'}.`,
     `Options: ${o.source}.`,
-    ...describeOptions(o.raw, CODEX_DEFAULTS).map(l => `  ${l}`),
+    ...describeOptions(shownOptions(o.raw), fromTiers(CODEX_DEFAULTS) as Record<string, string>).map(l => `  ${tierLine(l)}`),
     'Commands: /router off, /router on.',
   ].join('\n')
 }
@@ -370,7 +375,7 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   const parsed = parsePick(reply, avail)
   if (!parsed && !/"where"\s*:\s*"keep"/.test(reply)) await log(home, 'parse', 'reply could not be parsed')
   // Once per chat, so the log shows what the hook really goes by.
-  if (h.isFirst) await log(home, 'effective options', `${o.source} | ${optionsLine(o.raw, CODEX_DEFAULTS)}`)
+  if (h.isFirst) await log(home, 'effective options', `${o.source} | ${tierLine(optionsLine(shownOptions(o.raw), fromTiers(CODEX_DEFAULTS) as Record<string, string>))}`)
   let p: Pick | null = parsed && allowed(parsed, o.cfg)
   await log(home, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${h.tokens ?? '?'} tok | first ${h.isFirst} | ${clip(reply, 200)}`)
   if (!p) return null
