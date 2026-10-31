@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { DEFAULT_MODELS, codexHome, paths } from './hook.ts'
+import { toTiers } from '../shared/tiers.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const HOOK = join(HERE, 'hook.ts')
@@ -19,7 +20,7 @@ const MCP = join(HERE, 'mcp.ts')
 const EVENT = 'UserPromptSubmit'
 
 export const DEFAULT_OPTIONS = {
-  classifier: 'haiku',
+  classifier: 'light',
   effortMode: 'ask',
   modelMode: 'ask',
   project: '',
@@ -27,7 +28,7 @@ export const DEFAULT_OPTIONS = {
   language: 'auto',
   enabled: true,
   timeoutMs: 20_000,
-  models: DEFAULT_MODELS,
+  models: toTiers(DEFAULT_MODELS),
   efforts: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
 }
 

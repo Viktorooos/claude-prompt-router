@@ -15,10 +15,11 @@
 //   - or opencode.json: move the shim out of plugins/ (else it loads twice) and list it there,
 //     "plugin": [["file:///Users/<you>/.config/opencode/prompt-router.ts", { ...options }]];
 //     options given this way win and the JSON file is not read.
-//   { "classifier": "sonnet", "effortMode": "auto", "modelMode": "ask", "project": "", "rules": "",
+//   { "classifier": "standard", "effortMode": "auto", "modelMode": "ask", "project": "", "rules": "",
 //     "language": "auto",
-//     "models": { "haiku": "anthropic/claude-haiku-5-5", "sonnet": "anthropic/claude-sonnet-5-5",
-//                 "opus": "anthropic/claude-opus-5-5", "fable": "anthropic/claude-fable-5-1" },
+//     "models": { "light": "anthropic/claude-haiku-5-5", "standard": "anthropic/claude-sonnet-5-5",
+//                 "strong": "anthropic/claude-opus-5-5", "top": "anthropic/claude-fable-5-1" },
+//     (any provider's models; the old keys haiku…fable still work)
 //     "variants": { "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" } }
 // Effort is the model variant (provider.<p>.models.<m>.variants.<name>); a level mapped to "" uses
 // the model's default.
@@ -27,9 +28,10 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, MODEL_NAMES, NAMES, asLevel, clip, knownModel, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, asLevel, clip, knownModel, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
-import { SESSION_TOOL, SWITCH_TOOL, agentFor, askNote, switchNote } from './notes.ts'
+import { SESSION_TOOL, SWITCH_TOOL, agentFor, askNote, modelName, switchNote } from './notes.ts'
+import { TIER_NAMES, fromTiers, tierModel } from '../shared/tiers.ts'
 import type { NoteCtx } from './notes.ts'
 
 // `tool` from @opencode-ai/plugin: the shim hands it in, since the repo has no node_modules.
@@ -93,6 +95,7 @@ export function routerPlugin(tool: ToolFn) {
         source = 'defaults'
       }
     }
+    given = fromTiers(given)
     const cfg: Config = toConfig(given)
     const models = strMap(ALL_MODELS, given.models, DEFAULT_MODELS)
     const variants = strMap(LEVELS, given.variants, Object.fromEntries(LEVELS.map(l => [l, l])) as Record<Level, string>)
@@ -359,7 +362,7 @@ export function routerPlugin(tool: ToolFn) {
           if (cfg.modelMode === 'ask') askModel = { from }
           else {
             applyModel(st, p.model)
-            changes.push(`Model: ${MODEL_NAMES[p.model]} (was ${MODEL_NAMES[from]})`)
+            changes.push(`Model: ${modelName(models, p.model)} (was ${modelName(models, from)})`)
           }
         }
         if (p.effort !== now) {
@@ -418,7 +421,7 @@ export function routerPlugin(tool: ToolFn) {
         config.command.router ??= { template: 'Prompt Router $ARGUMENTS', description: 'Prompt Router: status, or off / on' }
         config.agent ??= {}
         for (const m of ALL_MODELS) {
-          config.agent[agentFor(m)] ??= { mode: 'subagent', model: models[m], description: `Prompt Router: runs a task the router dispatched, on ${MODEL_NAMES[m]}. Returns a short result.` }
+          config.agent[agentFor(m)] ??= { mode: 'subagent', model: models[m], description: `Prompt Router: runs a task the router dispatched, on ${models[m]}. Returns a short result.` }
         }
         providerCfg = config.provider ?? {}
       },
@@ -490,15 +493,15 @@ export function routerPlugin(tool: ToolFn) {
       tool: {
         [SWITCH_TOOL]: tool({
           description: "Prompt Router: switches this chat's model and/or effort after the user chose it in the Prompt Router question. The effort applies from the next request of this turn, the model from the next message.",
-          args: { model: s.string().optional().describe(ALL_MODELS.join(', ')), effort: s.string().optional().describe(LEVELS.join(', ')) },
+          args: { model: s.string().optional().describe(TIER_NAMES.join(', ')), effort: s.string().optional().describe(LEVELS.join(', ')) },
           async execute(args: { model?: string; effort?: string }, tc: { sessionID: string }) {
             const st = chat(tc.sessionID)
-            const known = knownModel(args.model)
+            const known = tierModel(args.model)
             const model = known && (await availableModels(st.seenModel)).includes(known) ? known : ''
             const level = asLevel(args.effort)
             if (model) applyModel(st, model)
             if (level) applyLevel(st, level)
-            const done = [model ? `model ${MODEL_NAMES[model]}` : '', level ? `effort ${NAMES[level]}` : ''].filter(Boolean)
+            const done = [model ? `model ${modelName(models, model)}` : '', level ? `effort ${NAMES[level]}` : ''].filter(Boolean)
             const skipped = [
               args.model && !model ? `model ${JSON.stringify(args.model)} (not offered in this chat)` : '',
               args.effort && !level ? `effort ${JSON.stringify(args.effort)} (unknown)` : '',
@@ -514,9 +517,9 @@ export function routerPlugin(tool: ToolFn) {
         }),
         [SESSION_TOOL]: tool({
           description: 'Prompt Router: starts a new OpenCode session with the given model and effort and sends it the task. Use only after the user chose "New session" in the Prompt Router question.',
-          args: { model: s.string().describe(ALL_MODELS.join(', ')), effort: s.string().describe(LEVELS.join(', ')), prompt: s.string().describe('The task, with what it needs to know'), title: s.string().optional() },
+          args: { model: s.string().describe(TIER_NAMES.join(', ')), effort: s.string().describe(LEVELS.join(', ')), prompt: s.string().describe('The task, with what it needs to know'), title: s.string().optional() },
           async execute(args: { model: string; effort: string; prompt: string; title?: string }) {
-            const known = knownModel(args.model)
+            const known = tierModel(args.model)
             const model: Model = known || 'opus'
             const level = asLevel(args.effort) || 'medium'
             const title = args.title?.trim() || clip(args.prompt, 50)

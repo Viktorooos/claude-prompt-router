@@ -32,9 +32,9 @@ test('install merges into an existing hooks.json, keeps a backup, and writes def
   assert.equal(j.other, 1)
   assert.deepEqual(j.hooks.UserPromptSubmit, [THEIRS.hooks.UserPromptSubmit[0], { hooks: [{ type: 'command', command: command(HOOK), timeout: 30, statusMessage: 'Routing...' }] }])
   const o = JSON.parse(readFileSync(p.options, 'utf8'))
-  assert.equal(o.models.haiku, 'gpt-6-luna')
-  assert.equal(o.models.fable, 'gpt-6-astra')
-  assert.equal(o.classifier, 'haiku')
+  assert.equal(o.models.light, 'gpt-6-luna')
+  assert.equal(o.models.top, 'gpt-6-astra')
+  assert.equal(o.classifier, 'light')
   assert.match(out.at(-1) ?? '', /\/hooks/)
   // Again: nothing changes, no new backup.
   const again = await install(h, 5678)

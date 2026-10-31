@@ -45,10 +45,10 @@ test('ask mode: adds the switch note and changes nothing', async () => {
   assert.equal(out.message.variant, undefined)
   assert.equal(out.message.model.modelID, 'claude-opus-5-5')
   const text = said(out)
-  assert.match(text, /^rename foo to bar everywhere\n\n\[Prompt Router suggests model Sonnet instead of Opus and effort low instead of medium/)
+  assert.match(text, /^rename foo to bar everywhere\n\n\[Prompt Router suggests model claude-sonnet-5-5 instead of claude-opus-5-5 and effort low instead of medium/)
   assert.match(text, /question tool/)
-  assert.match(text, /"Switch \(Sonnet · Low\)", "Keep as is"/)
-  assert.match(text, /call the router_switch tool with \{"model":"sonnet","effort":"low"\}/)
+  assert.match(text, /"Switch \(claude-sonnet-5-5 · Low\)", "Keep as is"/)
+  assert.match(text, /call the router_switch tool with \{"model":"standard","effort":"low"\}/)
   assert.equal(named(calls, 'tui.showToast').length, 0)
 })
 
@@ -132,18 +132,18 @@ test('subagent pick: the note asks and names the task tool and router agent', as
   const { hooks, config } = await setup({ reply: PICK.subagent, history: ongoing(S) })
   const out = await send(hooks, S, 'run the whole test suite')
   const text = said(out)
-  assert.match(text, /Prompt Router suggests running this prompt in a subagent \(Haiku · low\), because: just run the tests/)
-  assert.match(text, /"Subagent \(Haiku · low\)", "Do it here \(Low\)", "Do it here \(keep Medium\)"/)
-  assert.match(text, /call the task tool with subagent_type "router-haiku"/)
-  assert.equal(config.agent['router-haiku'].model, 'anthropic/claude-haiku-5-5')
-  assert.equal(config.agent['router-haiku'].mode, 'subagent')
+  assert.match(text, /Prompt Router suggests running this prompt in a subagent \(claude-haiku-5-5 · low\), because: just run the tests/)
+  assert.match(text, /"Subagent \(claude-haiku-5-5 · low\)", "Do it here \(Low\)", "Do it here \(keep Medium\)"/)
+  assert.match(text, /call the task tool with subagent_type "router-light"/)
+  assert.equal(config.agent['router-light'].model, 'anthropic/claude-haiku-5-5')
+  assert.equal(config.agent['router-light'].mode, 'subagent')
 })
 
 test('subagent effort: the task call carries the pick to the child session', async () => {
   const { hooks } = await setup({ reply: PICK.subagent, history: ongoing(S), parents: { ses_child: S } })
   await send(hooks, S, 'run the whole test suite')
-  await hooks['tool.execute.before']({ tool: 'task', sessionID: S, callID: 'c1' }, { args: { subagent_type: 'router-haiku', prompt: 'run tests', description: 'tests' } })
-  const child = await send(hooks, 'ses_child', 'run tests', { agent: 'router-haiku', model: 'anthropic/claude-haiku-5-5' })
+  await hooks['tool.execute.before']({ tool: 'task', sessionID: S, callID: 'c1' }, { args: { subagent_type: 'router-light', prompt: 'run tests', description: 'tests' } })
+  const child = await send(hooks, 'ses_child', 'run tests', { agent: 'router-light', model: 'anthropic/claude-haiku-5-5' })
   assert.equal(child.message.variant, 'low')
   assert.equal(said(child), 'run tests')
 })
@@ -151,15 +151,15 @@ test('subagent effort: the task call carries the pick to the child session', asy
 test('session pick: the note offers a new session through router_session', async () => {
   const { hooks } = await setup({ reply: PICK.session, history: ongoing(S) })
   const text = said(await send(hooks, S, 'now build the settings screen'))
-  assert.match(text, /in a new session \(Sonnet · medium\)/)
-  assert.match(text, /"New session \(Sonnet · medium\)", "Subagent \(Sonnet · medium\)", "Do it here"/)
-  assert.match(text, /call the router_session tool right away with model "sonnet", effort "medium"/)
+  assert.match(text, /in a new session \(claude-sonnet-5-5 · medium\)/)
+  assert.match(text, /"New session \(claude-sonnet-5-5 · medium\)", "Subagent \(claude-sonnet-5-5 · medium\)", "Do it here"/)
+  assert.match(text, /call the router_session tool right away with model "standard", effort "medium"/)
   assert.match(text, /opencode --model anthropic\/claude-sonnet-5-5 --prompt/)
 })
 
 test('router_session starts a session on the model and variant and is not routed', async () => {
   const { hooks, calls } = await setup({ reply: PICK.session })
-  const r = await hooks.tool.router_session.execute({ model: 'sonnet', effort: 'high', prompt: 'build the settings screen' }, { sessionID: S })
+  const r = await hooks.tool.router_session.execute({ model: 'standard', effort: 'high', prompt: 'build the settings screen' }, { sessionID: S })
   assert.match(r, /Started a new session "build the settings screen" \(scratch-1\) on anthropic\/claude-sonnet-5-5 at effort High/)
   const [p] = named(calls, 'session.promptAsync')
   assert.deepEqual(p.args.body.model, { providerID: 'anthropic', modelID: 'claude-sonnet-5-5' })
@@ -179,7 +179,7 @@ test('switch tool: sets model and variant for the next message, effort within th
   const { hooks } = await setup({ reply: PICK.keep, history: ongoing(S) })
   await send(hooks, S, 'yes')
   const r = await hooks.tool.router_switch.execute({ model: 'sonnet', effort: 'high' }, { sessionID: S })
-  assert.match(r, /Switched this chat to model Sonnet and effort High\./)
+  assert.match(r, /Switched this chat to model claude-sonnet-5-5 and effort High\./)
   assert.match(r, /model applies from the next message/)
   // The rest of this turn: chat.params puts the high variant's options on the next request.
   const output = { temperature: 0, topP: 1, topK: 0, maxOutputTokens: undefined, options: { a: 1 } as Record<string, unknown> }
@@ -194,7 +194,7 @@ test('switch tool: sets model and variant for the next message, effort within th
 
 test('switch tool: refuses unknown values and Fable when no provider lists it', async () => {
   const { hooks } = await setup()
-  assert.equal(await hooks.tool.router_switch.execute({ model: 'fable', effort: 'huge' }, { sessionID: S }), 'Nothing switched. Not switched: model "fable" (not offered in this chat), effort "huge" (unknown).')
+  assert.equal(await hooks.tool.router_switch.execute({ model: 'top', effort: 'huge' }, { sessionID: S }), 'Nothing switched. Not switched: model "top" (not offered in this chat), effort "huge" (unknown).')
   assert.equal(await hooks.tool.router_switch.execute({}, { sessionID: S }), 'Nothing switched. Give model and/or effort.')
 })
 

@@ -14,7 +14,8 @@
 //
 // Options: ~/.codex/prompt-router.json (install.ts writes the defaults), read like the mod's toConfig
 // (project, rules, language, classifier, effortMode, modelMode) plus:
-//   "models": { "haiku": "gpt-6-luna", "sonnet": "gpt-6.1-terra", "opus": "gpt-6.1-sol", "fable": "gpt-6-astra" },
+//   "models": { "light": "gpt-6-luna", "standard": "gpt-6.1-terra", "strong": "gpt-6.1-sol", "top": "gpt-6-astra" },
+//                                                    the model of each tier (old keys haiku…fable still work)
 //   "efforts": { "low": "low", ... "max": "max" }   the Codex effort for each router level
 //   "enabled": true                                  /router off|on writes it
 //   "timeoutMs": 20000                               the classifier's time limit
@@ -25,6 +26,8 @@ import { appendFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promis
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { fromTiers } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
 import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, asLevel, clip, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
@@ -82,13 +85,15 @@ export async function loadOptions(home: string): Promise<Options> {
   } catch {
     // The defaults.
   }
-  // The Codex classifier defaults to the haiku class (gpt-6-luna): toConfig's default is sonnet.
-  const cfg = toConfig({ classifier: 'haiku', ...raw })
+  // The Codex classifier defaults to the light tier (gpt-6-luna): toConfig's default is sonnet.
+  // `raw` stays as written (/router off|on writes it back); the parsing reads tier keys.
+  const given = fromTiers(raw)
+  const cfg = toConfig({ classifier: 'haiku', ...given })
   return {
     raw,
     source,
     cfg,
-    models: strMap(ALL_MODELS, raw.models, DEFAULT_MODELS),
+    models: strMap(ALL_MODELS, given.models, DEFAULT_MODELS),
     efforts: strMap(LEVELS, raw.efforts, Object.fromEntries(LEVELS.map(l => [l, l])) as Record<Level, string>),
     enabled: raw.enabled !== false,
     timeoutMs: typeof raw.timeoutMs === 'number' && raw.timeoutMs > 0 ? raw.timeoutMs : 20_000,

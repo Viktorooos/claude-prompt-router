@@ -19,7 +19,7 @@ test('install writes the shim and default options; uninstall removes the shim', 
   assert.match(shim, /import \{ tool \} from '@opencode-ai\/plugin'/)
   assert.ok(shim.includes(JSON.stringify(PLUGIN)))
   assert.match(shim, /export const PromptRouter = routerPlugin\(tool\)/)
-  assert.equal(JSON.parse(readFileSync(p.options, 'utf8')).models.opus, 'anthropic/claude-opus-5-5')
+  assert.equal(JSON.parse(readFileSync(p.options, 'utf8')).models.strong, 'anthropic/claude-opus-5-5')
   assert.deepEqual(await install(home), [`Already installed: ${p.shim}`, `Options: ${p.options} (kept)`, 'Restart OpenCode to load it.'])
   await uninstall(home)
   assert.equal(existsSync(p.shim), false)
