@@ -162,3 +162,8 @@ export function toConfig(options: Record<string, unknown>): Config {
     modelMode: options.modelMode === 'auto' ? 'auto' : options.modelMode === 'off' ? 'off' : 'ask',
   }
 }
+
+// The language the agent writes its questions in.
+export function userLang(cfg: Config) {
+  return cfg.language && cfg.language.toLowerCase() !== 'auto' ? cfg.language : "the user's language (the language of this prompt)"
+}

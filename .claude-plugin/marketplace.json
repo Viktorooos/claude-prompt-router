@@ -1,13 +1,13 @@
 {
   "name": "prompt-router",
   "owner": { "name": "Viktor Kadeřábek" },
-  "description": "Prompt Router: a Claude Code mod that routes each prompt to this chat, a subagent or a new session, with the right model and effort",
+  "description": "Prompt Router: a Claude Code mod that routes each prompt to this chat, a subagent or a new session, with the right model and effort. This marketplace installs the Claude Code mod; the Codex and OpenCode adapters live in the repo (see README)",
   "plugins": [
     {
       "name": "prompt-router",
       "source": "./plugins/prompt-router",
       "description": "Routes each prompt to this chat, a subagent or a new session, picks the model and effort, sets effort here by itself and has Claude ask before moving work elsewhere",
-      "version": "0.5.0"
+      "version": "0.6.0"
     }
   ]
 }

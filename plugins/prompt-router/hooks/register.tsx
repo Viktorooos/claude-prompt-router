@@ -1,7 +1,7 @@
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, LEVELS, MODEL_NAMES, MODELS, NAMES, asLevel, clip, knownModel, norm, parsePick, pickPrompt, toConfig, typed } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, MODEL_NAMES, MODELS, NAMES, asLevel, clip, knownModel, norm, parsePick, pickPrompt, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Model, Pick, Where } from '../core/router.ts'
 
 const NAME = 'prompt-router'
@@ -216,10 +216,6 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
   return p
 }
 
-function userLang() {
-  return cfg.language && cfg.language.toLowerCase() !== 'auto' ? cfg.language : "the user's language (the language of this prompt)"
-}
-
 // The chat's own model and effort change through the mod's tool: set_session_model and
 // set_session_effort refuse the session they run in.
 function switchCall(to: { model?: Model; effort?: Level }) {
@@ -244,7 +240,7 @@ function askNote(p: Pick, now: Level | '', midTurn = false, inApp = true) {
     : cfg.effortMode === 'ask'
       ? `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt; ${keepHere} = continue normally.`
       : `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt.`
-  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang()}. Then: ${sessionThen(p, inApp)} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${hereThen}`
+  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang(cfg)}. Then: ${sessionThen(p, inApp)} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${hereThen}`
 }
 
 // start_session is the desktop app's; in a terminal or VS Code the person opens the session.
@@ -276,7 +272,7 @@ function switchNote(p: Pick, model: { from: Model } | null, effort: { now: Level
   ].filter(Boolean)
   const label = [model ? MODEL_NAMES[p.model] : '', effort ? NAMES[p.effort] : ''].filter(Boolean).join(' · ')
   const how = switchCall({ model: model ? p.model : undefined, effort: effort ? p.effort : undefined })
-  return `Prompt Router suggests ${parts.join(' and ')} for this prompt${p.why ? `, because: ${p.why}` : ''}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Switch?" with the reason in one sentence) with the options "Switch (${label})", "Keep as is", the recommended one first. Write the question and options in ${userLang()}. On Switch, ${how}, then handle the prompt; on Keep as is, handle the prompt normally.`
+  return `Prompt Router suggests ${parts.join(' and ')} for this prompt${p.why ? `, because: ${p.why}` : ''}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Switch?" with the reason in one sentence) with the options "Switch (${label})", "Keep as is", the recommended one first. Write the question and options in ${userLang(cfg)}. On Switch, ${how}, then handle the prompt; on Keep as is, handle the prompt normally.`
 }
 
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.

@@ -83,3 +83,36 @@ Mod smí importovat soubory ze své složky, proto jádro bydlí uvnitř modu.
   přes MCP elicitation + zápis configu, nebo jen řádek `/model …`). Uživatelův config: model gpt-5.6-sol, effort high.
 - Codex mapování (výchozí, nastavitelné): haiku→gpt-5.6-luna, sonnet→gpt-5.6-terra, opus→gpt-5.6-sol, fable→gpt-6.1-sol;
   klasifikátor `codex exec -m gpt-5.6-luna -c model_reasoning_effort=low --ephemeral --skip-git-repo-check -s read-only`.
+- [x] Krok 1 hotový: commit a399052 (`core/router.ts`, golden porovnání řádků s `main` = beze změny, 47/47, validate OK, jádro se načte v Node).
+- Běží: subagent testuje reload `config.toml` v Codexu (záloha `~/.codex/config.toml.bak-router-test`; po skončení zkontrolovat, že config je obnovený).
+- Běží: subagent staví OpenCode adaptér v `adapters/opencode/` (prompt-router.ts, install.ts, testy `node --test adapters/opencode/test/`).
+- Další: Codex adaptér `adapters/codex/` podle výsledku reload testu.
+- [x] OpenCode adaptér: `adapters/opencode/` (prompt-router.ts, notes.ts, install.ts, 27/27 `node --test adapters/opencode/test/`), necommitnuté.
+  Odchylky od 1:1 (do README): přepnutí = „hold“ per zpráva (picker se nehne); model mid-turn ne, effort ano přes chat.params;
+  subagenti `router-haiku|sonnet|opus|fable` přes config hook; nová session nástrojem `router_session`; `/router` přes config command;
+  volby v `~/.config/opencode/prompt-router.json`. Neověřeno živě (seznam v reportu: variant pole, @opencode-ai/plugin v ~/.config/opencode, `opencode --prompt`).
+- [x] Reload test: běžící Codex **nečte** config.toml mezi tahy (turn_context drží startovní model/effort). Rozhodnutí: Codex auto =
+  jeden řádek „přepni `/model …`“ + systemMessage, pokračuje bez dotazu; ask = dotaz textem. Config obnoven (diff OK).
+  Codex login je rozbitý („refresh token was already used“) → uživatel `codex logout` + `codex login`. Subagent omylem
+  spustil self-update na 0.166.0, vráceno na 0.153.4.
+- Běží: subagent staví Codex adaptér `adapters/codex/` (hook.ts, notes.ts, install.ts, testy) + živý test.
+- Zbývá: README po platformách, verze 0.6.0, changelog, commit; spustit všechny testy.
+- [x] Codex adaptér: `adapters/codex/` 27/27, nainstalovaný v ~/.codex (záloha hooks.json `.bak-prompt-router-1793403795614`),
+  `~/.codex/prompt-router.json` má uživatelovy volby z Claude Code (auto/auto, Czech; záloha `.bak-defaults`). Živě: hook s reálným
+  klasifikátorem OK; Codex sám hook nespustí, dokud ho uživatel nedůvěřuje přes `/hooks`.
+- [x] `userLang` přesunut do core (register/opencode/codex importují), 47/27/27, validate OK.
+- Běží: subagent přepisuje README (sekce Claude Code / Codex / OpenCode, verze 0.6.0, changelog).
+- Pak: commit na feat/multi-platform, merge do main jen na pokyn.
+- Desktop ChatGPT.app (2026-10-31 01:00–01:06): CLI i `codex exec` (i přibalený 0.166) háček spustí a poznámku vypíšou.
+  Desktop chat 01:00 (app-server 0.164) háček spustil (log pick 00:00:51Z), ale výstup se do chatu ani rolloutu nedostal.
+  Desktop chat 01:03 (po restartu, 0.166) háček nespustil vůbec. Výstup háčku je správný (ověřeno ručně s gpt-6.1-sol).
+  Hypotézy: app-server ignoruje additionalContext/systemMessage u GUI tahů; 0.166 má hooky pro desktop vypnuté
+  nebo jinou trust databázi. Stop po 2 pokusech, čeká na uživatele.
+- Desktop 01:12 (nový chat): háček se nespustil (žádný proces hook.ts, žádný záznam v logu). Ruční `app-server` ze stejné binárky,
+  se stejnými `-c` přepínači a nastavením vlákna (auto_review, workspace-write, priority) háček spustí vždy. hooks/list: trusted, enabled.
+  Log desktopu: „Received turn/started for unknown conversation“ s jiným ID, než má vlákno → desktop nejspíš tahy běží přes vlastní
+  vnitřní vrstvu, která UserPromptSubmit nevolá. Na naší straně oprava není; možnosti: nahlásit OpenAI, používat Codex CLI.
+- [x] Desktop cesta: MCP server `adapters/codex/mcp.ts` (nástroj `route`, stejný kód jako háček) + blok v `~/.codex/config.toml`
+  (`default_tools_approval_mode = "approve"`) a pravidlo v `~/.codex/AGENTS.md`, oboje s markery a zálohou (install/uninstall).
+  Klasifikátor běží s `-c mcp_servers.prompt_router.enabled=false`. Ověřeno přes desktopový app-server s vypnutým háčkem:
+  agent zavolal `route` a odpověď začala řádkem Prompt Router. Codex testy 41/41. Zbývá: uživatel v desktopu po restartu.

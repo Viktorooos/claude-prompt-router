@@ -1,0 +1,191 @@
+// Installs Prompt Router for Codex: node adapters/codex/install.ts [--uninstall]
+//
+// Adds a UserPromptSubmit command hook (`node <this dir>/hook.ts`) to $CODEX_HOME/hooks.json
+// (~/.codex by default), keeping every other hook there. Before it changes the file it keeps a copy
+// as hooks.json.bak-prompt-router-<time>. --uninstall removes only the router's entry (again after a
+// backup). It also creates $CODEX_HOME/prompt-router.json with the default options when there is none.
+// Codex runs a new or changed hook only after the user trusts it once with /hooks in the TUI.
+
+import { existsSync, realpathSync } from 'node:fs'
+import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { DEFAULT_MODELS, codexHome, paths } from './hook.ts'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const HOOK = join(HERE, 'hook.ts')
+const MCP = join(HERE, 'mcp.ts')
+const EVENT = 'UserPromptSubmit'
+
+export const DEFAULT_OPTIONS = {
+  classifier: 'haiku',
+  effortMode: 'ask',
+  modelMode: 'ask',
+  project: '',
+  rules: '',
+  language: 'auto',
+  enabled: true,
+  timeoutMs: 20_000,
+  models: DEFAULT_MODELS,
+  efforts: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' },
+}
+
+// Node by its full path: the desktop app runs hooks with a PATH that has no Homebrew node.
+// A link that survives node updates (/opt/homebrew/bin/node) beats the versioned Cellar path.
+export function nodeBin() {
+  const real = (p: string) => { try { return realpathSync(p) } catch { return '' } }
+  const self = real(process.execPath)
+  return ['/opt/homebrew/bin/node', '/usr/local/bin/node'].find(p => real(p) === self) ?? process.execPath
+}
+
+// The ChatGPT desktop app runs no hooks: it gets an MCP tool and an AGENTS.md rule to call it.
+const TOML = { start: '# >>> prompt-router (desktop)', end: '# <<< prompt-router (desktop)' }
+const MD = { start: '<!-- prompt-router -->', end: '<!-- /prompt-router -->' }
+
+export function mcpBlock(mcp = MCP) {
+  return [
+    '[mcp_servers.prompt_router]',
+    `command = ${JSON.stringify(nodeBin())}`,
+    `args = [${JSON.stringify(mcp)}]`,
+    'default_tools_approval_mode = "approve"',
+  ].join('\n')
+}
+
+export const AGENTS_RULE = [
+  'Prompt Router: at the start of every new user prompt, before anything else, call the `route` tool of the',
+  '`prompt_router` MCP server with the prompt exactly as typed, and follow what it returns. Skip the call when',
+  'this turn already carries a "[Prompt Router: ..." note, or the prompt is a reply to your own question.',
+].join('\n')
+
+// Puts body between the markers (replacing an old copy), or removes the block when body is null.
+export function setBlock(text: string, m: { start: string; end: string }, body: string | null) {
+  const i = text.indexOf(m.start)
+  const j = i < 0 ? -1 : text.indexOf(m.end, i)
+  let rest = j < 0 ? text : text.slice(0, i).replace(/\n+$/, '\n') + text.slice(j + m.end.length).replace(/^\n+/, '\n')
+  rest = rest.replace(/^\n+/, '').replace(/\n+$/, '')
+  if (body === null) return rest ? `${rest}\n` : ''
+  return `${rest ? `${rest}\n\n` : ''}${m.start}\n${body}\n${m.end}\n`
+}
+
+async function editFile(file: string, m: { start: string; end: string }, body: string | null, now: number, out: string[]) {
+  const old = existsSync(file) ? await readFile(file, 'utf8') : ''
+  const next = setBlock(old, m, body)
+  if (next === old) return false
+  if (existsSync(file)) {
+    const bak = `${file}.bak-prompt-router-${now}`
+    if (!existsSync(bak)) await copyFile(file, bak)
+    out.push(`Backup: ${bak}`)
+  }
+  // A file that held only the router's block goes away with it.
+  if (body === null && !next) await unlink(file)
+  else await writeFile(file, next)
+  return true
+}
+
+export async function installDesktop(home = codexHome(), now = Date.now(), mcp = MCP) {
+  const out: string[] = []
+  if (await editFile(join(home, 'config.toml'), TOML, mcpBlock(mcp), now, out)) out.push(`Added the prompt_router MCP server to ${join(home, 'config.toml')}`)
+  if (await editFile(join(home, 'AGENTS.md'), MD, AGENTS_RULE, now, out)) out.push(`Added the routing rule to ${join(home, 'AGENTS.md')}`)
+  return out
+}
+
+export async function uninstallDesktop(home = codexHome(), now = Date.now()) {
+  const out: string[] = []
+  for (const [f, m] of [[join(home, 'config.toml'), TOML], [join(home, 'AGENTS.md'), MD]] as const) {
+    if (existsSync(f) && (await editFile(f, m, null, now, out))) out.push(`Removed the Prompt Router block from ${f}`)
+  }
+  return out
+}
+
+export function command(hook = HOOK) {
+  return `${JSON.stringify(nodeBin())} ${JSON.stringify(hook)}`
+}
+
+export function entry(hook = HOOK) {
+  return { type: 'command', command: command(hook), timeout: 30, statusMessage: 'Routing...' }
+}
+
+// The router's entry, wherever this repo was when it was installed.
+function isOurs(h: unknown) {
+  return !!h && typeof h === 'object' && typeof (h as { command?: unknown }).command === 'string' && /adapters\/codex\/hook\.ts"?\s*$/.test((h as { command: string }).command)
+}
+
+type Group = { hooks?: unknown[]; [k: string]: unknown }
+type HooksFile = { hooks?: Record<string, Group[]>; [k: string]: unknown }
+
+async function readHooks(file: string): Promise<HooksFile> {
+  if (!existsSync(file)) return {}
+  const j = JSON.parse(await readFile(file, 'utf8'))
+  if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error(`${file} is not a JSON object; left it alone`)
+  return j as HooksFile
+}
+
+async function save(file: string, j: HooksFile, now: number, out: string[]) {
+  if (existsSync(file)) {
+    const bak = `${file}.bak-prompt-router-${now}`
+    await copyFile(file, bak)
+    out.push(`Backup: ${bak}`)
+  }
+  await writeFile(file, `${JSON.stringify(j, null, 2)}\n`)
+}
+
+export async function install(home = codexHome(), now = Date.now(), hook = HOOK) {
+  const p = paths(home)
+  const out: string[] = []
+  await mkdir(home, { recursive: true })
+  const j = await readHooks(p.hooks)
+  const want = entry(hook)
+  const hooks = (j.hooks ??= {})
+  const groups = (hooks[EVENT] ??= [])
+  const found = groups.flatMap(g => (Array.isArray(g.hooks) ? g.hooks : [])).filter(isOurs)
+  if (found.length === 1 && JSON.stringify(found[0]) === JSON.stringify(want)) out.push(`Already installed in ${p.hooks}`)
+  else {
+    // Drop old copies (another path, other settings), then add the current one at the end, so the
+    // other hooks keep their place (Codex binds trust to each hook's position and command).
+    for (const g of groups) if (Array.isArray(g.hooks)) g.hooks = g.hooks.filter(h => !isOurs(h))
+    hooks[EVENT] = [...groups.filter(g => !Array.isArray(g.hooks) || g.hooks.length), { hooks: [want] }]
+    await save(p.hooks, j, now, out)
+    out.push(`${found.length ? 'Updated' : 'Installed'} the ${EVENT} hook in ${p.hooks}: ${want.command}`)
+  }
+  if (!existsSync(p.options)) {
+    await writeFile(p.options, `${JSON.stringify(DEFAULT_OPTIONS, null, 2)}\n`)
+    out.push(`Options: ${p.options} (defaults written)`)
+  } else out.push(`Options: ${p.options} (kept)`)
+  out.push(...(await installDesktop(home, now)))
+  out.push('Codex runs the hook only once you trust it: start codex, type /hooks and trust "Routing..." (again after every change of the hook command). Then start a new session.')
+  return out
+}
+
+export async function uninstall(home = codexHome(), now = Date.now()) {
+  const p = paths(home)
+  const out: string[] = []
+  const j = await readHooks(p.hooks)
+  const groups = j.hooks?.[EVENT] ?? []
+  const n = groups.flatMap(g => (Array.isArray(g.hooks) ? g.hooks : [])).filter(isOurs).length
+  if (!n) out.push(`Not installed: no Prompt Router hook in ${p.hooks}`)
+  else {
+    for (const g of groups) if (Array.isArray(g.hooks)) g.hooks = g.hooks.filter(h => !isOurs(h))
+    const left = groups.filter(g => !Array.isArray(g.hooks) || g.hooks.length)
+    if (j.hooks) {
+      if (left.length) j.hooks[EVENT] = left
+      else delete j.hooks[EVENT]
+    }
+    await save(p.hooks, j, now, out)
+    out.push(`Removed the Prompt Router hook from ${p.hooks}`)
+  }
+  out.push(...(await uninstallDesktop(home, now)))
+  if (existsSync(p.options)) out.push(`Kept your options in ${p.options}; delete it by hand if you no longer need it.`)
+  return out
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const run = process.argv.includes('--uninstall') ? uninstall : install
+  run().then(
+    lines => console.log(lines.join('\n')),
+    err => {
+      console.error(`prompt-router install: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    },
+  )
+}
