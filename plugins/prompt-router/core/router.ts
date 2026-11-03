@@ -33,6 +33,9 @@ export const SWITCHES = {
   openPane: ['off', 'on'],
   // Claude Code: one line above the prompt (model · effort, context, today's saving), no extra tab.
   band: ['on', 'off'],
+  // Share of prompts the router would move lower that keep their setting, as a control group for the
+  // savings stats. 0 turns it off.
+  holdoutPct: ['10', '0', '5', '20'],
 } as const
 
 export type Switch = keyof typeof SWITCHES
@@ -76,6 +79,20 @@ export function above(a: unknown, b: unknown): boolean {
   const ma = knownModel(a)
   const mb = knownModel(b)
   return !!ma && !!mb && ALL_MODELS.indexOf(ma) > ALL_MODELS.indexOf(mb)
+}
+
+// Whether a prompt falls in the control group: the same seed always lands the same way, and about pct %
+// of seeds land in it (FNV-1a hash).
+export function inHoldout(seed: string, pct: number): boolean {
+  if (!(pct > 0)) return false
+  let h = 0x811c9dc5
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 0x01000193)
+  return (h >>> 0) % 10_000 < pct * 100
+}
+
+// Whether the prompt itself asks for a model or an effort; the router then never holds it back.
+export function namesSetting(text: string): boolean {
+  return /\b(haiku|sonnet|opus|fable|effort|ultrathink|think (hard|harder|deeply))\b/i.test(text)
 }
 
 // A model the router may offer: an unknown or unavailable one falls back to Opus.

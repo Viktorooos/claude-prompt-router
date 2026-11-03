@@ -1,5 +1,11 @@
-import { expect, test } from 'claude-code/testing'
-import { TEMPLATE, compactWindow, describeOptions, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { expect, test as base } from 'claude-code/testing'
+import { TEMPLATE, compactWindow, describeOptions, inHoldout, namesSetting, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+
+// The routing tests run without the control group (holdoutPct 0), so no prompt lands in it by chance;
+// the holdout tests below turn it on.
+const OFF = { holdoutPct: '0' }
+const test = ((name: string, a: any, b?: any) =>
+  typeof a === 'function' ? base(name, { options: OFF } as any, a) : base(name, { ...a, options: { ...OFF, ...a.options } }, b)) as typeof base
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -1041,6 +1047,61 @@ test('stats: a turn after the person moved the picker above what the router set 
   await $.turn.complete(TURN_DONE)
   const ts = statsLines(seen).filter((x: any) => x.kind === 'turn')
   expect(ts.map((t: any) => t.manual)).toEqual([undefined, true, undefined])
+})
+
+test('inHoldout: the same seed lands the same way, and about pct % of seeds land in the control group', () => {
+  const share = (pct: number) => Array.from({ length: 20_000 }, (_, i) => inHoldout(`chat-${i % 97}:${i * 7919}:prompt ${i}`, pct)).filter(Boolean).length / 20_000
+  expect(share(0)).toBe(0)
+  for (const pct of [5, 10, 20]) {
+    expect(Math.abs(share(pct) - pct / 100)).toBeLessThan(0.01)
+  }
+  expect(inHoldout('a:1:fix it', 10)).toBe(inHoldout('a:1:fix it', 10))
+})
+
+test('namesSetting: a prompt that asks for a model or effort', () => {
+  for (const t of ['use opus for this', 'Sonnet je na to dost', 'high effort please', 'ultrathink about the cache']) expect(namesSetting(t)).toBe(true)
+  for (const t of ['fix the empty search', 'run the tests', 'the magnum layout']) expect(namesSetting(t)).toBe(false)
+})
+
+test('holdout: a share of lowering prompts keeps its setting and is noted as the control group', { options: { effortDetection: 'auto', holdoutPct: '20' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  const prompts = Array.from({ length: 40 }, (_, i) => `fix the empty search in list ${i}`)
+  for (const t of [...prompts, 'use opus, fix the empty search in list 99']) {
+    await submit($, t)
+    await $.turn.complete(TURN_DONE)
+  }
+  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
+  expect(ds.length).toBe(41)
+  const held = ds.filter((d: any) => d.holdout)
+  // Each prompt lands where its seed says; some do, most do not.
+  for (const d of ds.slice(0, 40)) expect(!!d.holdout).toBe(inHoldout(`${d.chat}:0:${d.key}`, 20))
+  expect(held.length).toBeGreaterThan(0)
+  expect(held.length).toBeLessThan(20)
+  for (const d of held) {
+    expect(d.where).toBe('keep')
+    expect(d.to).toEqual(d.from)
+    expect(d.wanted).toEqual({ model: 'opus', effort: 'low' })
+  }
+  // The effort moved only for the prompts outside the control group.
+  expect(seen.sets.length).toBe(41 - held.length)
+  // A prompt that names a model is never held back.
+  expect(ds[40].holdout).toBeUndefined()
+  expect(ds[40].where).toBe('here')
+})
+
+test('holdout: never a raise or an xhigh pick', { options: { effortDetection: 'auto', holdoutPct: '20' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "xhigh", "why": "hard"}')
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for (let i = 0; i < 30; i++) {
+    await submit($, `rework the cache layer ${i}`)
+    await $.turn.complete(TURN_DONE)
+  }
+  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
+  expect(ds.length).toBe(30)
+  expect(ds.some((d: any) => d.holdout)).toBe(false)
 })
 
 test('stats: a subagent the router did not offer counts at its own price', async ($: any, on: any) => {

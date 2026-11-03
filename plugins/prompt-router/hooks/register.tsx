@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, inHoldout, namesSetting, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
@@ -383,10 +383,10 @@ const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' 
 
 // Notes one routing decision (with what the classifier cost); returns its time stamp. Every result of
 // decide() passes here once, so the pane's last decision is written here too.
-async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick) {
+async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick, wanted?: Decision['to']) {
   const ts = await $.clock.now()
   if (cfg.stats === 'on') {
-    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}) })
+    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(wanted ? { holdout: true as const, wanted } : {}) })
   }
   lastClassifier = null
   lastFollows = undefined
@@ -432,6 +432,18 @@ async function flush($: EngineInterface) {
   }
 }
 
+// The control group for the savings stats: a prompt the router would only move lower (never to xhigh
+// or max, never one that names a model or effort) keeps its setting for holdoutPct % of prompts.
+async function holdsOut($: EngineInterface, text: string, p: Pick, now: Level | '') {
+  const from = p.first?.now
+  const model = !!from && p.model !== from && cfg.firstChatDetection !== 'off'
+  const effort = p.effort !== now && cfg.effortDetection !== 'off'
+  if (!model && !effort) return false
+  if ((model && !above(from, p.model)) || (effort && !above(now, p.effort))) return false
+  if (p.effort === 'xhigh' || p.effort === 'max' || namesSetting(text)) return false
+  return inHoldout(`${chatId}:${await $.clock.now()}:${lastPromptKey}`, Number(cfg.holdoutPct))
+}
+
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
 async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!enabled || e.command || e.isMeta) return e
@@ -469,6 +481,10 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     }
     if (p.other) await noteAsked($, 'subagent', p, now)
     if (p.other) return { ...e, text: `${e.text}\n\n[${(cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(p, p.other.now, now)}]` }
+    if (await holdsOut($, text, p, now)) {
+      await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now, p, { model: p.model, effort: p.effort })
+      return e
+    }
     const changes: string[] = []
     let askModel: { from: Model } | null = null
     let askEffort: { now: Level | '' } | null = null

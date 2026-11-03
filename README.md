@@ -207,6 +207,7 @@ The same keys on every platform. Each feature has its own switch. The defaults k
 | `notifications` | `on`, `off` | `on`: a toast after an automatic change, and a footer label in Claude Code (Codex: a system message). `off`: none of these; the changes still happen. |
 | `stats` | `on`, `off` | Claude Code. `on`: note each decision and each turn's token use in a local file for [savings stats](#savings-stats). `off`: nothing is noted. Default `on`. |
 | `openPane` | `off`, `on` | Claude Code. `on`: the Prompt Router pane opens by itself when a session starts (shown from 144 terminal columns, 110 once you have opened it with `/router panel`), or else on your first prompt. `off`: only `/router panel` opens it. |
+| `holdoutPct` | `10`, `0`, `5`, `20` | Claude Code. This share (%) of prompts the router would move to a cheaper model or lower effort keeps its setting, as a control group for the [savings stats](#savings-stats). Never a prompt that names a model or effort, never an xhigh or max pick. `0`: off. Default `10`. |
 
 Where to put them:
 

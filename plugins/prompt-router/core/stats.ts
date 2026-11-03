@@ -25,6 +25,9 @@ export type Decision = {
   follows?: 'continues' | 'corrects' | 'new'
   outcome: 'applied' | 'asked' | 'declined'
   classifier?: { model: string; usage: Usage; usd?: number; ms?: number }
+  /** A control-group prompt: the router would have moved it to `wanted` but kept the setting (`where: 'keep'`). */
+  holdout?: true
+  wanted?: Side
 }
 
 // One finished turn (main chat, or a subagent with `agentId`). `baseline` is the model it would
