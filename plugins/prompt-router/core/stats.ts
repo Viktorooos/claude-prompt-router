@@ -356,6 +356,8 @@ const turnUsd = (t: Turn) => (t.usage ? (t.usd ?? cost(t.usage, t.model) ?? 0) :
 const turnsUsd = (ts: readonly Turn[]) => ts.reduce((n, t) => n + turnUsd(t), 0)
 const turnsMs = (ts: readonly Turn[]) => ts.filter(main).reduce((n, t) => n + (t.durationMs ?? 0), 0)
 const classifierMs = (ds: readonly Decision[]) => ds.reduce((n, d) => n + (d.classifier?.ms ?? 0), 0)
+// Whether the task's main turns carry their times (older records and some platforms do not).
+const timed = (ts: readonly Turn[]) => ts.some(t => main(t) && t.durationMs !== undefined)
 
 // The q-quantile of sorted values, linear between neighbours.
 function quantile(sorted: readonly number[], q: number) {
@@ -425,7 +427,7 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     control.set(k, c)
     // Without the router there is no classifier: only the turns count.
     c.usd.push(turnsUsd(e.turns))
-    if (e.turns.some(t => main(t) && t.durationMs !== undefined)) c.ms.push(turnsMs(e.turns))
+    if (timed(e.turns)) c.ms.push(turnsMs(e.turns))
   }
   const usdSpread = new Map([...control].filter(([, c]) => c.usd.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.usd)]))
   const msSpread = new Map([...control].filter(([, c]) => c.ms.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.ms)]))
@@ -484,7 +486,7 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     usdLow += without.q1 - actual
     usdHigh += without.q3 - actual
     const ms = turnsMs(e.turns)
-    const cm = msSpread.get(k)
+    const cm = timed(e.turns) ? msSpread.get(k) : undefined
     if (cm) {
       out.timed++
       msSaved += cm.median - ms
@@ -495,7 +497,7 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     r.tasks++
     r.usd += actual + clsUsd
     r.rework += f
-    if (e.turns.some(t => main(t) && t.durationMs !== undefined)) {
+    if (timed(e.turns)) {
       r.ms += ms + clsMs
       r.timed++
     }

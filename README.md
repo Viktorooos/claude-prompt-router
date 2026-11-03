@@ -266,6 +266,23 @@ It is an **estimate**, kept honest:
 
 The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl`, trimmed to 90 days and 5 MB. Turn it off with `"stats": "off"`.
 
+<a id="balance"></a>
+### How the balance is worked out
+
+The token estimate above assumes the work would have taken the same tokens without the router. It misses the cost of a cheap model that fails and has to be run again. So the panel, `/router stats` and the stats page also show a **balance per task, against a control group** (money and time):
+
+- **Task** = a routed prompt plus the prompts that continue or fix it (the classifier says which), ending at a new topic or after 30 min of quiet.
+- **Control group** (`holdoutPct`, default 10 %, `0` = off): for that share of prompts the router would have moved *down*, it changes nothing and logs what it wanted. It never holds back a step up, `xhigh`/`max`, or a prompt that names a model or effort.
+- **Balance of a routed task** = the median cost (and time) of control tasks of the same kind (where it ran and which model the router chose) − what the task cost. A negative number means the router cost you more.
+- **Too few control tasks** (fewer than 5 of that kind; always for escalations, subagents and new chats): the task falls back to the token estimate, marked as an estimate.
+- **Re-work**: when the task failed (you switched to a stronger model, repeated the prompt, corrected it or broke it off), its follow-up turns count as lost, weighted 1 / 1 / 0.7 / 0.4.
+- **Parts**: cheaper picks, higher picks, re-work and the classifier, which comes off every task.
+- **`~`** marks a rough number: any task estimated, or fewer than 12 tasks. The range comes from the control group's quartiles.
+- **Accuracy** = the share of tasks without a failure, with a 95 % (Wilson) interval.
+- **Time** is shown once control tasks have measured it; turns logged before this version have no duration and save no time.
+
+Records logged before this version have no control group or follow-up flags, so their balance shows as a rough estimate.
+
 ---
 
 <a id="claude-code"></a>

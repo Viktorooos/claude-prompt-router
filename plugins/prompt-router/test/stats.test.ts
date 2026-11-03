@@ -572,3 +572,12 @@ test('balanceText and statsText: the per-task section under the token table', ()
   expect(statsText(summarize(records, NOW))).not.toMatch(/Per task/)
   expect(statsHtml(summarize(records, NOW), [], b)).toMatch(/<h2>Per task, against the control group<\/h2>/)
 })
+
+test('balance: an older routed task without turn times saves no time, even where control times exist', () => {
+  const b = balance([...CONTROL(5), ...task('old', { to: { model: 'haiku', effort: 'low' } }, [{ usd: 1 }])])
+  expect(b.measured).toBe(1)
+  expect(b.timed).toBe(0)
+  // Only the six prompts' classifier seconds.
+  close(b.minutes.value, -0.1)
+  expect(b.byModel.find(r => r.model === 'haiku')!.minutesPerTask).toBeNull()
+})
