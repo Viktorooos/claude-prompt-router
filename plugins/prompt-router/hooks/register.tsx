@@ -307,6 +307,12 @@ function hereChoice(name: string, p: Pick, now: Level | '', effort: boolean) {
   return { options: switchHere, then: `${switchHere} = ${switchCall({ effort: p.effort })}, then handle the prompt.` }
 }
 
+// The question leads the note: a note that opens with the reason reads as a status line, and a model
+// in a long chat can skip the trailing part of it.
+function askFirst(options: string) {
+  return `ACTION FIRST, before any other step: call the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first, written in ${userLang(cfg)}. Do not answer or start the task until the user has picked one.`
+}
+
 function askNote(p: Pick, now: Level | '', midTurn = false, inApp = true) {
   const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
   const where = p.where === 'session' ? 'a new session' : 'a subagent'
@@ -314,7 +320,7 @@ function askNote(p: Pick, now: Level | '', midTurn = false, inApp = true) {
   const agent = `"Subagent (${label})"`
   const here = hereChoice('Do it here', p, now, !midTurn && p.effort !== now)
   const options = p.where === 'session' ? `${session}, ${agent}, ${here.options}` : `${agent}, ${here.options}`
-  return `Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options ${options}, the recommended one first. Write the question and options in ${userLang(cfg)}. Then: ${sessionThen(p, inApp)} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${here.then}`
+  return `${askFirst(options)} Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Then: ${sessionThen(p, inApp)} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${here.then}`
 }
 
 // A prompt that stays here but fits another model: a subagent on that model, or here on the chat's
@@ -322,7 +328,7 @@ function askNote(p: Pick, now: Level | '', midTurn = false, inApp = true) {
 function otherNote(p: Pick, from: Model, now: Level | '') {
   const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
   const here = hereChoice('Stay here', p, now, p.effort !== now)
-  return `Prompt Router: this prompt belongs to this chat but fits ${label} better than this chat's ${MODEL_NAMES[from]}${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Where should this go?" with the reason in one sentence) with the options "Subagent (${label})", ${here.options}, the recommended one first. Write the question and options in ${userLang(cfg)}. Then: Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}"; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. ${here.then}`
+  return `${askFirst(`"Subagent (${label})", ${here.options}`)} Prompt Router: this prompt belongs to this chat but fits ${label} better than this chat's ${MODEL_NAMES[from]}${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. Then: Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}"; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. ${here.then}`
 }
 
 // midChatModelDetection auto: no "Where should this go?"; staying here judges the effort as
