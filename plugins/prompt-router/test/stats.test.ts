@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { EFFORT_OUTPUT, FAILURE_WEIGHTS, REFERENCE, byDay, episodes, failureOf, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
+import { EFFORT_OUTPUT, FAILURE_WEIGHTS, MIN_CONTROL, REFERENCE, balance, byDay, episodes, failureOf, parseLog, rotate, savingLabel, statsHtml, statsText, summarize, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -451,4 +451,85 @@ test('failureOf: a task that went on without trouble has no failure; a lone corr
 test('episodes: turns before the first prompt the router saw form a task with no prompt', () => {
   const eps = episodes([turn('opus', 'opus', { ts: NOW - 60 * MIN }), decision({ ts: NOW - 50 * MIN, key: 'next', follows: 'new' })])
   expect(eps.map(e => [e.decisions.length, e.turns.length])).toEqual([[0, 1], [1, 0]])
+})
+
+// Balance fixtures: one task per chat, so tasks never merge. Each prompt's classifier costs $0.01 and 1 s.
+const CLS = { model: 'haiku', usage: { input: 0, output: 0 }, usd: 0.01, ms: 1000 }
+const SEC = 1000
+function task(chat: string, d: Partial<Decision>, turns: Partial<Turn>[], later: { d: Partial<Decision>; turns: Partial<Turn>[] }[] = []): Entry[] {
+  const t0 = NOW - DAY
+  const out: Entry[] = [decision({ chat, ts: t0, key: `${chat} first`, follows: 'new', classifier: CLS, ...d })]
+  turns.forEach((t, i) => out.push(turn('haiku', 'opus', { chat, ts: t0 + 1 + i, ...t })))
+  later.forEach((l, j) => {
+    const ts = t0 + 100 * (j + 1)
+    out.push(decision({ chat, ts, key: `${chat} later ${j}`, classifier: CLS, ...l.d }))
+    l.turns.forEach((t, i) => out.push(turn('haiku', 'opus', { chat, ts: ts + 1 + i, ...t })))
+  })
+  return out
+}
+const CONTROL = (n: number) => Array.from({ length: n }, (_, i) =>
+  task(`k${i}`, { where: 'keep', holdout: true, wanted: { model: 'haiku', effort: 'low' } }, [{ model: 'opus', usd: i + 1, durationMs: (i + 1) * 60 * SEC }])).flat()
+
+test('balance: routed tasks against the control medians of their class, with quartiles, parts and accuracy', () => {
+  const down = { to: { model: 'haiku', effort: 'low' as const } }
+  const records = [
+    ...CONTROL(5), // control $1…$5 and 1…5 min: median $3 / 3 min, quartiles $2–$4 / 2–4 min
+    ...task('a', down, [{ usd: 1, durationMs: 60 * SEC }]),
+    ...task('b', down, [{ usd: 1, durationMs: 60 * SEC }], [{ d: { follows: 'corrects' }, turns: [{ usd: 0.5, durationMs: 30 * SEC }] }]),
+    ...task('c', { from: { model: 'sonnet', effort: 'medium' }, to: { model: 'opus', effort: 'medium' } }, [{ model: 'opus', baseline: 'sonnet' }]),
+  ]
+  const b = balance(records)
+  expect([b.routed, b.control, b.measured, b.estimated]).toEqual([3, 5, 2, 1])
+  const esc = cost(U, 'sonnet')! - cost(U, 'opus')!
+  // a: 3 − 1 = 2. b: 3 − (1.5 − 0.7 × 0.5) = 1.85, its correction 0.35 is re-work. c (no control for
+  // opus): the re-pricing, sonnet − opus. Nine prompts' classifier: 0.09.
+  close(b.parts.cheaper, 3.85)
+  close(b.parts.rework, -0.35)
+  close(b.parts.escalation, esc)
+  close(b.parts.classifier, -0.09)
+  close(b.usd.value, 3.41 + esc)
+  close(b.usd.low, (2 - 1) + (2 - 1.5) + esc - 0.09)
+  close(b.usd.high, (4 - 1) + (4 - 1.5) + esc - 0.09)
+  // Minutes: a 3 − 1, b 3 − 1.5, c no control time; nine classifier seconds.
+  close(b.minutes.value, 2 + 1.5 - 0.15)
+  close(b.minutes.low, 1 + 0.5 - 0.15)
+  close(b.minutes.high, 3 + 2.5 - 0.15)
+  close(b.accuracy!.pct, (1 - 0.7 / 3) * 100)
+  const w = wilson(3 - 0.7, 3)
+  close(b.accuracy!.low, w.low * 100)
+  close(b.accuracy!.high, w.high * 100)
+  const haiku = b.byModel.find(r => r.model === 'haiku')!
+  expect([haiku.tasks, haiku.control]).toEqual([2, 5])
+  close(haiku.usdPerTask, (1.01 + 1.52) / 2)
+  close(haiku.reworkPct, 35)
+  close(haiku.minutesPerTask, (61 + 92) / 2 / 60)
+  const opus = b.byModel.find(r => r.model === 'opus')!
+  close(opus.usdPerTask, cost(U, 'opus')! + 0.01)
+  expect(opus.minutesPerTask).toBeNull()
+})
+
+test('balance: fewer control tasks than MIN_CONTROL fall back to the re-pricing, with no time saved', () => {
+  const records = [...CONTROL(MIN_CONTROL - 1), ...task('a', { to: { model: 'haiku', effort: 'low' } }, [{ usd: 1, durationMs: 60 * SEC }])]
+  const b = balance(records)
+  expect([b.measured, b.estimated]).toEqual([0, 1])
+  // The re-pricing: the turn's own price plus the list-price gap to the baseline.
+  const without = 1 + cost(U, 'opus')! - cost(U, 'haiku')!
+  close(b.usd.value, without - 1 - 0.05)
+  close(b.usd.low, b.usd.value)
+  close(b.usd.high, b.usd.value)
+  close(b.minutes.value, -5 / 60)
+})
+
+test('balance: nothing routed has no accuracy; prompts the router left alone cost only the classifier', () => {
+  const b = balance(task('a', {}, [{ usd: 1 }]))
+  expect([b.routed, b.control]).toEqual([0, 0])
+  expect(b.accuracy).toBeNull()
+  close(b.usd.value, -0.01)
+})
+
+test('wilson: the 95 % interval of a share', () => {
+  const w = wilson(10, 10)
+  expect(w.high).toBe(1)
+  close(Math.round(w.low * 1e4) / 1e4, 0.7225)
+  expect(wilson(0, 0)).toEqual({ low: 0, high: 1 })
 })

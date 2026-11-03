@@ -2,7 +2,7 @@
 // Every dollar is an estimate from core/prices.ts. Honest by design: the classifier's cost comes off
 // the saving, a stronger model is shown as extra cost, an effort change is priced apart as a guess, and
 // the balance takes all of them in.
-import { LEVELS } from './router.ts'
+import { LEVELS, above } from './router.ts'
 import type { Level } from './router.ts'
 import { cost } from './prices.ts'
 import type { Usage } from './prices.ts'
@@ -343,6 +343,174 @@ export function failureOf(e: Episode): Failure {
   if (answers.slice(1).some(t => t.manual)) reasons.push('switched')
   if (answers.some(t => !t.usage)) reasons.push('interrupted')
   return failure(reasons)
+}
+
+// A class of tasks: where the router sent it and the model it picked (for a control task, the model
+// it would have picked). Control tasks exist only for `here`, so other classes always fall back.
+const classOf = (where: string, model: string) => `${where}:${model}`
+
+// Control tasks a class needs before its medians replace the token re-pricing.
+export const MIN_CONTROL = 5
+
+const turnUsd = (t: Turn) => (t.usage ? (t.usd ?? cost(t.usage, t.model) ?? 0) : 0)
+const turnsUsd = (ts: readonly Turn[]) => ts.reduce((n, t) => n + turnUsd(t), 0)
+const turnsMs = (ts: readonly Turn[]) => ts.filter(main).reduce((n, t) => n + (t.durationMs ?? 0), 0)
+const classifierMs = (ds: readonly Decision[]) => ds.reduce((n, d) => n + (d.classifier?.ms ?? 0), 0)
+
+// The q-quantile of sorted values, linear between neighbours.
+function quantile(sorted: readonly number[], q: number) {
+  const i = (sorted.length - 1) * q
+  const lo = Math.floor(i)
+  return sorted[lo]! + (sorted[Math.min(lo + 1, sorted.length - 1)]! - sorted[lo]!) * (i - lo)
+}
+
+type Spread = { q1: number; median: number; q3: number }
+
+function spread(values: number[]): Spread {
+  const s = [...values].sort((a, b) => a - b)
+  return { q1: quantile(s, 0.25), median: quantile(s, 0.5), q3: quantile(s, 0.75) }
+}
+
+// The Wilson 95 % interval of a share (successes may be fractional: failures are weighted).
+export function wilson(successes: number, n: number): { low: number; high: number } {
+  if (n <= 0) return { low: 0, high: 1 }
+  const z = 1.96
+  const p = successes / n
+  const d = 1 + (z * z) / n
+  const c = (p + (z * z) / (2 * n)) / d
+  const h = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d
+  return { low: Math.max(0, c - h), high: Math.min(1, c + h) }
+}
+
+// A range with its point: low and high from the control quartiles (equal to the point where the
+// re-pricing stood in).
+export type Range = { value: number; low: number; high: number }
+
+export type ModelRow = { model: string; tasks: number; control: number; usdPerTask: number; reworkPct: number; minutesPerTask: number | null }
+
+export type Balance = {
+  /** Tasks the router changed (model, effort, subagent, session), and control tasks. */
+  routed: number
+  control: number
+  /** Routed tasks priced against control medians, and those priced by the token re-pricing. */
+  measured: number
+  estimated: number
+  /** Money and minutes the router saved (+) or cost (−) against no router, classifier included. */
+  usd: Range
+  minutes: Range
+  /** usd split: cheaper picks, higher picks (escalation), re-work after a failed answer, classifier. */
+  parts: { cheaper: number; escalation: number; rework: number; classifier: number }
+  /** Share of routed tasks that did the job (weighted failures), with its Wilson interval. */
+  accuracy: { pct: number; low: number; high: number } | null
+  byModel: ModelRow[]
+}
+
+// The router's balance per task. A routed task is compared with the median control task of its class
+// (what the same kind of task cost and took with the person's own setting); with fewer than
+// MIN_CONTROL control tasks, with today's token re-pricing and no saving of time, counted in
+// `estimated`. A task's later prompts after a failure count as re-work, by the failure's weight.
+export function balance(records: readonly Entry[]): Balance {
+  const taken = takenSet(records)
+  const changed = (d: Decision) => routedDecision(d) || (d.outcome === 'asked' && taken.has(takenKey(d.chat, d.ts)))
+  const eps = episodes(records).filter(e => e.decisions.length)
+  const control = new Map<string, { usd: number[]; ms: number[] }>()
+  for (const e of eps) {
+    const d = e.decisions[0]!
+    if (!d.holdout || !d.wanted) continue
+    const k = classOf('here', d.wanted.model)
+    const c = control.get(k) ?? { usd: [], ms: [] }
+    control.set(k, c)
+    // Without the router there is no classifier: only the turns count.
+    c.usd.push(turnsUsd(e.turns))
+    if (e.turns.some(t => main(t) && t.durationMs !== undefined)) c.ms.push(turnsMs(e.turns))
+  }
+  const usdSpread = new Map([...control].filter(([, c]) => c.usd.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.usd)]))
+  const msSpread = new Map([...control].filter(([, c]) => c.ms.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.ms)]))
+
+  const out: Balance = {
+    routed: 0, control: 0, measured: 0, estimated: 0,
+    usd: { value: 0, low: 0, high: 0 }, minutes: { value: 0, low: 0, high: 0 },
+    parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [],
+  }
+  const rows = new Map<string, { tasks: number; control: number; usd: number; rework: number; ms: number; timed: number }>()
+  const row = (m: string) => rows.get(m) ?? (rows.set(m, { tasks: 0, control: 0, usd: 0, rework: 0, ms: 0, timed: 0 }), rows.get(m)!)
+  let fails = 0
+  let msLow = 0
+  let msHigh = 0
+  let msSaved = 0
+  let usdLow = 0
+  let usdHigh = 0
+  for (const e of eps) {
+    const d = e.decisions[0]!
+    const clsUsd = e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
+    const clsMs = classifierMs(e.decisions)
+    out.parts.classifier -= clsUsd
+    msSaved -= clsMs
+    msLow -= clsMs
+    msHigh -= clsMs
+    if (d.holdout && d.wanted) {
+      out.control++
+      row(d.wanted.model).control++
+      continue
+    }
+    if (!changed(d)) continue
+    out.routed++
+    const f = failureOf(e).weight
+    fails += f
+    const actual = turnsUsd(e.turns)
+    const later = e.decisions[1] ? turnsUsd(e.turns.filter(t => t.ts >= e.decisions[1]!.ts)) : 0
+    const rework = f * later
+    const k = classOf(d.where, d.to.model)
+    const cu = usdSpread.get(k)
+    let without: Spread
+    if (cu) {
+      out.measured++
+      without = cu
+    } else {
+      out.estimated++
+      const s = empty()
+      for (const t of e.turns) addTurn(s, t)
+      without = { q1: s.withoutUsd, median: s.withoutUsd, q3: s.withoutUsd }
+    }
+    const firstGain = without.median - (actual - rework)
+    const down = above(d.from.model, d.to.model) || (d.from.model === d.to.model && above(d.from.effort, d.to.effort)) || d.where !== 'here'
+    if (down) out.parts.cheaper += firstGain
+    else out.parts.escalation += firstGain
+    out.parts.rework -= rework
+    usdLow += without.q1 - actual
+    usdHigh += without.q3 - actual
+    const ms = turnsMs(e.turns)
+    const cm = msSpread.get(k)
+    if (cm) {
+      msSaved += cm.median - ms
+      msLow += cm.q1 - ms
+      msHigh += cm.q3 - ms
+    }
+    const r = row(d.to.model)
+    r.tasks++
+    r.usd += actual + clsUsd
+    r.rework += f
+    if (e.turns.some(t => main(t) && t.durationMs !== undefined)) {
+      r.ms += ms + clsMs
+      r.timed++
+    }
+  }
+  const p = out.parts
+  out.usd.value = p.cheaper + p.escalation + p.rework + p.classifier
+  out.usd.low = usdLow + p.classifier
+  out.usd.high = usdHigh + p.classifier
+  out.minutes = { value: msSaved / 60_000, low: msLow / 60_000, high: msHigh / 60_000 }
+  if (out.routed) {
+    const w = wilson(out.routed - fails, out.routed)
+    out.accuracy = { pct: (1 - fails / out.routed) * 100, low: w.low * 100, high: w.high * 100 }
+  }
+  out.byModel = [...rows].map(([model, r]) => ({
+    model, tasks: r.tasks, control: r.control,
+    usdPerTask: r.tasks ? r.usd / r.tasks : 0,
+    reworkPct: r.tasks ? (r.rework / r.tasks) * 100 : 0,
+    minutesPerTask: r.timed ? r.ms / r.timed / 60_000 : null,
+  }))
+  return out
 }
 
 function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>) {
