@@ -232,7 +232,7 @@ test('config reaches the classifier prompt and model', { options: { project: 'a 
   const p = seen.prompts[0] ?? ''
   expect(p).toMatch(/chat about a Flutter food delivery app\./)
   expect(p).toMatch(/PROJECT RULES[^\n]*\nPayments: opus, high\./)
-  expect(p).toMatch(/in Czech"\}$/)
+  expect(p).toMatch(/in Czech", "follows[^}]*\}$/)
   expect(seen.models[0]).toBe('claude-haiku-5-5')
 })
 
@@ -243,7 +243,7 @@ test('defaults: neutral project, prompt language, sonnet', async ($: any, on: an
   const p = seen.prompts[0] ?? ''
   expect(p).toMatch(/chat about a software project\./)
   expect(p).not.toMatch(/PROJECT RULES/)
-  expect(p).toMatch(/in the language of the new prompt"\}$/)
+  expect(p).toMatch(/in the language of the new prompt", "follows[^}]*\}$/)
   expect(seen.models[0]).toBe('claude-sonnet-5-5')
 })
 
@@ -286,7 +286,7 @@ test('the test tool takes per-case config and repeats runs', async ($: any, on: 
   expect(text).toMatch(/a: here opus medium ×2/)
   expect(seen.prompts[0]).toMatch(/about a recipe app\./)
   expect(seen.prompts[0]).toMatch(/Search: haiku\./)
-  expect(seen.prompts[0]).toMatch(/in German"\}$/)
+  expect(seen.prompts[0]).toMatch(/in German", "follows[^}]*\}$/)
 })
 
 test('/router off, on and status', async ($: any, on: any) => {
@@ -940,12 +940,39 @@ test('stats: a routed first prompt and its turn are noted, priced against the mo
   await $.turn.complete(TURN_DONE)
   const [d, t] = statsLines(seen)
   expect(d).toMatchObject({ kind: 'decision', platform: 'claude-code', where: 'here', from: { model: 'opus', effort: 'medium' }, to: { model: 'haiku', effort: 'low' }, outcome: 'applied' })
-  expect(d.classifier).toEqual({ model: 'claude-sonnet-5-5', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } })
+  expect(d.classifier).toEqual({ model: 'claude-sonnet-5-5', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, ms: 0 })
   expect(t).toMatchObject({ kind: 'turn', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 1000, output: 2000, cacheRead: 0, cacheWrite: 0 } })
   expect(t.chat).toBe(d.chat)
   await $.ui.render({ component: 'SessionMode', surface: 'terminal', props: { modes: [] } })
   // The model the router holds, and no saving.
   expect(seen.modes.at(-1)).toEqual(['Haiku'])
+})
+
+test('stats: the decision keeps what the classifier read as follows, the turn its duration', { options: { firstChatDetection: 'auto', effortDetection: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "low", "why": "quick", "follows": "corrects"}', { isFirst: true })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-haiku-5-5' } }))
+  await start($)
+  await submit($, 'that did not work, try again')
+  await $.turn.complete({ ...TURN_DONE, durationMs: 4200 })
+  const [d, t] = statsLines(seen)
+  expect(d.follows).toBe('corrects')
+  expect(d.classifier.ms).toBe(0)
+  expect(t.durationMs).toBe(4200)
+})
+
+test('stats: a keep reply still notes follows; a reply without it notes none', async ($: any, on: any) => {
+  let reply = '{"where": "keep", "model": "keep", "effort": "keep", "why": "approval", "follows": "continues"}'
+  const seen = engine(on, () => reply)
+  on('turn.complete', () => ({ text: '' }))
+  await start($)
+  await submit($, 'yes, go on')
+  await $.turn.complete(TURN_DONE)
+  reply = PICK.keep
+  await submit($, 'ok')
+  await $.turn.complete(TURN_DONE)
+  const ds = statsLines(seen).filter(l => l.kind === 'decision')
+  expect(ds[0].follows).toBe('continues')
+  expect(ds[1].follows).toBe(undefined)
 })
 
 test('stats: a subagent the user took is an accepted offer, priced against the main chat model', async ($: any, on: any) => {
@@ -1129,7 +1156,7 @@ test('pickPrompt: a short chat asks for no note', async ($: any, on: any) => {
   await start($)
   await submit($, 'now add a favourites screen')
   expect(seen.prompts[0]).not.toMatch(/"note"/)
-  expect(seen.prompts[0]).toMatch(/in the language of the new prompt"\}$/)
+  expect(seen.prompts[0]).toMatch(/in the language of the new prompt", "follows[^}]*\}$/)
 })
 
 test('newSessionAt: new work in a long chat is offered as a new session', async ($: any, on: any) => {

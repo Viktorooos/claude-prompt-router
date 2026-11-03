@@ -21,8 +21,10 @@ export type Decision = {
   to: Side
   /** The prompt's normalized text (promptKey): the same key again means the same question came back. */
   key?: string
+  /** What the classifier read of the prompt: a fix of the last answer, the next step, or new work. */
+  follows?: 'continues' | 'corrects' | 'new'
   outcome: 'applied' | 'asked' | 'declined'
-  classifier?: { model: string; usage: Usage; usd?: number }
+  classifier?: { model: string; usage: Usage; usd?: number; ms?: number }
 }
 
 // One finished turn (main chat, or a subagent with `agentId`). `baseline` is the model it would
@@ -48,6 +50,9 @@ export type Turn = {
   /** A main-chat turn: the effort it ran at and the person's own pick (what it would have run at). */
   effort?: Level
   baseEffort?: Level
+  /** Wall-clock ms of the turn as the platform reports it (the classifier's wait is not in it).
+   *  Missing in older records and on platforms that do not time it. */
+  durationMs?: number
 }
 
 // The user took an asked decision (switched, or ran the suggested subagent). `decision` is its `ts`.

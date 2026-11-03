@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
-import type { Chat, Config, Model, Pick, Switch, Where } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import type { Chat, Config, Follows, Model, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { REFERENCE, byDay, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
@@ -52,7 +52,9 @@ let routed = ''
 let effortBase = ''
 let routedLevel = ''
 let stepEffort: { effort: Level | ''; base: Level | '' } | null = null
-let lastClassifier: { model: string; usage: Usage } | null = null
+let lastClassifier: { model: string; usage: Usage; ms?: number } | null = null
+// What the classifier read of the prompt it just judged, for the decision record.
+let lastFollows: Follows | undefined
 let lastAsked: { ts: number; where: Where; model: Model } | null = null
 // A subagent the router sent work to: the main chat's model, and the main chat's context then.
 const routedAgents = new Map<string, { base: string; context: number }>()
@@ -271,13 +273,16 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
   lastCtx = { tokens: tokens ?? null, window: window ?? null }
   const model = seenModel || (await chatModel($))
   const models = await availableModels($, model)
+  const began = await $.clock.now()
   const r = await classify($, text, chatOf(messages, now, tokens, window, model, models))
+  const ms = Math.max(0, (await $.clock.now()) - began)
   if (!r.isAnswered) throw new Error(`pick failed: ${r.reason}`)
   const used = usageOf(r.usage)
-  lastClassifier = used ? { model: MODELS[cfg.classifier], usage: used } : null
+  lastClassifier = used ? { model: MODELS[cfg.classifier], usage: used, ms } : null
   pickedFrom = knownModel(model) || model
   if (!baseline) baseline = model
   const parsed = parsePick(r.text, models)
+  lastFollows = parseFollows(r.text)
   if (!parsed && !/"where"\s*:\s*"keep"/.test(r.text)) await log($, 'parse', 'reply could not be parsed')
   const p = parsed && preferSession(allowed(parsed, cfg), { tokens, window }, cfg)
   const isFirst = !messages.some(m => m.role === 'assistant')
@@ -379,9 +384,10 @@ const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' 
 async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick) {
   const ts = await $.clock.now()
   if (cfg.stats === 'on') {
-    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}) })
+    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}) })
   }
   lastClassifier = null
+  lastFollows = undefined
   const last: LastDecision = { where: p?.other ? 'other' : where, outcome: outcome === 'asked' ? 'asked' : 'applied', model: to.model, effort: to.effort, why: p?.why ?? '', ts, ...lastCtx }
   try {
     // Readers of the atom (the pane) draw again.
@@ -784,6 +790,7 @@ export const register: Register = (on, options) => {
       if (!e.agentId && model) lastTurnModel = model
       pending.push({
         kind: 'turn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, ...(e.agentId ? { agentId: e.agentId } : {}), model, baseline: base, ...(usage ? { usage } : {}),
+        ...(typeof e.durationMs === 'number' ? { durationMs: e.durationMs } : {}),
         ...(agent?.context && requests ? { mainContext: agent.context, requests } : {}),
         ...(switched ? { switched: true } : {}),
         ...(!e.agentId && stepEffort?.effort && stepEffort.base ? { effort: stepEffort.effort, baseEffort: stepEffort.base } : {}),

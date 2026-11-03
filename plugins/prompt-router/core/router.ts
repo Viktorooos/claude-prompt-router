@@ -47,7 +47,9 @@ export type Model = keyof typeof MODELS
 // here but fits another model than the chat's, which is not switched (that would break the cache).
 // work: whether the prompt starts new work or goes on with this chat's (a missing field is continue).
 // note: in a long chat, the words "chat at X% of context" in the user's language, for preferSession.
-export type Pick = { where: Where; model: Model; effort: Level; why: string; work?: 'new' | 'continue'; note?: string; first?: { now: Model | '' }; other?: { now: Model } }
+// follows: how the prompt relates to the chat's last answer (a missing field is unknown).
+export type Follows = 'continues' | 'corrects' | 'new'
+export type Pick = { where: Where; model: Model; effort: Level; why: string; work?: 'new' | 'continue'; note?: string; follows?: Follows; first?: { now: Model | '' }; other?: { now: Model } }
 
 export function norm(s: string) {
   const t = s.toLowerCase().replace(/[^a-z]/g, '')
@@ -117,6 +119,11 @@ WORK
 - new: the prompt starts a new task with its own definition of done (another feature, screen, bug or topic), even in the same project or area as this chat.
 - continue: the next step of this chat's task, a fix or check of what was just done, a question about it, small talk, or an approval.
 
+FOLLOWS
+- corrects: the prompt says the last answer or change was wrong, did not work or is not enough, or asks to redo or fix it (not working, still broken, wrong, no, not like that, try again).
+- continues: the next step of this chat's task, a question about the last answer, small talk, or an approval.
+- new: the prompt starts another task or topic.
+
 The chat now: model {{model}}, effort {{effort}}, context {{tokens}}.
 
 First prompt of this chat (its topic):
@@ -135,7 +142,7 @@ The new prompt:
 {{prompt}}
 </prompt>
 
-Reply with JSON only: {"where": "keep|here|subagent|session", "model": "{{models}}", "effort": "low|medium|high|xhigh|max", "work": "new|continue", "why": "the reason in under 12 plain words, in {{lang}}"{{note}}}`
+Reply with JSON only: {"where": "keep|here|subagent|session", "model": "{{models}}", "effort": "low|medium|high|xhigh|max", "work": "new|continue", "why": "the reason in under 12 plain words, in {{lang}}", "follows": "continues|corrects|new"{{note}}}`
 
 // midChatModelDetection auto: the agent picks the subagent or here itself, with no question.
 export const DECIDE_OTHER = `Do not ask the user; decide yourself: use the subagent only when it is worth it: a larger self-contained piece of work that needs the other model (for example hard design or debugging on a weaker chat model, or long mechanical work on a strong one); a quick question, a short answer or a short message stays here.`
@@ -182,6 +189,12 @@ export function field(text: string, name: string) {
   return new RegExp(`"${name}"\\s*:\\s*"([^"]*)"`).exec(text)?.[1] ?? ''
 }
 
+// How the prompt relates to the last answer; read from any reply, also a keep one.
+export function parseFollows(text: string): Follows | undefined {
+  const f = field(text, 'follows')
+  return f === 'continues' || f === 'corrects' || f === 'new' ? f : undefined
+}
+
 export function parsePick(text: string, models: readonly Model[] = ALL_MODELS): Pick | null {
   const w = field(text, 'where')
   const where = w === 'here' || w === 'subagent' || w === 'session' ? w : null
@@ -190,7 +203,8 @@ export function parsePick(text: string, models: readonly Model[] = ALL_MODELS): 
   const why = clip(field(text, 'why').replace(/\s*[—–]\s*/g, ', '), 90)
   const work = field(text, 'work') === 'new' ? 'new' : 'continue'
   const note = clip(field(text, 'note'), 40)
-  return { where, model: asModel(field(text, 'model'), models), effort, work, why, ...(note ? { note } : {}) }
+  const follows = parseFollows(text)
+  return { where, model: asModel(field(text, 'model'), models), effort, work, why, ...(note ? { note } : {}), ...(follows ? { follows } : {}) }
 }
 
 export function str(v: unknown, fallback: string) {

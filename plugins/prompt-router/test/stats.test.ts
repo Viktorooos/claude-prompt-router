@@ -184,6 +184,14 @@ test('parseLog keeps the good lines and skips the broken ones', () => {
   expect(out).toEqual([t, d])
 })
 
+test('parseLog loads records with and without the duration and follows fields', () => {
+  const old = turn('haiku', 'opus')
+  const timed = { ...turn('haiku', 'opus'), durationMs: 5000 }
+  const d = decision({ follows: 'corrects' })
+  const out = parseLog([old, timed, d].map(r => JSON.stringify(r)).join('\n'))
+  expect(out).toEqual([old, timed, d])
+})
+
 test('an asked decision the user then took counts as applied, once', () => {
   const asked = decision({ ts: NOW - 2 * HOUR, where: 'subagent', to: { model: 'haiku', effort: 'low' }, outcome: 'asked' })
   const accept: Accept = { kind: 'accept', ts: NOW - HOUR, platform: 'claude-code', chat: 'c1', decision: asked.ts }
