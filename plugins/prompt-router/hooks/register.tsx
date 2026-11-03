@@ -6,9 +6,9 @@ import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWi
 import type { Chat, Config, Follows, Model, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, byDay, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
+import { REFERENCE, accuracyText, balance, balanceParts, balances, byDay, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, kTokens, partBarSvg, pulseSvg, ringSvg, sparkSvg, sparkText, tone } from '../core/panel.ts'
-import type { Decision, Entry, Report } from '../core/stats.ts'
+import type { Balance, Balances, Decision, Entry, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -612,10 +612,10 @@ async function paneData($: EngineInterface) {
   const at = cfg.sessionSuggestions === 'off' ? 0 : Number.parseInt(cfg.newSessionAt, 10) || 0
   const model = knownModel(seenModel || (await chatModel($)))
   const effort = await currentLevel($)
-  let savings: { report: Report; days: ReturnType<typeof byDay> } | null = null
+  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances } | null = null
   if (cfg.stats === 'on') {
     const records = [...parseLog(await readStats($)), ...pending]
-    savings = { report: summarize(records, now), days: byDay(records, now, 14) }
+    savings = { report: summarize(records, now), days: byDay(records, now, 14), balance: balances(records, now) }
   }
   return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
 }
@@ -890,15 +890,16 @@ export const register: Register = (on, options) => {
       const now = await $.clock.now()
       const records = parseLog(await readStats($))
       const report = summarize(records, now)
+      const perTask = balance(records)
       const page = `${home}/.claude/mods-logs/prompt-router-stats.html`
       let link = ''
       try {
-        await $.fs.write(page, statsHtml(report, byDay(records, now, 30)))
+        await $.fs.write(page, statsHtml(report, byDay(records, now, 30), perTask))
         link = `\n\nWith a graph of the last 30 days: file://${page}`
       } catch (err) {
         await log($, 'stats page', err)
       }
-      return { text: `${statsText(report)}${link}` }
+      return { text: `${statsText(report, perTask)}${link}` }
     }
     const now = await currentLevel($)
     const { value } = await $.state.get(OVERRIDE)
@@ -934,6 +935,7 @@ export const register: Register = (on, options) => {
     const atLine = d.at ? `New session at ${d.at}%` : 'New-session rule off'
 
     const s = d.savings?.report[panePeriod] ?? null
+    const b: Balance | null = d.savings?.balance[panePeriod] ?? null
     const pickPeriod = (k: typeof panePeriod) => async () => {
       panePeriod = k
       redraw($)
@@ -986,6 +988,40 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
+    // The balance per task against the control group: money and time first, then the parts, the
+    // accuracy and the models (both surfaces, stacked rows that fit a narrow pane).
+    const taskView = (Box: any, Text: any) => {
+      if (!b) return null
+      const t = modelTable(b)
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="column">
+            <Text dimColor>Per task, against the control group</Text>
+            <Text bold color={MONEY_COLOR[money(b.usd.value)]}>{`${isRough(b) ? '~' : ''}${signed(b.usd.value)} · ${b.timed ? timeText(b.minutes.value) : 'time not measured yet'}`}</Text>
+            <Text dimColor>{sampleNote(b)}</Text>
+          </Box>
+          <Box flexDirection="column">
+            {balanceParts(b).map(([k, label, v]) => (
+              <Box key={`task-${k}`} flexDirection="row" justifyContent="space-between">
+                <Text dimColor={money(v) === 'none'}>{`  ${label}`}</Text>
+                <Text dimColor={money(v) === 'none'} color={MONEY_COLOR[money(v)]}>{money(v) === 'none' ? '$0.00' : signed(v)}</Text>
+              </Box>
+            ))}
+            <Box flexDirection="row" justifyContent="space-between">
+              <Text>Accuracy</Text>
+              <Text bold>{accuracyText(b)}</Text>
+            </Box>
+          </Box>
+          {t.length > 1 ? (
+            <Box flexDirection="column">
+              {t.slice(1).map(r => (
+                <Text key={`model-${r[0]}`} dimColor>{`${r[0]}: ${r[1]} tasks, ${r[2]} control · ${r[3]}/task · re-work ${r[4]} · ${r[5]} min/task`}</Text>
+              ))}
+            </Box>
+          ) : null}
+        </Box>
+      )
+    }
     const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
 
     if (e.surface === 'terminal') {
@@ -1024,6 +1060,7 @@ export const register: Register = (on, options) => {
                 <Text dimColor>{verdict}</Text>
               </Box>
               {billView(Box, Text)}
+              {taskView(Box, Text)}
               <Box flexDirection="column">
                 <Text color="claude">{sparkText(d.savings.days.map(x => x.balanceUsd))}</Text>
                 <Text dimColor>balance per day, last 14 days</Text>
@@ -1135,6 +1172,7 @@ export const register: Register = (on, options) => {
                 </Box>
               )
             })()}
+            {taskView(Box, Text)}
             <Box flexDirection="column" gap={1}>
               <Box flexDirection="column">
                 <Text dimColor>{`Vs. always ${REFERENCE.model} ${REFERENCE.effort}`}</Text>
@@ -1175,7 +1213,7 @@ export const register: Register = (on, options) => {
     const parts = [
       d.header,
       d.share !== null ? `context ${Math.round(d.share)} %${d.at ? ` of ${d.at} %` : ''}` : '',
-      d.savings ? `today ${signed(d.savings.report.today.balanceUsd)} · 7 days ${signed(d.savings.report.week.balanceUsd)}` : '',
+      d.savings ? `today ${signed(d.savings.report.today.balanceUsd)}${d.savings.balance.today.timed ? ` · ${timeText(d.savings.balance.today.minutes.value)}` : ''} · 7 days ${signed(d.savings.report.week.balanceUsd)}` : '',
     ].filter(Boolean)
     const { Box, Text, Button } = $.ui.resolve(e)
     return (

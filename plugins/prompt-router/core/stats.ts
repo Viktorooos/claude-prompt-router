@@ -395,6 +395,8 @@ export type Balance = {
   /** Routed tasks priced against control medians, and those priced by the token re-pricing. */
   measured: number
   estimated: number
+  /** Routed tasks whose time was compared with control times (0 = the time is not measured yet). */
+  timed: number
   /** Money and minutes the router saved (+) or cost (−) against no router, classifier included. */
   usd: Range
   minutes: Range
@@ -409,7 +411,8 @@ export type Balance = {
 // (what the same kind of task cost and took with the person's own setting); with fewer than
 // MIN_CONTROL control tasks, with today's token re-pricing and no saving of time, counted in
 // `estimated`. A task's later prompts after a failure count as re-work, by the failure's weight.
-export function balance(records: readonly Entry[]): Balance {
+// `since`: only tasks that started then or later count; the control medians always use every record.
+export function balance(records: readonly Entry[], since = -Infinity): Balance {
   const taken = takenSet(records)
   const changed = (d: Decision) => routedDecision(d) || (d.outcome === 'asked' && taken.has(takenKey(d.chat, d.ts)))
   const eps = episodes(records).filter(e => e.decisions.length)
@@ -428,7 +431,7 @@ export function balance(records: readonly Entry[]): Balance {
   const msSpread = new Map([...control].filter(([, c]) => c.ms.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.ms)]))
 
   const out: Balance = {
-    routed: 0, control: 0, measured: 0, estimated: 0,
+    routed: 0, control: 0, measured: 0, estimated: 0, timed: 0,
     usd: { value: 0, low: 0, high: 0 }, minutes: { value: 0, low: 0, high: 0 },
     parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [],
   }
@@ -441,6 +444,7 @@ export function balance(records: readonly Entry[]): Balance {
   let usdLow = 0
   let usdHigh = 0
   for (const e of eps) {
+    if (e.start < since) continue
     const d = e.decisions[0]!
     const clsUsd = e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
     const clsMs = classifierMs(e.decisions)
@@ -482,6 +486,7 @@ export function balance(records: readonly Entry[]): Balance {
     const ms = turnsMs(e.turns)
     const cm = msSpread.get(k)
     if (cm) {
+      out.timed++
       msSaved += cm.median - ms
       msLow += cm.q1 - ms
       msHigh += cm.q3 - ms
@@ -511,6 +516,13 @@ export function balance(records: readonly Entry[]): Balance {
     minutesPerTask: r.timed ? r.ms / r.timed / 60_000 : null,
   }))
   return out
+}
+
+export type Balances = { today: Balance; week: Balance; total: Balance }
+
+// The balance of today (local calendar day), the last 7 days and everything, as summarize() splits them.
+export function balances(records: readonly Entry[], now: number): Balances {
+  return { today: balance(records, startOfDay(now)), week: balance(records, now - 7 * DAY), total: balance(records) }
 }
 
 function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>) {
@@ -629,7 +641,7 @@ export function statsRows(r: Report): { label: string; cells: string[] }[] {
 }
 
 // A plain text table of the three periods (for /router stats and the Codex and OpenCode adapters).
-export function statsText(r: Report): string {
+export function statsText(r: Report, b?: Balance): string {
   const rows = statsRows(r)
   const w = Math.max(...rows.map(x => x.label.length)) + 2
   const line = (n: string, cells: readonly string[]) => `${n.padEnd(w)}${cells.map((t, i) => (i < 2 ? t.padEnd(16) : t)).join('')}`
@@ -638,6 +650,7 @@ export function statsText(r: Report): string {
     ...rows.map(x => line(x.label, x.cells)),
     '',
     NOTE,
+    ...(b ? ['', balanceText(b)] : []),
   ].join('\n')
 }
 
@@ -648,7 +661,7 @@ export function savingLabel(s: Summary): string {
 }
 
 // A self-contained page for /router stats: the three periods and the balance per day as bars.
-export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[]): string {
+export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[], b?: Balance): string {
   const W = 720
   const H = 200
   const pad = 24
@@ -676,6 +689,7 @@ export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[
 body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
 main { max-width: 760px; margin: 0 auto; }
 h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 28px 0 4px; }
 p { color: var(--muted); margin: 0 0 16px; }
 .big { font-size: 32px; font-weight: 600; margin: 8px 0 16px; }
 svg { width: 100%; height: auto; display: block; margin-bottom: 4px; }
@@ -695,9 +709,91 @@ thead th { color: var(--muted); font-weight: 500; }
 <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Balance per day"><line class="axis" x1="${pad}" x2="${W - pad}" y1="${zero}" y2="${zero}"/>${bars}</svg>
 <div class="days"><span>${first}</span><span>balance per day</span><span>${last}</span></div>
 <div class="wrap"><table><thead><tr><th></th><th>Today</th><th>7 days</th><th>Total</th></tr></thead><tbody>${table}</tbody></table></div>
+${b ? balanceHtml(b) : ''}
 </main></body></html>
 `
 }
 
 // A dollar amount with its sign always shown: +$0.42 saved, −$0.14 lost.
 export const signed = (n: number) => `${n < 0 ? '−' : '+'}$${Math.abs(n).toFixed(2)}`
+
+// Minutes as "45 min" or "2 h 10 min".
+export function minutes(m: number) {
+  const t = Math.round(Math.abs(m))
+  return t < 60 ? `${t} min` : `${Math.floor(t / 60)} h${t % 60 ? ` ${t % 60} min` : ''}`
+}
+
+// Time the router saved or lost, in words (a sign on time reads both ways).
+export const timeText = (m: number) => (Math.round(Math.abs(m)) === 0 ? 'no time' : `${minutes(m)} ${m > 0 ? 'saved' : 'lost'}`)
+
+// Below this many routed tasks the balance is a rough figure even when every task met its control.
+export const ROUGH_BELOW = 12
+
+// A rough balance: few tasks, or some priced by the token re-pricing instead of the control group.
+export const isRough = (b: Balance) => b.estimated > 0 || b.routed < ROUGH_BELOW
+
+// The short line for the band or footer: money, then time once it is measured; "~" marks a rough
+// figure. '' with nothing to show.
+export function balanceLabel(b: Balance): string {
+  if (!b.routed && Math.abs(b.usd.value) < 0.005) return ''
+  return `${isRough(b) ? '~' : ''}${signed(b.usd.value)}${b.timed ? ` · ${timeText(b.minutes.value)}` : ''}`
+}
+
+// How many tasks the balance stands on, for a tooltip or a dim line.
+export function sampleNote(b: Balance): string {
+  const how = b.routed ? ` (${b.measured} against the control group${b.estimated ? `, ${b.estimated} estimated from tokens` : ''})` : ''
+  return `${b.routed} routed tasks${how} · ${b.control} control tasks${isRough(b) ? ' · rough estimate' : ''}`
+}
+
+const range = (r: Range, f: (n: number) => string) => (r.low === r.high ? '' : ` (${f(r.low)} to ${f(r.high)})`)
+
+// The balance's parts with their labels, in the order they add up.
+export const balanceParts = (b: Balance) => [
+  ['cheaper', 'Cheaper picks', b.parts.cheaper],
+  ['escalation', 'Higher picks', b.parts.escalation],
+  ['rework', 'Re-work', b.parts.rework],
+  ['classifier', 'Classifier', b.parts.classifier],
+] as const
+
+export const accuracyText = (b: Balance) => (b.accuracy ? `${Math.round(b.accuracy.pct)} % (95 %: ${Math.round(b.accuracy.low)}–${Math.round(b.accuracy.high)} %)` : '–')
+
+// The per-model table as rows of cells, header first.
+export function modelTable(b: Balance): string[][] {
+  return [
+    ['Model', 'Tasks', 'Control', '$/task', 'Re-work', 'Min/task'],
+    ...b.byModel.map(r => [r.model, String(r.tasks), String(r.control), usd(r.usdPerTask), `${Math.round(r.reworkPct)} %`, r.minutesPerTask === null ? '–' : r.minutesPerTask.toFixed(1)]),
+  ]
+}
+
+const BALANCE_NOTE =
+  'Per task: a routed task (its prompt, the prompts that fixed or went on with it, the classifier) against the median control task of its class, a prompt the router would have moved the same way but left alone (option holdoutPct). The range comes from the control quartiles. With fewer than 5 control tasks in a class the task is priced by the token re-pricing above instead, and its time counts as unchanged. Re-work: the later prompts of a task whose answer failed, by the failure weight.'
+
+// /router stats: the balance per task, under the token table.
+export function balanceText(b: Balance): string {
+  const lines = [
+    'Per task, against the control group (total)',
+    `Money      ${signed(b.usd.value)}${range(b.usd, signed)}`,
+    `Time       ${b.timed ? `${timeText(b.minutes.value)}${range(b.minutes, timeText)}` : 'not measured yet'}`,
+    ...balanceParts(b).map(([, label, v]) => `  ${label.padEnd(15)}${signed(v)}`),
+    `Accuracy   ${accuracyText(b)}`,
+    sampleNote(b),
+  ]
+  const t = modelTable(b)
+  if (t.length > 1) {
+    const w = t[0]!.map((_, i) => Math.max(...t.map(r => r[i]!.length)) + 2)
+    lines.push('', ...t.map(r => r.map((c, i) => c.padEnd(w[i]!)).join('').trimEnd()))
+  }
+  return [...lines, '', BALANCE_NOTE].join('\n')
+}
+
+function balanceHtml(b: Balance): string {
+  const t = modelTable(b)
+  const table = t.length > 1 ? `<div class="wrap"><table><thead><tr>${t[0]!.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${t.slice(1).map(r => `<tr>${r.map((c, i) => (i ? `<td>${c}</td>` : `<th>${c}</th>`)).join('')}</tr>`).join('')}</tbody></table></div>` : ''
+  const parts = balanceParts(b).map(([, label, v]) => `<tr><th>${label}</th><td>${signed(v)}</td></tr>`).join('')
+  return `<h2>Per task, against the control group</h2>
+<div class="big">${isRough(b) ? '~' : ''}${signed(b.usd.value)} <span style="font-size:15px;font-weight:400;color:var(--muted)">${b.timed ? timeText(b.minutes.value) : 'time not measured yet'} · total</span></div>
+<p>${sampleNote(b)}${range(b.usd, signed) ? ` · range${range(b.usd, signed)}` : ''}</p>
+<div class="wrap"><table><tbody>${parts}<tr><th>Accuracy</th><td>${accuracyText(b)}</td></tr></tbody></table></div>
+${table}
+<p>${BALANCE_NOTE}</p>`
+}

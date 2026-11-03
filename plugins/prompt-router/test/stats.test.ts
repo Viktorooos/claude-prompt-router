@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { EFFORT_OUTPUT, FAILURE_WEIGHTS, MIN_CONTROL, REFERENCE, balance, byDay, episodes, failureOf, parseLog, rotate, savingLabel, statsHtml, statsText, summarize, wilson } from '../core/stats.ts'
+import { EFFORT_OUTPUT, FAILURE_WEIGHTS, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, episodes, failureOf, parseLog, rotate, savingLabel, statsHtml, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -532,4 +532,43 @@ test('wilson: the 95 % interval of a share', () => {
   expect(w.high).toBe(1)
   close(Math.round(w.low * 1e4) / 1e4, 0.7225)
   expect(wilson(0, 0)).toEqual({ low: 0, high: 1 })
+})
+
+test('minutes and timeText: plain words for time, saved or lost', () => {
+  expect([minutes(0.4), minutes(45), minutes(60), minutes(130)]).toEqual(['0 min', '45 min', '1 h', '2 h 10 min'])
+  expect([timeText(130), timeText(-3), timeText(0.2)]).toEqual(['2 h 10 min saved', '3 min lost', 'no time'])
+})
+
+test('balanceLabel: money, then time once measured; "~" while rough', () => {
+  const down = { to: { model: 'haiku', effort: 'low' as const } }
+  const routed = (n: number) => Array.from({ length: n }, (_, i) => task(`r${i}`, down, [{ usd: 1, durationMs: 60 * SEC }])).flat()
+  expect(balanceLabel(balance([]))).toBe('')
+  // One routed task against the control: $3 − $1, less six prompts' classifier ($0.06); 3 − 1 min, less 6 s.
+  const few = balance([...CONTROL(5), ...routed(1)])
+  expect(balanceLabel(few)).toBe('~+$1.94 · 2 min saved')
+  const many = balance([...CONTROL(5), ...routed(ROUGH_BELOW)])
+  expect(balanceLabel(many).startsWith('+$')).toBe(true)
+  // No control: no time, and rough.
+  expect(balanceLabel(balance(routed(1)))).toMatch(/^~[+−]\$\d+\.\d\d$/)
+})
+
+test('balances: today, 7 days and total count tasks by when they started; the control medians use all', () => {
+  const old = task('old', { ts: NOW - 10 * DAY, to: { model: 'haiku', effort: 'low' } }, [{ ts: NOW - 10 * DAY + 1, usd: 1 }])
+  const b = balances([...CONTROL(5), ...old], NOW)
+  expect([b.today.routed, b.week.routed, b.total.routed]).toEqual([0, 0, 1])
+  expect(b.total.measured).toBe(1)
+})
+
+test('balanceText and statsText: the per-task section under the token table', () => {
+  const records = [...CONTROL(5), ...task('a', { to: { model: 'haiku', effort: 'low' } }, [{ usd: 1, durationMs: 60 * SEC }])]
+  const b = balance(records)
+  const t = balanceText(b)
+  expect(t).toMatch(/^Per task, against the control group \(total\)\nMoney      \+\$1\.94 \(\+\$0\.94 to \+\$2\.94\)\nTime       2 min saved \(1 min saved to 3 min saved\)/)
+  expect(t).toMatch(/  Cheaper picks  \+\$2\.00/)
+  expect(t).toMatch(/Accuracy   100 % \(95 %: 21–100 %\)/)
+  expect(t).toMatch(/haiku  1 +5 +\$1\.01/)
+  const all = statsText(summarize(records, NOW), b)
+  expect(all).toContain(t)
+  expect(statsText(summarize(records, NOW))).not.toMatch(/Per task/)
+  expect(statsHtml(summarize(records, NOW), [], b)).toMatch(/<h2>Per task, against the control group<\/h2>/)
 })
