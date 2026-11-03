@@ -377,3 +377,36 @@ test('the first prompt of a chat logs the effective options', async () => {
   }
   assert.doesNotMatch(text, /effective options/)
 })
+
+// newSessionAt: a rollout whose last request held `tokens` of a `window` (none: the field is left out).
+function longChat(tokens: number, window?: number) {
+  const f = join(tmp(), 'r.jsonl')
+  const w = window === undefined ? '' : `,"model_context_window":${window}`
+  writeFileSync(f, readFileSync(FIXTURE, 'utf8').replace('"total_tokens":41000}', `"total_tokens":${tokens}}`).replace(',"model_context_window":258400', w))
+  return f
+}
+const HERE_NEW = '{"where": "here", "model": "opus", "effort": "medium", "work": "new", "why": "a new screen"}'
+
+test('readHistory: the context window from the token count', async () => {
+  assert.equal((await readHistory(FIXTURE)).window, 258400)
+  assert.equal((await readHistory(longChat(1000))).window, undefined)
+})
+
+test('newSessionAt: new work past half of the context window is offered as a new session', async () => {
+  const { context, system } = await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(150_000, 258_400) })
+  assert.match(system, /new session/)
+  assert.match(system, /58% of context/)
+  assert.match(context, /"New session \(gpt-6\.1-sol · medium\)"/)
+})
+
+test('newSessionAt: without a window the chat counts against 200k', async () => {
+  assert.match((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(150_000) })).system, /75% of context/)
+})
+
+test('newSessionAt: a continuation, a big window or the option off stays here', async () => {
+  const goOn = HERE_NEW.replace('"new"', '"continue"')
+  assert.equal((await send('fix it', { reply: goOn, transcript: longChat(200_000, 258_400) })).r, null)
+  assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(150_000, 1_000_000) })).r, null)
+  assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { newSessionAt: 'off' } })).r, null)
+  assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { sessionSuggestions: 'off' } })).r, null)
+})

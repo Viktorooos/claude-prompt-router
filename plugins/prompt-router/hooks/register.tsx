@@ -1,12 +1,14 @@
+import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
-import type { Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, clip, describeOptions, knownModel, norm, optionsLine, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import type { LastDecision, Level } from '../types'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Model, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { byDay, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
-import type { Decision, Entry } from '../core/stats.ts'
+import { REFERENCE, byDay, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
+import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, kTokens, partBarSvg, pulseSvg, ringSvg, sparkSvg, sparkText, tone } from '../core/panel.ts'
+import type { Decision, Entry, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -15,6 +17,10 @@ const TEST_TOOL = `mcp__${NAME}__test`
 const SWITCH_TOOL = `mcp__${NAME}__switch`
 const SHORT: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
 const ACCENT = '#d97757'
+const PANE = 'prompt-router'
+const PANE_TITLE = 'Prompt Router'
+// Change the tag when LastDecision's fields change: a value an older copy stored then reads as none.
+const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })
 
 let home = ''
 let cfg: Config = toConfig({})
@@ -42,10 +48,22 @@ let pending: Entry[] = []
 let chatId = ''
 let baseline = ''
 let routed = ''
+// The same for effort: the person's own level, the level the router set, and the last main-chat request's.
+let effortBase = ''
+let routedLevel = ''
+let stepEffort: { effort: Level | ''; base: Level | '' } | null = null
 let lastClassifier: { model: string; usage: Usage } | null = null
 let lastAsked: { ts: number; where: Where; model: Model } | null = null
-const routedAgents = new Map<string, string>()
-let todayLabel = ''
+// A subagent the router sent work to: the main chat's model, and the main chat's context then.
+const routedAgents = new Map<string, { base: string; context: number }>()
+// Requests (turn steps) each routed subagent made, for what it spared the main chat.
+const agentSteps = new Map<string, number>()
+// The model of the main chat's last finished turn, to tell a turn the router switched models on.
+let lastTurnModel = ''
+// openPane on: the pane was opened (and placed, or retried on the first prompt) this session.
+let paneOpened = false
+// The period the pane's savings show (a pane button picks it).
+let panePeriod: 'today' | 'week' | 'total' = 'week'
 
 async function log($: EngineInterface, what: string, err: unknown) {
   try {
@@ -83,6 +101,8 @@ function redraw($: EngineInterface) {
 // Sets the chat's effort setting; when no setting takes it, the mod puts the level on every request
 // until the person moves the picker.
 async function applyLevel($: EngineInterface, level: Level) {
+  if (!routedLevel) effortBase = lastEffort || effortBase
+  routedLevel = level
   turnLevel = level
   try {
     const row = (await $.config.list()).find(isEffortRow)
@@ -135,7 +155,7 @@ async function applyModel($: EngineInterface, model: Model) {
   redraw($)
 }
 
-function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: number | undefined, model: string, models: readonly Model[]): Chat {
+function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: number | undefined, window: number | undefined, model: string, models: readonly Model[]): Chat {
   const users = messages.filter(m => m.role === 'user').map(m => typed(m.text)).filter(Boolean)
   return {
     first: users[0] ?? '',
@@ -144,6 +164,7 @@ function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: nu
     model,
     now,
     tokens,
+    window,
     conf: cfg,
     isFirst: !messages.some(m => m.role === 'assistant'),
     hereModel: true,
@@ -156,7 +177,7 @@ function classify($: EngineInterface, text: string, c: Chat, template?: string) 
 }
 
 // One test case for the classifier: a prompt and the chat it arrives in.
-type Case = { id?: string; prompt: string; isFirst?: boolean; hereModel?: boolean; models?: string[]; classifier?: string; project?: string; rules?: string; language?: string; first?: string; recent?: string[]; reply?: string; model?: string; effort?: string; tokens?: number }
+type Case = { id?: string; prompt: string; isFirst?: boolean; hereModel?: boolean; models?: string[]; classifier?: string; project?: string; rules?: string; language?: string; first?: string; recent?: string[]; reply?: string; model?: string; effort?: string; tokens?: number; window?: number }
 
 async function runCase($: EngineInterface, k: Case, template?: string) {
   const c: Chat = {
@@ -166,6 +187,7 @@ async function runCase($: EngineInterface, k: Case, template?: string) {
     model: k.model ?? 'claude-opus-5-5',
     now: asLevel(k.effort ?? 'medium'),
     tokens: k.tokens,
+    window: k.window,
     conf: {
       ...cfg,
       project: k.project ?? cfg.project,
@@ -182,7 +204,9 @@ async function runCase($: EngineInterface, k: Case, template?: string) {
     if (!r.isAnswered) return `${k.id ?? '?'}\tERROR ${r.reason}`
     const p = parsePick(r.text, c.models)
     if (!p) return `${k.id ?? '?'}\t${/"where"\s*:\s*"keep"/.test(r.text) ? 'keep' : `UNPARSED ${clip(r.text, 120)}`}`
-    return `${k.id ?? '?'}\t${p.where}\t${p.model}\t${p.effort}\t${p.why}`
+    // The context rule runs too, so a case can check new work in a long chat.
+    const q = preferSession(p, c, c.conf)
+    return `${k.id ?? '?'}\t${q.where}\t${q.model}\t${q.effort}\t${q.why}`
   } catch (err) {
     return `${k.id ?? '?'}\tERROR ${err instanceof Error ? err.message : String(err)}`
   }
@@ -217,18 +241,37 @@ async function availableModels($: EngineInterface, model: string): Promise<Model
 }
 
 let pickedFrom = ''
+// The chat's context at the last pick, for the pane.
+let lastCtx: { tokens: number | null; window: number | null } = { tokens: null, window: null }
+let compactEnv: { pct?: unknown; window?: unknown } | null = null
+
+// The model's window cut to where Claude Code compacts the chat (the environment is read once).
+async function usableWindow($: EngineInterface, window: number | undefined): Promise<number | undefined> {
+  if (!compactEnv) {
+    try {
+      compactEnv = { pct: await $.env.get('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE'), window: await $.env.get('CLAUDE_CODE_AUTO_COMPACT_WINDOW') }
+    } catch {
+      compactEnv = {}
+    }
+  }
+  return compactWindow(window, compactEnv)
+}
 
 async function pick($: EngineInterface, text: string, now: Level | ''): Promise<Pick | null> {
   const messages = await $.session.messages()
   let tokens: number | undefined
+  let window: number | undefined
   try {
-    tokens = (await $.session.usage()).context.tokens
+    const ctx = (await $.session.usage()).context
+    tokens = ctx.tokens
+    window = await usableWindow($, ctx.window)
   } catch {
     tokens = undefined
   }
+  lastCtx = { tokens: tokens ?? null, window: window ?? null }
   const model = seenModel || (await chatModel($))
   const models = await availableModels($, model)
-  const r = await classify($, text, chatOf(messages, now, tokens, model, models))
+  const r = await classify($, text, chatOf(messages, now, tokens, window, model, models))
   if (!r.isAnswered) throw new Error(`pick failed: ${r.reason}`)
   const used = usageOf(r.usage)
   lastClassifier = used ? { model: MODELS[cfg.classifier], usage: used } : null
@@ -236,7 +279,7 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
   if (!baseline) baseline = model
   const parsed = parsePick(r.text, models)
   if (!parsed && !/"where"\s*:\s*"keep"/.test(r.text)) await log($, 'parse', 'reply could not be parsed')
-  const p = parsed && allowed(parsed, cfg)
+  const p = parsed && preferSession(allowed(parsed, cfg), { tokens, window }, cfg)
   const isFirst = !messages.some(m => m.role === 'assistant')
   await log($, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${tokens ?? '?'} tok | first ${isFirst} | ${clip(r.text, 200)}`)
   // The first prompt of a chat has nothing to leave: only its model and effort count.
@@ -327,18 +370,30 @@ function switchNote(p: Pick, model: { from: Model } | null, effort: { now: Level
 
 const statsPath = () => `${home}/.claude/mods-logs/prompt-router-stats.jsonl`
 
-// Notes one routing decision (with what the classifier cost); returns its time stamp.
-async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '') {
+// The prompt's text in a form that repeats when the same question comes again (case and spaces ignored).
+let lastPromptKey = ''
+const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 200)
+
+// Notes one routing decision (with what the classifier cost); returns its time stamp. Every result of
+// decide() passes here once, so the pane's last decision is written here too.
+async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick) {
   const ts = await $.clock.now()
   if (cfg.stats === 'on') {
-    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, outcome, ...(lastClassifier ? { classifier: lastClassifier } : {}) })
+    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}) })
   }
   lastClassifier = null
+  const last: LastDecision = { where: p?.other ? 'other' : where, outcome: outcome === 'asked' ? 'asked' : 'applied', model: to.model, effort: to.effort, why: p?.why ?? '', ts, ...lastCtx }
+  try {
+    // Readers of the atom (the pane) draw again.
+    await update($, LAST, () => last)
+  } catch (err) {
+    await log($, 'pane', err)
+  }
   return ts
 }
 
 async function noteAsked($: EngineInterface, where: Where, p: Pick, now: Level | '') {
-  lastAsked = { ts: await noteDecision($, where, { model: p.model, effort: p.effort }, 'asked', now), where, model: p.model }
+  lastAsked = { ts: await noteDecision($, where, { model: p.model, effort: p.effort }, 'asked', now, p), where, model: p.model }
 }
 
 async function noteAccept($: EngineInterface) {
@@ -364,11 +419,6 @@ async function flush($: EngineInterface) {
     const now = await $.clock.now()
     const text = rotate((await readStats($)) + add, now)
     await $.fs.write(statsPath(), text)
-    const label = savingLabel(summarize(parseLog(text), now).today)
-    if (label !== todayLabel) {
-      todayLabel = label
-      redraw($)
-    }
   } catch (err) {
     await log($, 'stats', err)
   }
@@ -380,6 +430,7 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   if (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge') return e
   const text = typed(e.text)
   if (!text || text.startsWith('/')) return e
+  lastPromptKey = promptKey(text)
   turnLevel = null
   lastAsked = null
   lastClassifier = null
@@ -438,7 +489,7 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     }
     const changed = { model: askModel || !changes.some(c => c.startsWith('Model')) ? pickedFrom : p.model, effort: askEffort || !changes.some(c => c.startsWith('Effort')) ? now : p.effort }
     if (askModel || askEffort) await noteAsked($, 'here', p, now)
-    else await noteDecision($, 'here', changed, 'applied', now)
+    else await noteDecision($, 'here', changed, 'applied', now, p)
     return askModel || askEffort ? { ...e, text: `${e.text}\n\n[${switchNote(p, askModel, askEffort)}]` } : e
   }
   await noteAsked($, p.where, p, now)
@@ -446,6 +497,46 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   // `context` does not reach the model for prompts from the app, so the note rides on the text.
   const inApp = p.where === 'session' ? await canStartSession($) : true
   return ({ ...e, text: `${e.text}\n\n[${askNote(p, now, !!e.turnId, inApp)}]` })
+}
+
+// /router on|off and the pane's switch: stored for the next sessions, and a held level or model let go.
+async function setEnabled($: EngineInterface, on: boolean) {
+  enabled = on
+  await $.store.set('enabled', enabled)
+  if (!enabled) {
+    hold = null
+    turnLevel = null
+    modelHold = null
+    await $.state.set(OVERRIDE, null)
+    await $.state.set(MODEL_HOLD, null)
+  }
+  redraw($)
+}
+
+// The switches the pane offers, in the order a press steps through them (newSessionAt from low to off).
+const PANE_SWITCHES = [
+  { key: 'effortDetection', label: 'Effort detection', values: SWITCHES.effortDetection },
+  { key: 'midChatModelDetection', label: 'Mid-chat model', values: SWITCHES.midChatModelDetection },
+  { key: 'sessionSuggestions', label: 'Session suggestions', values: SWITCHES.sessionSuggestions },
+  { key: 'newSessionAt', label: 'New session at', values: ['40%', '50%', '60%', '70%', 'off'] },
+] as const satisfies readonly { key: Switch; label: string; values: readonly string[] }[]
+
+// Saves one option as /config does (settings.json pluginConfigs, through the engine), and goes by it now.
+async function saveOption($: EngineInterface, k: Switch, value: string) {
+  try {
+    const row = (await $.config.list()).find(r => r.key === `${NAME}.${k}` || (r.provider?.plugin === NAME && r.key.endsWith(`.${k}`)))
+    const r = await $.config.set({ key: row?.key ?? `${NAME}.${k}`, value })
+    if (r.deny) {
+      await log($, 'save option', `${k}: ${r.deny}`)
+      return
+    }
+  } catch (err) {
+    await log($, 'save option', err)
+    return
+  }
+  opts = { ...opts, [k]: value }
+  cfg = toConfig(opts)
+  redraw($)
 }
 
 // The engine reads options only under the full id (prompt-router@<marketplace>), so options saved
@@ -477,6 +568,50 @@ async function loadOptions($: EngineInterface) {
   await log($, 'effective options', `${$.plugin.root} | ${optionsLine(opts)}`)
 }
 
+// What the pane draws, read fresh on every draw (the atom read subscribes it to the next decision).
+async function paneData($: EngineInterface) {
+  const now = await $.clock.now()
+  const last = await read($, LAST)
+  let tokens = last?.tokens ?? null
+  let window = last?.window ?? null
+  try {
+    const ctx = (await $.session.usage()).context
+    if (ctx.tokens) {
+      tokens = ctx.tokens
+      window = (await usableWindow($, ctx.window)) ?? window
+    }
+  } catch {
+    // The last decision's numbers stand.
+  }
+  const win = window && window > 0 ? window : DEFAULT_WINDOW
+  const share = tokens ? (tokens / win) * 100 : null
+  const at = cfg.sessionSuggestions === 'off' ? 0 : Number.parseInt(cfg.newSessionAt, 10) || 0
+  const model = knownModel(seenModel || (await chatModel($)))
+  const effort = await currentLevel($)
+  let savings: { report: Report; days: ReturnType<typeof byDay> } | null = null
+  if (cfg.stats === 'on') {
+    const records = [...parseLog(await readStats($)), ...pending]
+    savings = { report: summarize(records, now), days: byDay(records, now, 14) }
+  }
+  return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
+}
+
+// openPane on: opens the pane unasked at the session's start (placed from 144 terminal columns,
+// 110 once the person has opened it), and once more on the first prompt, which counts as asked.
+async function openPaneUnasked($: EngineInterface, onPrompt: boolean) {
+  if (cfg.openPane !== 'on' || paneOpened) return
+  try {
+    if ((await $.ui.panes()).some(x => x.id === PANE && x.isPlaced)) {
+      paneOpened = true
+      return
+    }
+    const r = await $.ui.open({ id: PANE, title: PANE_TITLE })
+    if (r.isPlaced || onPrompt) paneOpened = true
+  } catch (err) {
+    await log($, 'open pane', err)
+  }
+}
+
 export const register: Register = (on, options) => {
   given = { ...options }
   opts = given
@@ -487,16 +622,16 @@ export const register: Register = (on, options) => {
     pending = []
     baseline = ''
     routed = ''
+    effortBase = ''
+    routedLevel = ''
+    stepEffort = null
     lastAsked = null
     lastClassifier = null
     routedAgents.clear()
-    try {
-      todayLabel = savingLabel(summarize(parseLog(await readStats($)), await $.clock.now()).today)
-    } catch {
-      todayLabel = ''
-    }
+    agentSteps.clear()
+    lastTurnModel = ''
     await loadOptions($)
-    await $.command.register({ name: 'router', description: 'Prompt Router: status, off / on, or stats', argumentHint: '[off|on|stats]' })
+    await $.command.register({ name: 'router', description: 'Prompt Router: status, off / on, stats, or the panel', argumentHint: '[off|on|stats|panel]' })
     await $.tool.register({
       name: 'test',
       description: 'Test the Prompt Router classifier: runs each case through the same model call as a live prompt and returns one line per case (id, where, model, effort, why).',
@@ -516,6 +651,7 @@ export const register: Register = (on, options) => {
                 model: { type: 'string' },
                 effort: { type: 'string' },
                 tokens: { type: 'number' },
+                window: { type: 'number', description: "The model's context window in tokens (default 200000)" },
                 project: { type: 'string', description: 'Overrides the project option for this case' },
                 rules: { type: 'string', description: 'Overrides the rules option for this case' },
                 language: { type: 'string', description: 'Overrides the language option for this case' },
@@ -553,10 +689,13 @@ export const register: Register = (on, options) => {
     if (kept && enabled) hold = { level: kept, base: '' }
     const keptModel = (await $.state.get(MODEL_HOLD)).value
     if (keptModel && enabled) modelHold = { model: keptModel, base: '' }
+    paneOpened = false
+    await openPaneUnasked($, false)
     return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
+    await openPaneUnasked($, true)
     let out = e
     try {
       out = await decide($, e)
@@ -568,8 +707,13 @@ export const register: Register = (on, options) => {
 
   // Every main-chat request: note its level and model, and put the chosen level on it.
   on('turn.step', async function* ($, e, next) {
+    if (e.agentId !== undefined && routedAgents.has(e.agentId)) agentSteps.set(e.agentId, (agentSteps.get(e.agentId) ?? 0) + 1)
     if (e.agentId !== undefined || typeof e.effort !== 'string') return yield* next(e)
     lastEffort = e.effort
+    if (!hold && !(routedLevel && e.effort === routedLevel)) {
+      routedLevel = ''
+      effortBase = e.effort
+    }
     // Without the router the chat runs on the person's own pick; a model the router set keeps the old one.
     if (!modelHold && !(routed && knownModel(e.model) === knownModel(routed))) {
       routed = ''
@@ -595,6 +739,7 @@ export const register: Register = (on, options) => {
     const held = enabled && hold ? hold.level : null
     seen = held ?? (asLevel(e.effort) || seen)
     const want = turnLevel ?? held
+    stepEffort = { effort: asLevel(want ?? e.effort), base: asLevel(effortBase) }
     const step = heldModel && heldModel !== e.model ? { ...e, model: heldModel } : e
     if (!want || want === e.effort) return yield* next(step)
     return yield* next({ ...step, effort: want })
@@ -606,7 +751,15 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     try {
       if (enabled && lastAsked?.where === 'subagent' && 'model' in r && knownModel(r.model) === lastAsked.model) {
-        if (r.agentId) routedAgents.set(r.agentId, baseline || seenModel)
+        if (r.agentId) {
+          let context = 0
+          try {
+            context = (await $.session.usage()).context.tokens ?? 0
+          } catch {
+            // Unknown context: the subagent is priced by its own tokens alone.
+          }
+          routedAgents.set(r.agentId, { base: baseline || seenModel, context })
+        }
         await noteAccept($)
       }
     } catch (err) {
@@ -622,8 +775,19 @@ export const register: Register = (on, options) => {
     try {
       const usage = usageOf(r.usage)
       const model = r.usage?.model ?? (e.agentId ? '' : seenModel)
-      const base = e.agentId ? (routedAgents.get(e.agentId) ?? model) : baseline || model
-      pending.push({ kind: 'turn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, ...(e.agentId ? { agentId: e.agentId } : {}), model, baseline: base, ...(usage ? { usage } : {}) })
+      const agent = e.agentId ? routedAgents.get(e.agentId) : undefined
+      const base = e.agentId ? (agent?.base ?? model) : baseline || model
+      const requests = e.agentId ? (agentSteps.get(e.agentId) ?? 0) : 0
+      if (e.agentId) agentSteps.delete(e.agentId)
+      // The router moved this chat to another model since the last turn (not the person's own switch).
+      const switched = !e.agentId && !!lastTurnModel && !!model && model !== lastTurnModel && model !== base
+      if (!e.agentId && model) lastTurnModel = model
+      pending.push({
+        kind: 'turn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, ...(e.agentId ? { agentId: e.agentId } : {}), model, baseline: base, ...(usage ? { usage } : {}),
+        ...(agent?.context && requests ? { mainContext: agent.context, requests } : {}),
+        ...(switched ? { switched: true } : {}),
+        ...(!e.agentId && stepEffort?.effort && stepEffort.base ? { effort: stepEffort.effort, baseEffort: stepEffort.base } : {}),
+      })
       await flush($)
     } catch (err) {
       await log($, 'stats', err)
@@ -680,16 +844,12 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'router' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'off' || arg === 'on') {
-      enabled = arg === 'on'
-      await $.store.set('enabled', enabled)
-      if (!enabled) {
-        hold = null
-        turnLevel = null
-        modelHold = null
-        await $.state.set(OVERRIDE, null)
-        await $.state.set(MODEL_HOLD, null)
-      }
+      await setEnabled($, arg === 'on')
       return { text: enabled ? 'Prompt Router is on.' : 'Prompt Router is off. Turn it back on with /router on.' }
+    }
+    if (arg === 'panel' || arg === 'pane') {
+      const r = await $.ui.open({ id: PANE, title: PANE_TITLE })
+      return { text: r.isPlaced ? 'Prompt Router pane opened.' : `The Prompt Router pane could not open${r.reason ? `: ${r.reason}` : ''}.` }
     }
     if (arg === 'stats') {
       if (cfg.stats !== 'on') return { text: 'Prompt Router stats are off (option stats). Turn them on with "stats": "on".' }
@@ -717,8 +877,280 @@ export const register: Register = (on, options) => {
         ...describeOptions(opts).map(l => `  ${l}`),
         cfgNote,
         'Commands: /router off, /router on, /router stats.',
+        'The pane beside the chat: /router panel.',
       ].filter(Boolean).join('\n'),
     }
+  })
+
+  // The pane beside the chat: context, the last decision, the savings and the main switches.
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const d = await paneData($)
+    const press = (k: 'enabled' | Switch) => async () => {
+      if (k === 'enabled') return setEnabled($, !enabled)
+      const sw = PANE_SWITCHES.find(x => x.key === k)
+      if (!sw) return
+      const vals: readonly string[] = sw.values
+      await saveOption($, k, vals[(vals.indexOf(cfg[k]) + 1) % vals.length] ?? vals[0]!)
+    }
+    const switches = [{ key: 'enabled' as const, label: 'Router', value: enabled ? 'on' : 'off' }, ...PANE_SWITCHES.map(x => ({ key: x.key, label: x.label, value: String(cfg[x.key]) }))]
+    const where = d.last ? WHERE_LABEL[d.last.where] : null
+    const lm = d.last ? knownModel(d.last.model) : ''
+    const lastModel = d.last ? `${lm ? MODEL_NAMES[lm] : d.last.model || '?'} · ${d.last.effort ? NAMES[d.last.effort] : '?'}` : ''
+    const age = d.last ? d.now - d.last.ts : Infinity
+    const ctxLine = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'Context not known yet'
+    const atLine = d.at ? `New session at ${d.at}%` : 'New-session rule off'
+
+    const s = d.savings?.report[panePeriod] ?? null
+    const pickPeriod = (k: typeof panePeriod) => async () => {
+      panePeriod = k
+      redraw($)
+    }
+    const money = (v: number) => (Math.abs(v) < 0.005 ? 'none' : v > 0 ? 'up' : 'down')
+    const MONEY_COLOR = { up: TONES.calm[0], down: TONES.over[0], none: undefined }
+    const balanceColor = s ? MONEY_COLOR[money(s.balanceUsd)] : undefined
+    const verdict = !s || s.withoutUsd <= 0
+      ? 'No priced work in this period yet.'
+      : `${s.balanceUsd >= 0.005 ? 'saved' : s.balanceUsd <= -0.005 ? 'lost' : 'even'} · ${Math.round(Math.abs(s.balancePct))} % of ${usd(s.withoutUsd)}, what the work would have cost without the router`
+    const perPrompt = s && s.prompts ? `$${(s.classifierUsd / s.prompts).toFixed(3)}` : '$0'
+    const activity = s ? `${s.prompts} prompts · ${s.modelChanges} model changes · effort ↓${s.effortDown} ↑${s.effortUp} · ${s.subagents} subagents · ${s.sessions} new sessions` : ''
+    const NOTE = 'An estimate from list prices. Effort is a guess (output tokens weighted per level). Full table: /router stats.'
+
+    // The terminal's bill for the picked period (fixed columns, so label left and value right lines
+    // up): what it would have cost, what it cost, and where the difference came from (the parts add
+    // up to the balance). The desktop pane stacks the same figures instead.
+    const billView = (Box: any, Text: any) => {
+      if (!s) return null
+      const row = (key: string, label: string, text: string, o: { dim?: boolean; bold?: boolean; color?: string } = {}) => (
+        <Box key={key} flexDirection="row" justifyContent="space-between">
+          <Text dimColor={o.dim} bold={o.bold}>{label}</Text>
+          <Text dimColor={o.dim} bold={o.bold} color={o.color}>{text}</Text>
+        </Box>
+      )
+      const parts = [
+        ['cheaper', 'Cheaper model', s.savedUsd],
+        ['stronger', 'Stronger model', -s.extraUsd],
+        ['effort', 'Effort (estimate)', s.effortUsd],
+        ['classifier', 'Classifier', -s.classifierUsd],
+      ] as const
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="column">
+            {row('without', 'Without the router', usd(s.withoutUsd))}
+            {row('with', 'With the router', usd(s.actualUsd + s.classifierUsd))}
+            {row('work', '  the work', usd(s.actualUsd), { dim: true })}
+            {row('cls', s.prompts ? `  classifier · ${s.prompts} prompts × ${perPrompt}` : '  classifier', usd(s.classifierUsd), { dim: true })}
+          </Box>
+          <Box flexDirection="column">
+            <Text dimColor>Where the difference came from</Text>
+            {parts.map(([k, label, v]) => row(`part-${k}`, `  ${label}`, money(v) === 'none' ? '$0.00' : signed(v), { dim: money(v) === 'none', color: MONEY_COLOR[money(v)] }))}
+            {row('balance', 'Balance', signed(s.balanceUsd), { bold: true, color: balanceColor })}
+          </Box>
+          <Box flexDirection="column">
+            {row('accuracy', s.routed ? `Accuracy (estimate) · ${s.rework} re-work of ${s.routed} routed` : 'Accuracy (estimate)', s.accuracyPct === null ? '–' : `${Math.round(s.accuracyPct)} %`, { bold: true })}
+            {row('reference', `Vs. always ${REFERENCE.model} ${REFERENCE.effort}`, signed(s.vsReferenceUsd), { color: MONEY_COLOR[money(s.vsReferenceUsd)] })}
+            {row('perturn', s.pricedTurns ? `Cost per turn · ${s.pricedTurns} turns` : 'Cost per turn', usd(s.perTurnUsd), { dim: true })}
+          </Box>
+        </Box>
+      )
+    }
+    const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
+
+    if (e.surface === 'terminal') {
+      const { Box, Text, Button } = $.ui.resolve(e)
+      const cells = Math.max(8, Math.min(24, (e.props.bodyColumns ?? 40) - 8))
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="column">
+            <Text bold>{`Prompt Router · ${enabled ? 'on' : 'off'}`}</Text>
+            <Text>{d.header}</Text>
+            <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
+            <Text dimColor>{`${ctxLine} · ${atLine}`}</Text>
+          </Box>
+          <Box flexDirection="column">
+            <Text dimColor>{d.last ? `${age < 60_000 ? '● ' : ''}Last decision · ${ago(age)}` : 'Last decision'}</Text>
+            {d.last && where ? (
+              <Box flexDirection="column">
+                <Text bold>{`${where.glyph} ${where.text}${d.last.outcome === 'asked' ? ' (asked)' : ''}`}</Text>
+                <Text>{lastModel}</Text>
+                {d.last.why ? <Text dimColor>{d.last.why}</Text> : null}
+              </Box>
+            ) : (
+              <Text dimColor>No decision yet. The router's call on your next prompt shows here.</Text>
+            )}
+          </Box>
+          {d.savings && s ? (
+            <Box flexDirection="column" gap={1}>
+              <Box flexDirection="row" gap={1}>
+                <Text dimColor>Savings</Text>
+                {PERIODS.map(([k, label]) => (
+                  <Button key={`period-${k}`} plain label={k === panePeriod ? `[${label}]` : label} onPress={pickPeriod(k)} />
+                ))}
+              </Box>
+              <Box flexDirection="column">
+                <Text bold color={balanceColor}>{signed(s.balanceUsd)}</Text>
+                <Text dimColor>{verdict}</Text>
+              </Box>
+              {billView(Box, Text)}
+              <Box flexDirection="column">
+                <Text color="claude">{sparkText(d.savings.days.map(x => x.balanceUsd))}</Text>
+                <Text dimColor>balance per day, last 14 days</Text>
+              </Box>
+              <Text dimColor>{activity}</Text>
+              <Text dimColor>{NOTE}</Text>
+            </Box>
+          ) : (
+            <Text dimColor>Stats are off (option stats).</Text>
+          )}
+          <Box flexDirection="column">
+            <Text dimColor>Switches</Text>
+            {switches.map((x, i) => (
+              <Button key={`toggle-${x.key}`} hotkey={String(i + 1)} plain label={`${x.label}: ${x.value}`} onPress={press(x.key)} />
+            ))}
+          </Box>
+        </Box>
+      )
+    }
+
+    const { Box, Text, Button, Svg } = $.ui.resolve(e)
+    const px = Math.max(220, Math.min(460, (e.props.bodyColumns ?? 40) * 7))
+    const accent = TONES[d.tone][0]
+    return (
+      <Box flexDirection="column" gap={2} padding={1}>
+        <Box flexDirection="row" gap={2} alignItems="center">
+          <Svg source={ringSvg(d.share, d.at)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} width={104} height={104} isInteractive />
+          <Box flexDirection="column" gap={1}>
+            <Text dimColor>{`PROMPT ROUTER · ${enabled ? 'ON' : 'OFF'}`}</Text>
+            <Text bold>{d.header}</Text>
+            <Text dimColor>{ctxLine}</Text>
+            <Text color={accent}>{atLine}</Text>
+          </Box>
+        </Box>
+        <Box flexDirection="column" gap={1} borderStyle="round" padding={1}>
+          <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+            <Box flexDirection="row" gap={1} alignItems="center">
+              {d.last ? <Svg source={pulseSvg(age)} alt={age < 60_000 ? 'Fresh decision' : 'Decision'} width={18} height={18} isInteractive /> : null}
+              <Text dimColor>LAST DECISION</Text>
+            </Box>
+            {d.last ? <Text dimColor>{ago(age)}</Text> : null}
+          </Box>
+          {d.last && where ? (
+            <Box flexDirection="column" gap={1}>
+              <Text bold>{`${where.glyph}  ${where.text}`}</Text>
+              <Text>{`${lastModel}${d.last.outcome === 'asked' ? ' · asked you' : ''}`}</Text>
+              {d.last.why ? <Text dimColor>{`“${d.last.why}”`}</Text> : null}
+            </Box>
+          ) : (
+            <Text dimColor>No decision yet. The router's call on your next prompt shows here.</Text>
+          )}
+        </Box>
+        {d.savings && s ? (
+          <Box flexDirection="column" gap={2} borderStyle="round" padding={1}>
+            {/* Title, then the period switch on its own row: three short buttons always fit. */}
+            <Box flexDirection="column" gap={1}>
+              <Text dimColor>SAVINGS</Text>
+              <Box flexDirection="row" gap={1}>
+                {PERIODS.map(([k, label]) => (
+                  <Button key={`period-${k}`} label={label} variant={k === panePeriod ? 'primary' : 'secondary'} onPress={pickPeriod(k)} />
+                ))}
+              </Box>
+            </Box>
+            {/* The one number to read first. */}
+            <Box flexDirection="column">
+              <Text dimColor>Balance</Text>
+              <Text bold color={balanceColor}>{signed(s.balanceUsd)}</Text>
+              <Text dimColor>{verdict}</Text>
+            </Box>
+            {/* Everything below is stacked, label above value, so nothing wraps into its neighbour. */}
+            <Box flexDirection="column" gap={1}>
+              <Box flexDirection="column">
+                <Text dimColor>Without the router</Text>
+                <Text bold>{usd(s.withoutUsd)}</Text>
+              </Box>
+              <Box flexDirection="column">
+                <Text dimColor>With the router</Text>
+                <Text bold>{usd(s.actualUsd + s.classifierUsd)}</Text>
+                <Text dimColor>{`the work ${usd(s.actualUsd)} + classifier ${usd(s.classifierUsd)}`}</Text>
+              </Box>
+            </Box>
+            {(() => {
+              // The parts add up to the balance: a bar scaled to the largest one, then its signed value.
+              const parts = [
+                ['cheaper', 'Cheaper model', s.savedUsd],
+                ['stronger', 'Stronger model', -s.extraUsd],
+                ['effort', 'Effort (estimate)', s.effortUsd],
+                ['classifier', 'Classifier', -s.classifierUsd],
+              ] as const
+              const top = Math.max(0.005, ...parts.map(p => Math.abs(p[2])))
+              const bar = Math.max(80, px - 110)
+              return (
+                <Box flexDirection="column" gap={1}>
+                  <Text dimColor>Where the difference came from</Text>
+                  {parts.map(([k, label, v]) => {
+                    const m = money(v)
+                    const text = m === 'none' ? '$0.00' : signed(v)
+                    return (
+                      <Box key={`part-${k}`} flexDirection="column">
+                        <Text>{label}</Text>
+                        <Box flexDirection="row" gap={1} alignItems="center">
+                          <Svg source={partBarSvg(Math.abs(v) / top, MONEY_COLOR[m] ?? TONES.idle[0], bar, 8)} alt={`${label}: ${text}`} width={bar} height={8} />
+                          <Text bold={m !== 'none'} dimColor={m === 'none'} color={MONEY_COLOR[m]}>{text}</Text>
+                        </Box>
+                        {k === 'classifier' ? <Text dimColor>{s.prompts ? `${s.prompts} prompts × ${perPrompt} per prompt` : 'No prompts classified yet'}</Text> : null}
+                      </Box>
+                    )
+                  })}
+                </Box>
+              )
+            })()}
+            <Box flexDirection="column" gap={1}>
+              <Box flexDirection="column">
+                <Text dimColor>{`Vs. always ${REFERENCE.model} ${REFERENCE.effort}`}</Text>
+                <Text bold color={MONEY_COLOR[money(s.vsReferenceUsd)]}>{signed(s.vsReferenceUsd)}</Text>
+              </Box>
+              <Box flexDirection="column">
+                <Text dimColor>{s.pricedTurns ? `Cost per turn · ${s.pricedTurns} turns` : 'Cost per turn'}</Text>
+                <Text>{usd(s.perTurnUsd)}</Text>
+              </Box>
+            </Box>
+            <Box flexDirection="column" gap={1}>
+              <Svg source={sparkSvg(d.savings.days.map(x => x.balanceUsd), d.savings.days.map(x => `${x.day}: ${signed(x.balanceUsd)}`), px, 64)} alt={`Balance per day, last 14 days: ${d.savings.days.map(x => signed(x.balanceUsd)).join(', ')}`} width={px} height={64} isInteractive />
+              <Text dimColor>Balance per day, last 14 days</Text>
+            </Box>
+            <Text dimColor>{activity}</Text>
+            <Text dimColor>{NOTE}</Text>
+          </Box>
+        ) : (
+          <Text dimColor>Stats are off (option stats).</Text>
+        )}
+        <Box flexDirection="column" gap={1}>
+          <Text dimColor>SWITCHES</Text>
+          {switches.map(x => (
+            <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+              <Text>{x.label}</Text>
+              <Button key={`toggle-${x.key}`} label={x.value} variant={x.key === 'enabled' && !enabled ? 'primary' : 'secondary'} onPress={press(x.key)} />
+            </Box>
+          ))}
+        </Box>
+      </Box>
+    )
+  })
+
+  // The band above the prompt: the pane's headline in one line, always in view, no extra tab.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (!enabled || cfg.band === 'off' || e.props.hasSurvey) return next(e)
+    const d = await paneData($)
+    const parts = [
+      d.header,
+      d.share !== null ? `context ${Math.round(d.share)} %${d.at ? ` of ${d.at} %` : ''}` : '',
+      d.savings ? `today ${signed(d.savings.report.today.balanceUsd)} · 7 days ${signed(d.savings.report.week.balanceUsd)}` : '',
+    ].filter(Boolean)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    return (
+      <Box flexDirection="row" justifyContent="space-between" alignItems="center">
+        <Text color={ACCENT} wrap="truncate-end">Router · {parts.join(' · ')}</Text>
+        <Button key="open-pane" label="Panel" variant="secondary" onPress={async () => { await $.ui.open({ id: PANE, title: PANE_TITLE }) }} />
+      </Box>
+    )
   })
 
   // The app's effort menu does not move, so the footer names the level the mod really sends.
@@ -726,9 +1158,9 @@ export const register: Register = (on, options) => {
     if (!enabled || cfg.notifications === 'off') return next(e)
     const { value } = await $.state.get(OVERRIDE)
     const { value: model } = await $.state.get(MODEL_HOLD)
-    const saving = cfg.stats === 'on' ? todayLabel : ''
-    if (!value && !model && !saving) return next(e)
-    const label = [model ? MODEL_NAMES[model] : '', value ? `Effort ${SHORT[value]}` : '', saving].filter(Boolean).join(' · ')
+    // Only what the router holds: its model and its effort. The saving is in the pane and the band.
+    if (!value && !model) return next(e)
+    const label = [model ? MODEL_NAMES[model] : '', value ? `Effort ${SHORT[value]}` : ''].filter(Boolean).join(' · ')
     if (e.surface === 'desktop' || e.surface === 'vscode') {
       const { Text } = $.ui.resolve(e)
       return <Text color={ACCENT}>{label}</Text>

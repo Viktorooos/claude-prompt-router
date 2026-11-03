@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { byDay, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
-import type { Accept, Decision, Turn } from '../core/stats.ts'
+import { EFFORT_OUTPUT, REFERENCE, byDay, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
+import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
 function close(a: number | null, b: number) {
@@ -76,6 +76,51 @@ test('the same model on both sides costs the same, a reported cost wins over the
 test('a subagent turn is priced against the main chat model', () => {
   const s = summarize([turn('haiku', 'opus', { agentId: 'a1' })], NOW).today
   close(s.savedUsd, cost(U, 'opus')! - cost(U, 'haiku')!)
+})
+
+test("a routed subagent also saves the main chat's context its requests did not read", () => {
+  const s = summarize([turn('haiku', 'opus', { agentId: 'a1', mainContext: 150_000, requests: 4 })], NOW).today
+  const without = cost({ ...U, cacheRead: U.cacheRead + 600_000 }, 'opus')!
+  close(s.withoutUsd, without)
+  close(s.savedUsd, without - cost(U, 'haiku')!)
+})
+
+test('a routed subagent on the main model still saves the context it did not carry', () => {
+  const s = summarize([turn('opus', 'opus', { agentId: 'a1', mainContext: 100_000, requests: 2 })], NOW).today
+  close(s.savedUsd, cost({ ...U, cacheRead: U.cacheRead + 200_000 }, 'opus')! - cost(U, 'opus')!)
+  expect(s.extraUsd).toBe(0)
+})
+
+test('a turn the router switched models on: the cache it rewrote counts against it', () => {
+  const s = summarize([turn('opus', 'haiku', { switched: true })], NOW).today
+  const without = cost({ ...U, cacheRead: U.cacheRead + U.cacheWrite, cacheWrite: 0 }, 'haiku')!
+  close(s.withoutUsd, without)
+  close(s.extraUsd, cost(U, 'opus')! - without)
+})
+
+test('a lower effort is priced apart, as an estimate: the output the person’s own level would have made', () => {
+  const s = summarize([turn('opus', 'opus', { effort: 'low', baseEffort: 'high' })], NOW).today
+  const without = cost({ ...U, output: U.output * (EFFORT_OUTPUT.high / EFFORT_OUTPUT.low) }, 'opus')!
+  close(s.withoutUsd, without)
+  close(s.effortUsd, without - cost(U, 'opus')!)
+  expect(s.savedUsd).toBe(0)
+  close(s.balanceUsd, s.effortUsd)
+})
+
+test('a model change and a higher effort on one turn: each part apart, the balance takes both', () => {
+  const s = summarize([turn('haiku', 'opus', { effort: 'high', baseEffort: 'medium' })], NOW).today
+  const sameEffort = cost(U, 'opus')!
+  close(s.savedUsd, sameEffort - cost(U, 'haiku')!)
+  close(s.effortUsd, cost({ ...U, output: U.output * (EFFORT_OUTPUT.medium / EFFORT_OUTPUT.high) }, 'opus')! - sameEffort)
+  expect(s.effortUsd < 0).toBe(true)
+  close(s.balanceUsd, s.savedUsd + s.effortUsd)
+})
+
+test('the balance is the cost without the router minus the work and the classifier, the stronger model included', () => {
+  const s = summarize([turn('opus', 'sonnet'), turn('haiku', 'opus'), decision({ classifier: { model: 'haiku', usage: U, usd: 0.01 } })], NOW).today
+  close(s.balanceUsd, s.withoutUsd - s.actualUsd - 0.01)
+  close(s.balanceUsd, s.savedUsd - s.extraUsd - 0.01)
+  close(s.balancePct, (s.balanceUsd / s.withoutUsd) * 100)
 })
 
 test('today, 7 days and total cover their own time', () => {
@@ -158,11 +203,12 @@ test('rotate drops lines older than 90 days and the oldest lines over the size c
   expect(rotate('', NOW)).toBe('')
 })
 
-test('statsText shows the three periods, the net saving and the extra cost apart', () => {
+test('statsText shows the three periods, the balance and its parts apart', () => {
   const t = statsText(summarize([turn('haiku', 'opus'), turn('opus', 'sonnet'), decision({ classifier: { model: 'haiku', usage: U, usd: 0.001 } })], NOW))
   expect(t).toMatch(/Today\s+7 days\s+Total/)
-  expect(t).toMatch(/Net saving/)
+  expect(t).toMatch(/Balance/)
   expect(t).toMatch(/Classifier/)
+  expect(t).toMatch(/Effort \(estimate\)/)
   expect(t).toMatch(/Extra cost \(stronger model\)/)
   expect(t).toMatch(/estimate/i)
   expect(t).toMatch(/Effort lower \/ higher/)
@@ -171,7 +217,7 @@ test('statsText shows the three periods, the net saving and the extra cost apart
 test('savingLabel is short, empty when there is nothing to show', () => {
   expect(savingLabel(summarize([], NOW).today)).toBe('')
   const s = summarize([turn('haiku', 'opus', { usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } })], NOW).today
-  expect(savingLabel(s)).toBe(`saved $${s.netUsd.toFixed(2)} today`)
+  expect(savingLabel(s)).toBe(`saved $${s.balanceUsd.toFixed(2)} today`)
   const loss = summarize([decision({ classifier: { model: 'opus', usage: U, usd: 0.05 } })], NOW).today
   expect(savingLabel(loss)).toBe('router cost $0.05 today')
 })
@@ -183,9 +229,72 @@ test('statsHtml is one page with the periods, a bar per day and the estimate not
   expect(html).toMatch(/<svg/)
   expect((html.match(/<rect class="bar/g) ?? []).length).toBe(30)
   expect(html).toMatch(/2026-10-31/)
-  expect(html).toMatch(/Net saving/)
+  expect(html).toMatch(/Balance/)
   expect(html).toMatch(/Extra cost \(stronger model\)/)
   expect(html).toMatch(/estimate/i)
   expect(html).toMatch(/prefers-color-scheme: dark/)
   expect(html).not.toMatch(/<script/)
+})
+
+test('the reference is one fixed model and effort, the same for every chat whatever its own pick', () => {
+  expect(REFERENCE).toEqual({ model: 'opus', effort: 'medium' })
+  // A Haiku-low chat escalated to Opus high: a loss against its own pick, priced fairly against the reference.
+  const t = turn('opus', 'haiku', { effort: 'high', baseEffort: 'low' })
+  const s = summarize([t], NOW).today
+  expect(s.balanceUsd < 0).toBe(true)
+  const ref = cost({ ...U, output: U.output * (EFFORT_OUTPUT.medium / EFFORT_OUTPUT.high) }, 'opus')!
+  close(s.referenceUsd, ref)
+  close(s.vsReferenceUsd, ref - cost(U, 'opus')!)
+  // The same turn in an Opus-medium chat lands on the same reference number.
+  const o = summarize([turn('opus', 'opus', { effort: 'high', baseEffort: 'medium' })], NOW).today
+  close(o.referenceUsd, s.referenceUsd)
+  close(o.vsReferenceUsd, s.vsReferenceUsd)
+})
+
+test('versus the reference: cheaper turns win, the classifier counts, the percent is of the reference', () => {
+  const cls = { model: 'haiku', usage: U, usd: 0.01 }
+  const s = summarize([turn('haiku', 'haiku', { effort: 'medium', baseEffort: 'medium' }), decision({ classifier: cls })], NOW).today
+  close(s.referenceUsd, cost(U, 'opus')!)
+  close(s.vsReferenceUsd, cost(U, 'opus')! - cost(U, 'haiku')! - 0.01)
+  close(s.vsReferencePct, (s.vsReferenceUsd / s.referenceUsd) * 100)
+})
+
+test("a routed subagent's reference also reads the main chat's context it did not carry", () => {
+  const s = summarize([turn('haiku', 'opus', { agentId: 'a', mainContext: 10_000, requests: 3 })], NOW).today
+  close(s.referenceUsd, cost({ ...U, cacheRead: U.cacheRead + 30_000 }, 'opus')!)
+})
+
+test('cost per turn is the cost with the router over the priced turns, unknown turns left out', () => {
+  const cls = { model: 'haiku', usage: U, usd: 0.02 }
+  const s = summarize([turn('haiku', 'opus'), turn('opus', 'opus'), turn('opus', 'opus', { usage: undefined }), decision({ classifier: cls })], NOW).today
+  expect(s.pricedTurns).toBe(2)
+  close(s.perTurnUsd, (cost(U, 'haiku')! + cost(U, 'opus')! + 0.02) / 2)
+  expect(summarize([], NOW).today.perTurnUsd).toBe(0)
+  expect(summarize([], NOW).today.vsReferencePct).toBe(0)
+})
+
+test('statsText shows the reference line and the cost per turn', () => {
+  const t = statsText(summarize([turn('haiku', 'opus')], NOW))
+  expect(t).toMatch(/Vs\. always opus medium/)
+  expect(t).toMatch(/Cost per turn/)
+})
+
+test('a routed prompt that comes again within three prompts counts as re-work', () => {
+  const cheap = { model: 'haiku', effort: 'low' as const }
+  const routed = (ts: number, key: string) => decision({ ts, key, from: { model: 'opus', effort: 'medium' }, to: cheap })
+  const records: Entry[] = [
+    routed(NOW - 5 * HOUR, 'why is it slow'),
+    decision({ ts: NOW - 4 * HOUR, key: 'thanks', from: { model: 'opus', effort: 'medium' }, to: { model: 'opus', effort: 'medium' } }),
+    routed(NOW - 3 * HOUR, 'why is it slow'),
+    routed(NOW - 2 * HOUR, 'fix the parser'),
+    routed(NOW - HOUR, 'rename the field'),
+  ]
+  const total = summarize(records, NOW).total
+  expect(total.routed).toBe(4)
+  expect(total.rework).toBe(1)
+  expect(Math.round(total.accuracyPct ?? NaN)).toBe(75)
+})
+
+test('accuracy is null when nothing was routed', () => {
+  expect(summarize([decision({ key: 'hi' })], NOW).total.accuracyPct).toBe(null)
 })

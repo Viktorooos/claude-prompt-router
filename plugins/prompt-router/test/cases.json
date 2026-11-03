@@ -1585,5 +1585,50 @@
     "prompt": "ahoj",
     "isFirst": false,
     "hereModel": true
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "tokens": 120000,
+    "window": 200000,
+    "isFirst": false,
+    "hereModel": true,
+    "id": "ctx_new_work",
+    "prompt": "now add a screen for the pet's vet visits, with a list and a form to add one"
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "tokens": 120000,
+    "window": 200000,
+    "isFirst": false,
+    "hereModel": true,
+    "id": "ctx_question",
+    "prompt": "why did you read the weights from PetRepository and not from the API directly?"
+  },
+  {
+    "first": "Add a pet weight chart to the pet detail screen",
+    "recent": [
+      "use the same colors as the vaccination timeline"
+    ],
+    "reply": "Done: the chart reads weights from PetRepository, uses the timeline colors and has a test for an empty history.",
+    "effort": "medium",
+    "model": "claude-opus-5-5",
+    "tokens": 120000,
+    "window": 200000,
+    "isFirst": false,
+    "hereModel": true,
+    "id": "ctx_continue",
+    "prompt": "the chart should also show the target weight as a dashed line"
   }
 ]

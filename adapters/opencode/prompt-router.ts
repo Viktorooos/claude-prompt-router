@@ -9,7 +9,7 @@
 // routerPlugin below. `--uninstall` removes it and puts back what it replaced.
 //
 // Options, read like the mod's toConfig (project, rules, language, classifier, effortDetection,
-// firstChatDetection, midChatModelDetection, subagentSuggestions, sessionSuggestions, notifications;
+// firstChatDetection, midChatModelDetection, subagentSuggestions, sessionSuggestions, newSessionAt, notifications;
 // the 0.7 effortMode and modelMode still count) plus the mapping to OpenCode models and variants:
 //   - ~/.config/opencode/prompt-router.json (install.ts creates it with the defaults). The shim in
 //     plugins/ is auto-loaded, and OpenCode passes no options to auto-loaded plugins.
@@ -29,7 +29,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, describeOptions, knownModel, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, preferSession, describeOptions, knownModel, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import { SESSION_TOOL, STATS_TOOL, SWITCH_TOOL, agentFor, askNote, modelName, otherAutoNote, otherNote, switchNote } from './notes.ts'
 import { TIER_NAMES, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
@@ -313,6 +313,22 @@ export function routerPlugin(tool: ToolFn) {
       return fableListed ? [...ALL_MODELS] : [...BASE_MODELS]
     }
 
+    // The model's context window from the provider list (limit.context), once per model.
+    const windows = new Map<string, number | undefined>()
+    async function contextWindow(model: string): Promise<number | undefined> {
+      if (!model) return undefined
+      if (windows.has(model)) return windows.get(model)
+      try {
+        const { providerID, modelID } = split(model)
+        const r = unwrap<{ providers: { id: string; models?: Record<string, { limit?: { context?: number } }> }[] }>(await client.config.providers())
+        const w = Number(r.providers.find(p => p.id === providerID)?.models?.[modelID]?.limit?.context) || undefined
+        windows.set(model, w)
+        return w
+      } catch {
+        return undefined
+      }
+    }
+
     function textOf(parts: readonly Part[]) {
       return parts
         .filter(p => p.type === 'text' && !p.synthetic && typeof p.text === 'string')
@@ -321,7 +337,7 @@ export function routerPlugin(tool: ToolFn) {
     }
 
     // What the classifier sees of the chat. OpenCode lists the history without this prompt, so it is added.
-    function chatOf(messages: readonly Msg[], text: string, now: Level | '', tokens: number | undefined, model: string, avail: readonly Model[]): Chat {
+    function chatOf(messages: readonly Msg[], text: string, now: Level | '', tokens: number | undefined, window: number | undefined, model: string, avail: readonly Model[]): Chat {
       const users = [...messages.filter(m => m.info.role === 'user').map(m => typed(textOf(m.parts).replace(NOTE, ''))).filter(Boolean), text]
       return {
         first: users[0] ?? '',
@@ -330,6 +346,7 @@ export function routerPlugin(tool: ToolFn) {
         model,
         now,
         tokens,
+        window,
         conf: cfg,
         isFirst: !messages.some(m => m.info.role === 'assistant'),
         hereModel: true,
@@ -383,11 +400,11 @@ export function routerPlugin(tool: ToolFn) {
       const tokens = t ? (t.input ?? 0) + (t.output ?? 0) + (t.cache?.read ?? 0) + (t.cache?.write ?? 0) || undefined : undefined
       const model = st.seenModel
       const avail = await availableModels(model)
-      const c = chatOf(messages, text, now, tokens, model, avail)
+      const c = chatOf(messages, text, now, tokens, await contextWindow(model), model, avail)
       const { reply, classifier } = await classify(text, c)
       const parsed = parsePick(reply, avail)
       if (!parsed && !/"where"\s*:\s*"keep"/.test(reply)) await log('parse', 'reply could not be parsed')
-      const p = parsed && allowed(parsed, cfg)
+      const p = parsed && preferSession(allowed(parsed, cfg), c, cfg)
       await log('pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${tokens ?? '?'} tok | first ${c.isFirst} | ${clip(reply, 200)}`)
       // The first prompt of a chat has nothing to leave: only its model and effort count.
       if (p && c.isFirst) return { p: { ...p, where: 'here', first: { now: routerModel(model) } }, classifier }

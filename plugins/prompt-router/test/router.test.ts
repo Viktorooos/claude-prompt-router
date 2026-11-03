@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { optionSources, toConfig } from '../core/router.ts'
+import { TEMPLATE, compactWindow, describeOptions, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -23,7 +23,7 @@ const EFFORT_ROW = {
 type Seen = { prompts: string[]; models: string[]; sent: string[]; sets: unknown[]; toasts: string[]; store: Map<string, unknown>; writes: string[]; modes: string[][] }
 
 // Stands for the engine beneath the plugin: each `$` call it makes is answered here.
-function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[]; noEffortRow?: boolean; now?: number } = {}): Seen {
+function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[]; noEffortRow?: boolean; now?: number; usage?: { tokens: number; window?: number } } = {}): Seen {
   const seen: Seen = { prompts: [], models: [], sent: [], sets: [], toasts: [], store: new Map(), writes: [], modes: [] }
   const messages = opts.messages ?? (opts.isFirst
     ? []
@@ -42,7 +42,7 @@ function engine(on: any, reply: string | (() => string), opts: { isFirst?: boole
   })
   on('session.messages', () => ({ value: messages }))
   on('session.model', () => ({ value: opts.model ?? 'claude-opus-5-5' }))
-  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 85000 }, rateLimits: [] } }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: opts.usage ?? { tokens: 85000 }, rateLimits: [] } }))
   on('config.list', () => ({ value: [...(opts.noEffortRow ? [] : [EFFORT_ROW]), ...(opts.rows ?? [])] }))
   on('config.set', (_: unknown, e: any) => {
     seen.sets.push(e.value)
@@ -594,7 +594,7 @@ test('mid-chat, the classifier is asked which model the task needs, also for her
   await submit($, 'rename the keys we just found')
   expect(seen.prompts[0]).not.toMatch(/for here use the current one/)
   expect(seen.prompts[0]).toMatch(/MODEL \(the model the task needs, also for here/)
-  expect(seen.prompts[0]).toMatch(/a quick question, or writing a short message or email keeps the current one, even where the haiku rule below says haiku/)
+  expect(seen.prompts[0]).toMatch(/a question answered from what this chat already read or said keeps the current one, even where the haiku rule below says haiku/)
 })
 
 test('here on a cheaper model (ask): offers a subagent or staying here, switches nothing', { options: { effortMode: 'ask', modelMode: 'ask' } } as any, async ($: any, on: any) => {
@@ -944,7 +944,8 @@ test('stats: a routed first prompt and its turn are noted, priced against the mo
   expect(t).toMatchObject({ kind: 'turn', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 1000, output: 2000, cacheRead: 0, cacheWrite: 0 } })
   expect(t.chat).toBe(d.chat)
   await $.ui.render({ component: 'SessionMode', surface: 'terminal', props: { modes: [] } })
-  expect(seen.modes.at(-1)).toEqual(['Haiku · saved $0.04 today'])
+  // The model the router holds, and no saving.
+  expect(seen.modes.at(-1)).toEqual(['Haiku'])
 })
 
 test('stats: a subagent the user took is an accepted offer, priced against the main chat model', async ($: any, on: any) => {
@@ -959,6 +960,39 @@ test('stats: a subagent the user took is an accepted offer, priced against the m
   expect(d).toMatchObject({ kind: 'decision', where: 'subagent', outcome: 'asked', to: { model: 'haiku', effort: 'low' } })
   expect(a).toMatchObject({ kind: 'accept', decision: d.ts, chat: d.chat })
   expect(t).toMatchObject({ kind: 'turn', agentId: 'a1', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5' })
+})
+
+test("stats: a routed subagent notes the main chat's context and its requests", async ($: any, on: any) => {
+  const seen = engine(on, PICK.subagent)
+  on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }))
+  on('turn.step', async function* (_: unknown, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-5-5' } }))
+  await start($)
+  await submit($, 'run the whole test suite and tell me what fails')
+  await $.agent.spawn({ tool_use_id: 'x', prompt: 'run tests', description: 'tests', subagentType: 'general-purpose', provider: { kind: 'builtin' } })
+  for (const index of [0, 1, 2]) {
+    for await (const _ of $.turn.step({ turnId: 't1', index, model: 'claude-haiku-5-5', messageCount: 1, agentId: 'a1' }));
+  }
+  await $.turn.complete({ ...TURN_DONE, agentId: 'a1' })
+  const t = statsLines(seen).find((x: any) => x.kind === 'turn')
+  expect(t).toMatchObject({ agentId: 'a1', mainContext: 85000, requests: 3 })
+})
+
+test("stats: a main-chat turn notes the effort it ran at and the person's own", { options: { effortDetection: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "low", "why": "quick"}')
+  on('turn.step', async function* (_: unknown, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for await (const _ of $.turn.step({ turnId: 't0', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 }));
+  await submit($, 'what does this regex match')
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 }));
+  await $.turn.complete(TURN_DONE)
+  const t = statsLines(seen).filter((x: any) => x.kind === 'turn').at(-1)
+  expect(t).toMatchObject({ effort: 'low', baseEffort: 'high' })
 })
 
 test('stats: a subagent the router did not offer counts at its own price', async ($: any, on: any) => {
@@ -993,7 +1027,7 @@ test('/router stats shows the table from the log', async ($: any, on: any) => {
   await start($)
   const r = await $.command.run({ command: 'router', args: 'stats' })
   expect(r.text).toMatch(/Today\s+7 days\s+Total/)
-  expect(r.text).toMatch(/Net saving\s+\$19\.50 \(98 %\)/)
+  expect(r.text).toMatch(/Balance\s+\$19\.50 \(98 %\)/)
   expect(r.text).toMatch(/Effort lower \/ higher\s+1 \/ 0/)
   const page = seen.writes.map(w => JSON.parse(w)).find(w => w.path.endsWith('prompt-router-stats.html'))
   expect(page.text).toMatch(/<svg/)
@@ -1009,4 +1043,124 @@ test('stats off: nothing is noted and /router stats says so', { options: { stats
   expect(statsLines(seen)).toEqual([])
   const r = await $.command.run({ command: 'router', args: 'stats' })
   expect(r.text).toMatch(/stats are off/)
+})
+
+// newSessionAt: new work in a chat already past a share of its model's context window goes to a new session.
+const HERE_NEW = '{"where": "here", "model": "opus", "effort": "medium", "work": "new", "why": "a new screen"}'
+const HERE_GO_ON = '{"where": "here", "model": "opus", "effort": "medium", "work": "continue", "why": "next step"}'
+const pickOf = (work?: 'new' | 'continue') => ({ where: 'here' as const, model: 'opus' as const, effort: 'medium' as const, why: 'a new screen', ...(work ? { work } : {}) })
+
+test('the classifier is asked whether the prompt starts new work', () => {
+  expect(TEMPLATE).toMatch(/"work": "new\|continue"/)
+  expect(parsePick(HERE_NEW)?.work).toBe('new')
+  expect(parsePick(HERE_GO_ON)?.work).toBe('continue')
+  // An older reply without the field counts as continue, so it never moves anything.
+  expect(parsePick(PICK.here)?.work).toBe('continue')
+  expect(parsePick('{"where": "here", "model": "opus", "effort": "low", "work": "maybe", "why": "x"}')?.work).toBe('continue')
+})
+
+test('preferSession: new work at the threshold share of the window goes to a session', () => {
+  const cfg = toConfig({})
+  expect(cfg.newSessionAt).toBe('50%')
+  const at = (tokens: number, window?: number, p = pickOf('new'), c = cfg) => preferSession(p, { tokens, window }, c)
+  expect(at(102_000, 200_000).where).toBe('session')
+  expect(at(102_000, 200_000).why).toMatch(/^a new screen, .*51 ?%/)
+  expect(at(98_000, 200_000)).toEqual(pickOf('new'))
+  // The share, not the token count: the same 102k in a 1M window is far from full.
+  expect(at(102_000, 1_000_000).where).toBe('here')
+  expect(at(510_000, 1_000_000).where).toBe('session')
+  // An unknown window counts as 200k.
+  expect(at(102_000).where).toBe('session')
+  expect(at(98_000).where).toBe('here')
+  expect(at(102_000, 0).where).toBe('session')
+})
+
+test('preferSession: any prompt that stays here goes to a session once the chat is long, another pick stays as it is', () => {
+  const cfg = toConfig({})
+  expect(preferSession(pickOf('continue'), { tokens: 180_000, window: 200_000 }, cfg).where).toBe('session')
+  expect(preferSession(pickOf(), { tokens: 180_000, window: 200_000 }, cfg).where).toBe('session')
+  const sub = { ...pickOf('new'), where: 'subagent' as const }
+  expect(preferSession(sub, { tokens: 180_000, window: 200_000 }, cfg)).toEqual(sub)
+  expect(preferSession(pickOf('new'), { tokens: undefined, window: 200_000 }, cfg).where).toBe('here')
+})
+
+test('preferSession: the threshold follows newSessionAt, and is off with it or with sessionSuggestions', () => {
+  const p = pickOf('new')
+  const c = { tokens: 130_000, window: 200_000 }
+  expect(preferSession(p, c, toConfig({ newSessionAt: '70%' })).where).toBe('here')
+  expect(preferSession(p, c, toConfig({ newSessionAt: '60%' })).where).toBe('session')
+  expect(preferSession(p, { tokens: 81_000, window: 200_000 }, toConfig({ newSessionAt: '40%' })).where).toBe('session')
+  expect(preferSession(p, { tokens: 199_000, window: 200_000 }, toConfig({ newSessionAt: 'off' })).where).toBe('here')
+  expect(preferSession(p, { tokens: 199_000, window: 200_000 }, toConfig({ sessionSuggestions: 'off' })).where).toBe('here')
+  expect(toConfig({ newSessionAt: '55%' }).newSessionAt).toBe('50%')
+  expect(describeOptions({}).join('\n')).toMatch(/newSessionAt: 50% \(default\)/)
+})
+
+test('compactWindow: newSessionAt counts against where the chat compacts, not the whole window', () => {
+  expect(compactWindow(1_000_000, { pct: '20' })).toBe(200_000)
+  expect(compactWindow(1_000_000, { window: '300000' })).toBe(300_000)
+  expect(compactWindow(1_000_000, { pct: 50, window: 400_000 })).toBe(200_000)
+  expect(compactWindow(200_000, { window: 500_000 })).toBe(200_000)
+  expect(compactWindow(1_000_000, {})).toBe(1_000_000)
+  expect(compactWindow(1_000_000, { pct: 'x', window: '0' })).toBe(1_000_000)
+  expect(compactWindow(1_000_000, { pct: 150 })).toBe(1_000_000)
+  expect(compactWindow(undefined, { pct: 20 })).toBe(undefined)
+  const p = pickOf('new')
+  expect(preferSession(p, { tokens: 110_000, window: compactWindow(1_000_000, { pct: 20 }) }, toConfig({})).where).toBe('session')
+})
+
+test('preferSession: the note about the long chat comes in the user\'s language', saved({ language: 'Czech' }), async ($: any, on: any) => {
+  // Long chat: the classifier is asked for the note in the configured language, and its words are used.
+  const cs = HERE_NEW.replace('"why": "a new screen"', '"why": "nová obrazovka", "note": "chat má 60 % kontextu"')
+  const seen = engine(on, cs, { usage: { tokens: 120_000, window: 200_000 }, files: FULL({ language: 'Czech' }) })
+  await start($)
+  await submit($, 'teď přidej obrazovku oblíbených')
+  expect(seen.prompts[0]).toMatch(/"note": "[^"]*60 ?%[^"]*in Czech"\}$/)
+  expect(seen.sent[0] ?? '').toMatch(/nová obrazovka, chat má 60 % kontextu/)
+  expect(seen.sent[0] ?? '').not.toMatch(/of context/)
+  expect(parsePick(cs)?.note).toBe('chat má 60 % kontextu')
+  expect(preferSession({ ...pickOf('new'), note: 'chat má 60 % kontextu' }, { tokens: 120_000, window: 200_000 }, toConfig({})).why).toBe('a new screen, chat má 60 % kontextu')
+  // A reply without the note falls back to the English words.
+  expect(preferSession(pickOf('new'), { tokens: 120_000, window: 200_000 }, toConfig({})).why).toBe('a new screen, chat at 60% of context')
+})
+
+test('pickPrompt: a short chat asks for no note', async ($: any, on: any) => {
+  const seen = engine(on, HERE_NEW, { usage: { tokens: 60_000, window: 200_000 } })
+  await start($)
+  await submit($, 'now add a favourites screen')
+  expect(seen.prompts[0]).not.toMatch(/"note"/)
+  expect(seen.prompts[0]).toMatch(/in the language of the new prompt"\}$/)
+})
+
+test('newSessionAt: new work in a long chat is offered as a new session', async ($: any, on: any) => {
+  const seen = engine(on, HERE_NEW, { usage: { tokens: 120_000, window: 200_000 } })
+  await start($)
+  await submit($, 'now add a favourites screen')
+  const t = seen.sent[0] ?? ''
+  expect(t).toMatch(/"New session \(Opus · medium\)"/)
+  expect(t).toMatch(/start_session/)
+  expect(t).toMatch(/60 ?%/)
+})
+
+test('newSessionAt: a continuation in a long chat is offered as a new session too', async ($: any, on: any) => {
+  const seen = engine(on, HERE_GO_ON, { usage: { tokens: 180_000, window: 200_000 } })
+  await start($)
+  await submit($, 'the chart is cut off on small phones, fix it')
+  const t = seen.sent[0] ?? ''
+  expect(t).toMatch(/start_session/)
+  expect(t).toMatch(/90 ?%/)
+})
+
+test('newSessionAt: new work in a big window that is not yet full stays here', async ($: any, on: any) => {
+  const seen = engine(on, HERE_NEW, { usage: { tokens: 120_000, window: 1_000_000 } })
+  await start($)
+  await submit($, 'now add a favourites screen')
+  expect(seen.sent).toEqual(['now add a favourites screen'])
+})
+
+test('newSessionAt off: new work in a long chat stays here', saved({ newSessionAt: 'off' }), async ($: any, on: any) => {
+  const seen = engine(on, HERE_NEW, { usage: { tokens: 180_000, window: 200_000 }, files: FULL({ newSessionAt: 'off' }) })
+  await start($)
+  await submit($, 'now add a favourites screen')
+  expect(seen.sent).toEqual(['now add a favourites screen'])
 })

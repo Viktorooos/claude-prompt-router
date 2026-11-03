@@ -1681,5 +1681,38 @@
     "effort": [
       "low"
     ]
+  },
+  "ctx_new_work": {
+    "where": [
+      "session"
+    ],
+    "model": [
+      "opus",
+      "sonnet"
+    ],
+    "effort": [
+      "medium",
+      "high"
+    ]
+  },
+  "ctx_question": {
+    "where": [
+      "here"
+    ],
+    "model": null,
+    "effort": [
+      "low",
+      "medium"
+    ]
+  },
+  "ctx_continue": {
+    "where": [
+      "here"
+    ],
+    "model": null,
+    "effort": [
+      "low",
+      "medium"
+    ]
   }
 }

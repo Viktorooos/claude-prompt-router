@@ -479,3 +479,37 @@ test('the plugin logs the effective options once when it loads', async () => {
   assert.equal(log.match(/effective options/g)?.length, 1)
   assert.match(log, /effortDetection=off/)
 })
+
+// newSessionAt: a chat whose last reply held `tokens`, on a model with a `context` window (none: no limit listed).
+const longChat = (tokens: number) => ({
+  [S]: [
+    { info: { role: 'user' }, parts: [{ type: 'text', text: 'add a pet weight chart' }] },
+    { info: { role: 'assistant', tokens: { input: tokens, output: 0, cache: { read: 0, write: 0 } } }, parts: [{ type: 'text', text: 'Done: the chart is in.' }] },
+  ],
+})
+const withWindow = (context?: number) => [{ id: 'anthropic', models: { 'claude-opus-5-5': context ? { limit: { context, output: 32_000 } } : {}, 'claude-sonnet-5-5': {}, 'claude-haiku-5-5': {} } }]
+const HERE_NEW = '{"where": "here", "model": "opus", "effort": "medium", "work": "new", "why": "a new screen"}'
+
+test('newSessionAt: new work past half of the model context window is offered as a new session', async () => {
+  const { hooks } = await setup({ reply: HERE_NEW, history: longChat(600_000), providers: withWindow(1_000_000) })
+  const text = said(await send(hooks, S, 'now add a favourites screen'))
+  assert.match(text, /"New session \(claude-opus-5-5 · medium\)"/)
+  assert.match(text, /60% of context/)
+})
+
+test('newSessionAt: the share counts, so the same tokens in a bigger window stay here', async () => {
+  const { hooks } = await setup({ reply: HERE_NEW, history: longChat(150_000), providers: withWindow(1_000_000) })
+  assert.equal(said(await send(hooks, S, 'now add a favourites screen')), 'now add a favourites screen')
+})
+
+test('newSessionAt: without a listed window the chat counts against 200k', async () => {
+  const { hooks } = await setup({ reply: HERE_NEW, history: longChat(150_000), providers: withWindow() })
+  assert.match(said(await send(hooks, S, 'now add a favourites screen')), /75% of context/)
+})
+
+test('newSessionAt: a continuation or the option off stays here', async () => {
+  const goOn = await setup({ reply: HERE_NEW.replace('"new"', '"continue"'), history: longChat(180_000), providers: withWindow(200_000) })
+  assert.equal(said(await send(goOn.hooks, S, 'fix it')), 'fix it')
+  const off = await fromFile({ reply: HERE_NEW, history: longChat(180_000), providers: withWindow(200_000) }, { newSessionAt: 'off' })
+  assert.equal(said(await send(off.hooks, S, 'now add a favourites screen')), 'now add a favourites screen')
+})

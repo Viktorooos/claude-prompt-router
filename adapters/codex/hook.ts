@@ -17,7 +17,7 @@
 //
 // Options: ~/.codex/prompt-router.json (install.ts writes the defaults), read like the mod's toConfig
 // (project, rules, language, classifier, effortDetection, firstChatDetection, midChatModelDetection,
-// subagentSuggestions, sessionSuggestions, notifications; the 0.7 effortMode and modelMode still count) plus:
+// subagentSuggestions, sessionSuggestions, newSessionAt, notifications; the 0.7 effortMode and modelMode still count) plus:
 //   "models": { "light": "gpt-6-luna", "standard": "gpt-6.1-terra", "strong": "gpt-6.1-sol", "top": "gpt-6-astra" },
 //                                                    the model of each tier (old keys haiku…fable still work)
 //   "efforts": { "low": "low", ... "max": "max" }   the Codex effort for each router level
@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url'
 import { fromTiers, shownOptions, tierLine } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, preferSession, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
 import type { Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
@@ -146,7 +146,7 @@ export async function configDefaults(home: string) {
   }
 }
 
-export type History = { users: string[]; reply: string; isFirst: boolean; model: string; effort: string; tokens: number | undefined; openTurns: string[] }
+export type History = { users: string[]; reply: string; isFirst: boolean; model: string; effort: string; tokens: number | undefined; window?: number; openTurns: string[] }
 
 const INJECTED = /^\s*(<[a-z_]+[\s>/]|<\/[a-z_]+>|# AGENTS\.md instructions|\[Prompt Router|Codex could not read)/
 
@@ -193,7 +193,10 @@ export async function readHistory(path: string | null | undefined): Promise<Hist
         else if (p.type === 'agent_message' && typeof p.message === 'string' && p.message.trim()) {
           h.reply = p.message
           h.isFirst = false
-        } else if (p.type === 'token_count' && p.info?.last_token_usage) h.tokens = Number(p.info.last_token_usage.total_tokens) || h.tokens
+        } else if (p.type === 'token_count' && p.info?.last_token_usage) {
+          h.tokens = Number(p.info.last_token_usage.total_tokens) || h.tokens
+          h.window = Number(p.info.model_context_window) || h.window
+        }
         else if (p.type === 'task_started' && typeof p.turn_id === 'string') open.add(p.turn_id)
         else if ((p.type === 'task_complete' || p.type === 'turn_aborted') && typeof p.turn_id === 'string') open.delete(p.turn_id)
       } else if (j.type === 'response_item' && p.type === 'message') {
@@ -379,7 +382,7 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   // model never changes: that would break its prompt cache), so the classifier names that model.
   const curClass = routerModel(o.models, model)
   const hereModel = !deps.noSubagent && !!curClass
-  const c: Chat = { first: all[0] ?? '', recent: all.slice(-4, -1), reply: h.reply, model, now, tokens: h.tokens, conf: o.cfg, isFirst: h.isFirst, hereModel, models: avail }
+  const c: Chat = { first: all[0] ?? '', recent: all.slice(-4, -1), reply: h.reply, model, now, tokens: h.tokens, window: h.window, conf: o.cfg, isFirst: h.isFirst, hereModel, models: avail }
   const runner = deps.runner ?? codexRunner
   let usage: Usage | null = null
   const reply = await runner(pickPrompt(text, c), { model: classifier, effort: effortOf(classifier, 'low'), timeoutMs: o.timeoutMs, onUsage: u => (usage = u) })
@@ -398,7 +401,7 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   if (!parsed && !/"where"\s*:\s*"keep"/.test(reply)) await log(home, 'parse', 'reply could not be parsed')
   // Once per chat, so the log shows what the hook really goes by.
   if (h.isFirst) await log(home, 'effective options', `${o.source} | ${tierLine(optionsLine(shownOptions(o.raw), fromTiers(CODEX_DEFAULTS) as Record<string, string>))}`)
-  let p: Pick | null = parsed && allowed(parsed, o.cfg)
+  let p: Pick | null = parsed && preferSession(allowed(parsed, o.cfg), h, o.cfg)
   await log(home, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${h.tokens ?? '?'} tok | first ${h.isFirst} | ${clip(reply, 200)}`)
   if (!p) return keep()
   // The first prompt of a chat has nothing to leave: only its model and effort count.

@@ -18,15 +18,21 @@ export const ALL_MODELS = Object.keys(MODELS) as Model[]
 
 export type Where = 'here' | 'subagent' | 'session'
 
-// One switch per feature; the first value of each is the default (today's behaviour).
+// One switch per feature; the first value of each is the default.
 export const SWITCHES = {
   effortDetection: ['ask', 'auto', 'off'],
   firstChatDetection: ['ask', 'auto', 'off'],
   midChatModelDetection: ['ask', 'auto', 'off'],
   subagentSuggestions: ['ask', 'off'],
   sessionSuggestions: ['ask', 'off'],
+  // New work in a chat past this share of its model's context window is offered as a new session.
+  newSessionAt: ['50%', 'off', '40%', '60%', '70%'],
   notifications: ['on', 'off'],
   stats: ['on', 'off'],
+  // Claude Code: open the Prompt Router pane by itself when a session starts.
+  openPane: ['off', 'on'],
+  // Claude Code: one line above the prompt (model · effort, context, today's saving), no extra tab.
+  band: ['on', 'off'],
 } as const
 
 export type Switch = keyof typeof SWITCHES
@@ -39,7 +45,9 @@ export type Model = keyof typeof MODELS
 
 // first: the first prompt of a chat, whose model may still change. other: a later prompt that stays
 // here but fits another model than the chat's, which is not switched (that would break the cache).
-export type Pick = { where: Where; model: Model; effort: Level; why: string; first?: { now: Model | '' }; other?: { now: Model } }
+// work: whether the prompt starts new work or goes on with this chat's (a missing field is continue).
+// note: in a long chat, the words "chat at X% of context" in the user's language, for preferSession.
+export type Pick = { where: Where; model: Model; effort: Level; why: string; work?: 'new' | 'continue'; note?: string; first?: { now: Model | '' }; other?: { now: Model } }
 
 export function norm(s: string) {
   const t = s.toLowerCase().replace(/[^a-z]/g, '')
@@ -77,7 +85,7 @@ export function clip(s: string, n: number) {
 
 // What the classifier sees of the chat. The test tool fills it by hand.
 // hereModel: the platform offers a subagent when a prompt that stays here fits another model.
-export type Chat = { first: string; recent: string[]; reply: string; model: string; now: Level | ''; tokens: number | undefined; conf: Config; isFirst?: boolean; hereModel?: boolean; models: readonly Model[] }
+export type Chat = { first: string; recent: string[]; reply: string; model: string; now: Level | ''; tokens: number | undefined; window?: number; conf: Config; isFirst?: boolean; hereModel?: boolean; models: readonly Model[] }
 
 // The classifier prompt. {{name}} slots are filled per prompt; the test tool can swap the whole
 // template for a file, so the rules can be tuned without reloading the mod.
@@ -87,13 +95,14 @@ WHERE
 - keep: the prompt only approves, answers a question or says to go on (yes, ok, go on, do it, option 2, or the same in another language). Answer keep for all three fields.
 - here: it builds on what this chat already read, found, decided or changed (a follow-up, a fix of what was just found, the next iteration, a question about it). Also here when the chat is still small (under 30k tokens) and the right model is the current one.
 - Also here for anything trivial that takes one short answer (a greeting, a quick fact, a one-line question) when it relates to this chat or the chat is under 60k tokens: starting a subagent or a session costs more than answering it. In a bigger chat every reply re-reads the whole context, so an unrelated task, even a trivial one, goes to session. A greeting or small talk is not a task and stays here.
-- subagent: a self-contained lookup, search, read of something big, build or run whose short answer is needed here, and that needs none of this chat's context.
+- subagent: a self-contained lookup, search, read of something big, build or run whose short answer is needed here, and that needs none of this chat's context. If it builds on this chat, it is here, not subagent.
 - session: unrelated to this chat (a new topic, another feature, a task that ends in its own branch or PR, or anything unrelated at all once the chat is over 60k tokens), or long mechanical work better done with a fresh context on a cheaper model. Pick session only when you are fairly sure; if unsure, here.
 
 {{model_head}}
-- haiku: anything that takes one short answer and no code changes, except a greeting or opener with no task yet, which keeps the current model (a short message or email, a translation, a quick fact, a regex or one command); running builds, lint or tests; reading and summarizing; searching the codebase.
-- sonnet: mechanical edits by an existing pattern (strings, renames, porting finished code to another platform), clicking through an app, writing summaries.
-- opus: new logic, architecture, debugging, code review, anything risky (money, user data, security, auth, rewriting git history, force pushes, deleting data or anything else hard to undo). Also opus when the work is open-ended or its size is unclear.{{fable}}
+Judge the work needed to answer, not the length of the prompt or of the answer, and not whether code changes. Go down the list and take the first that fits. If torn between two of opus, sonnet and haiku, take the higher one.{{fable}}
+- opus: new logic, architecture, debugging or finding why something in this project misbehaves or does not happen, code review, judging a design choice or trade-off, anything risky (money, user data, security, auth, rewriting git history, force pushes, deleting data or anything else hard to undo). Also opus when the work is open-ended or its size is unclear.
+- sonnet: explaining how something in this project's code works or what it checks (reading several files and connecting them), even when short and with no code changes; mechanical edits by an existing pattern (strings, renames, porting finished code to another platform); clicking through an app; writing summaries.
+- haiku: only work with no reasoning about this project's code: a general fact or definition, a translation, a short message or email, a regex or one command; running builds, lint or tests and reporting the result; finding where something is defined or used (a search, not an explanation); reading one given file or log and reporting what it says, also the error that broke a build; changing one given text or value. Not haiku: "how does X work in our code" (sonnet), "why does X happen" needing a look into the code (opus), "should we do A or B" (opus).
 
 EFFORT
 - low: simple, mechanical or rule-following work, a greeting, a short message or a quick answer, or work the person will iterate on with Claude.
@@ -103,6 +112,10 @@ EFFORT
 - max: only when the person explicitly asks for the maximum effort or thinking, or for a one-off irreversible step with a very high cost of a mistake (production data, a live security incident) where time does not matter. Never for everyday work, a feature or a review, however important. "Do it properly" or "be careful" is not max.
 A task being long does not make it high. Words like important, critical, carefully, properly or take your time do not raise the effort beyond high on their own; only handing off a long job (xhigh) or the max cases above do.
 Examples: reviewing payment code = opus, high (not xhigh, not max). A big feature on iOS and Android with a known design = opus, medium or high. A database migration done the usual way = medium or high. A one-off script that rewrites production data and cannot be undone, checked with all the care possible = max.{{rules}}
+
+WORK
+- new: the prompt starts a new task with its own definition of done (another feature, screen, bug or topic), even in the same project or area as this chat.
+- continue: the next step of this chat's task, a fix or check of what was just done, a question about it, small talk, or an approval.
 
 The chat now: model {{model}}, effort {{effort}}, context {{tokens}}.
 
@@ -122,7 +135,7 @@ The new prompt:
 {{prompt}}
 </prompt>
 
-Reply with JSON only: {"where": "keep|here|subagent|session", "model": "{{models}}", "effort": "low|medium|high|xhigh|max", "why": "the reason in under 12 plain words, in {{lang}}"}`
+Reply with JSON only: {"where": "keep|here|subagent|session", "model": "{{models}}", "effort": "low|medium|high|xhigh|max", "work": "new|continue", "why": "the reason in under 12 plain words, in {{lang}}"{{note}}}`
 
 // midChatModelDetection auto: the agent picks the subagent or here itself, with no question.
 export const DECIDE_OTHER = `Do not ask the user; decide yourself: use the subagent only when it is worth it: a larger self-contained piece of work that needs the other model (for example hard design or debugging on a weaker chat model, or long mechanical work on a strong one); a quick question, a short answer or a short message stays here.`
@@ -132,13 +145,15 @@ export const MODEL_HEAD_FIRST = 'MODEL (this is the FIRST prompt of a new chat: 
 
 export const MODEL_HEAD = 'MODEL (for subagent or session; for here use the current one)'
 
-export const MODEL_HEAD_HERE = 'MODEL (the model the task needs, also for here: a here prompt on another model than the current one is offered to a subagent on that model. For here, a greeting, small talk, one short answer, a quick question, or writing a short message or email keeps the current one, even where the haiku rule below says haiku)'
+export const MODEL_HEAD_HERE = 'MODEL (the model the task needs, also for here: a here prompt on another model than the current one is offered to a subagent on that model. For here, a greeting, small talk, writing a short message or email, or a question answered from what this chat already read or said keeps the current one, even where the haiku rule below says haiku. A question that needs new reading of code or a judgement follows the rules below)'
 
 export const FABLE_RULE = `
 - fable: rare, 2.5 times the price of opus; only where opus at high effort is likely not enough: a new architecture across several layers (shared code plus iOS and Android, or backend plus clients) with no clear solution yet; a hard concurrency or race problem, or a security hole whose reach across several services is still unknown; a bug that two or more fixes already failed to solve; a deep analysis of a whole large system (many services) where a wrong conclusion costs a lot of money or data. Not fable (opus instead): an everyday feature, however big or important; a code review of a given module, also of payments or security code; payments, auth or a migration with a known approach or an official guide; anything mechanical; a question about architecture. A single failed fix is not two.`
 
 export function pickPrompt(text: string, c: Chat, template = TEMPLATE) {
   const conf = c.conf
+  const lang = conf.language && conf.language.toLowerCase() !== 'auto' ? conf.language : 'the language of the new prompt'
+  const share = longShare(c, conf)
   const slots: Record<string, string> = {
     project: conf.project.trim() || 'a software project',
     model_head: c.isFirst
@@ -154,7 +169,9 @@ export function pickPrompt(text: string, c: Chat, template = TEMPLATE) {
     recent: c.recent.map(t => `- ${clip(t, 200)}`).join('\n') || '(none)',
     reply: clip(c.reply, 600) || '(none)',
     prompt: text.slice(0, 4000),
-    lang: conf.language && conf.language.toLowerCase() !== 'auto' ? conf.language : 'the language of the new prompt',
+    lang,
+    // Asked only when preferSession may use it, so a short chat's prompt stays as it was.
+    note: share ? `, "note": "the words chat at ${share}% of context, in ${lang}"` : '',
   }
   // One pass, so a slot's value that holds {{...}} (a prompt about templates) stays as written.
   return template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => slots[k] ?? m)
@@ -171,7 +188,9 @@ export function parsePick(text: string, models: readonly Model[] = ALL_MODELS): 
   const effort = asLevel(field(text, 'effort'))
   if (!where || !effort) return null
   const why = clip(field(text, 'why').replace(/\s*[—–]\s*/g, ', '), 90)
-  return { where, model: asModel(field(text, 'model'), models), effort, why }
+  const work = field(text, 'work') === 'new' ? 'new' : 'continue'
+  const note = clip(field(text, 'note'), 40)
+  return { where, model: asModel(field(text, 'model'), models), effort, work, why, ...(note ? { note } : {}) }
 }
 
 export function str(v: unknown, fallback: string) {
@@ -234,6 +253,38 @@ export function allowed(p: Pick, cfg: Config): Pick {
   if (p.where === 'subagent' && cfg.subagentSuggestions === 'off') return { ...p, where: 'here' }
   if (p.where === 'session' && cfg.sessionSuggestions === 'off') return { ...p, where: 'here' }
   return p
+}
+
+// The context window when the platform does not tell it.
+export const DEFAULT_WINDOW = 200_000
+
+// The window the chat really has: Claude Code compacts it against CLAUDE_CODE_AUTO_COMPACT_WINDOW
+// (when smaller) at CLAUDE_AUTOCOMPACT_PCT_OVERRIDE of it, so it never grows past that point.
+// Either unset (or not a number) leaves the model's own window.
+export function compactWindow(window: number | undefined, env: { pct?: unknown; window?: unknown }): number | undefined {
+  if (!window || window <= 0) return window
+  const cap = Number(env.window)
+  const w = cap > 0 ? Math.min(window, cap) : window
+  const pct = Number(env.pct)
+  return pct > 0 && pct <= 100 ? Math.round((w * pct) / 100) : w
+}
+
+// Any prompt that would stay here goes to a new session once the chat holds newSessionAt of its
+// model's context window: every reply here re-reads all of it, whatever the prompt is.
+// The note is the classifier's words in the user's language (pickPrompt asks for it); English without them.
+export function preferSession(p: Pick, c: { tokens: number | undefined; window?: number }, cfg: Config): Pick {
+  const share = longShare(c, cfg)
+  if (p.where !== 'here' || !share) return p
+  const note = p.note || `chat at ${share}% of context`
+  return { ...p, where: 'session', why: p.why ? `${p.why}, ${note}` : note }
+}
+
+// The chat's share of its model's context window in whole percent once it reaches newSessionAt, else 0.
+export function longShare(c: { tokens: number | undefined; window?: number }, cfg: Config): number {
+  const at = Number.parseInt(cfg.newSessionAt, 10)
+  if (!at || cfg.sessionSuggestions === 'off' || !c.tokens) return 0
+  const share = Math.floor((c.tokens / (c.window && c.window > 0 ? c.window : DEFAULT_WINDOW)) * 100)
+  return share >= at ? share : 0
 }
 
 // One line per option for /router and the log: value and where it came from.

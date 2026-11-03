@@ -66,6 +66,13 @@
       "default": "ask",
       "options": ["ask", "off"]
     },
+    "newSessionAt": {
+      "type": "string",
+      "title": "New session when the chat is long",
+      "description": "Any prompt, once this chat holds this share of its model's context window, is offered as a new session (every reply here re-reads the whole context). off: only the classifier decides. Needs sessionSuggestions ask.",
+      "default": "50%",
+      "options": ["off", "40%", "50%", "60%", "70%"]
+    },
     "notifications": {
       "type": "string",
       "title": "Notifications",
@@ -77,6 +84,20 @@
       "type": "string",
       "title": "Savings stats",
       "description": "on: notes each routing decision and each turn's token use in ~/.claude/mods-logs/prompt-router-stats.jsonl (local only), shows the estimated saving in the footer and in /router stats. off: nothing is noted.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "openPane": {
+      "type": "string",
+      "title": "Open the pane by itself",
+      "description": "on: the Prompt Router pane opens when a session starts (from 144 terminal columns, 110 once you have opened it with /router panel), or else on your first prompt. off: only /router panel opens it.",
+      "default": "off",
+      "options": ["off", "on"]
+    },
+    "band": {
+      "type": "string",
+      "title": "Line above the prompt",
+      "description": "on: one always-visible line above the prompt with the model and effort, the context used and today's saving, and a button that opens the pane. off: no line.",
       "default": "on",
       "options": ["on", "off"]
     }
