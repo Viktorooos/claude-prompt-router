@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { EFFORT_OUTPUT, REFERENCE, byDay, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
+import { EFFORT_OUTPUT, REFERENCE, byDay, episodes, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -305,4 +305,81 @@ test('a routed prompt that comes again within three prompts counts as re-work', 
 
 test('accuracy is null when nothing was routed', () => {
   expect(summarize([decision({ key: 'hi' })], NOW).total.accuracyPct).toBe(null)
+})
+
+const MIN = 60_000
+const cheap = { model: 'haiku', effort: 'low' as const }
+
+test('episodes: each new prompt starts its own task, with the turns that answered it', () => {
+  const eps = episodes([
+    decision({ ts: NOW - 60 * MIN, key: 'add a button', follows: 'new' }),
+    turn('opus', 'opus', { ts: NOW - 58 * MIN }),
+    decision({ ts: NOW - 50 * MIN, key: 'rename the screen', follows: 'new' }),
+    turn('opus', 'opus', { ts: NOW - 49 * MIN }),
+  ])
+  expect(eps.length).toBe(2)
+  expect(eps.map(e => [e.decisions.length, e.turns.length])).toEqual([[1, 1], [1, 1]])
+  expect(eps[0]!.start).toBe(NOW - 60 * MIN)
+  expect(eps[0]!.end).toBe(NOW - 58 * MIN)
+})
+
+test('episodes: a correction and the next step stay in the task, new work starts another', () => {
+  const eps = episodes([
+    decision({ ts: NOW - 60 * MIN, key: 'fix the parser', follows: 'new', to: cheap }),
+    turn('haiku', 'opus', { ts: NOW - 59 * MIN }),
+    decision({ ts: NOW - 55 * MIN, key: 'still broken', follows: 'corrects' }),
+    turn('haiku', 'opus', { ts: NOW - 54 * MIN }),
+    decision({ ts: NOW - 50 * MIN, key: 'now run the tests', follows: 'continues' }),
+    turn('haiku', 'opus', { ts: NOW - 49 * MIN }),
+    decision({ ts: NOW - 40 * MIN, key: 'write the release notes', follows: 'new' }),
+  ])
+  expect(eps.length).toBe(2)
+  expect(eps[0]!.decisions.map(d => d.key)).toEqual(['fix the parser', 'still broken', 'now run the tests'])
+  expect(eps[0]!.turns.length).toBe(3)
+  expect(eps[1]!.decisions.map(d => d.key)).toEqual(['write the release notes'])
+})
+
+test('episodes: the same prompt again after a switch to a stronger model is the same task', () => {
+  const eps = episodes([
+    decision({ ts: NOW - 60 * MIN, key: 'why is it slow', follows: 'new', to: cheap }),
+    turn('haiku', 'opus', { ts: NOW - 59 * MIN }),
+    // The person moved the picker to Opus by hand and asked again; the classifier may read it as new.
+    decision({ ts: NOW - 50 * MIN, key: 'why is it slow', follows: 'new', from: { model: 'opus', effort: 'high' } }),
+    turn('opus', 'opus', { ts: NOW - 45 * MIN }),
+  ])
+  expect(eps.length).toBe(1)
+  expect(eps[0]!.turns.map(t => t.model)).toEqual(['haiku', 'opus'])
+})
+
+test('episodes: 30 minutes of quiet end the task, a turn that runs long does not', () => {
+  const at = (gap: number) => episodes([
+    decision({ ts: NOW - 120 * MIN, key: 'refactor the store', follows: 'new' }),
+    turn('opus', 'opus', { ts: NOW - 100 * MIN }),
+    decision({ ts: NOW - 100 * MIN + gap * MIN, key: 'and the tests', follows: 'continues' }),
+  ]).length
+  expect(at(29)).toBe(1)
+  expect(at(31)).toBe(2)
+  // The turn ended 45 minutes after its prompt: the gap counts from the turn's end.
+  expect(episodes([
+    decision({ ts: NOW - 120 * MIN, key: 'migrate the db', follows: 'new' }),
+    turn('opus', 'opus', { ts: NOW - 75 * MIN }),
+    decision({ ts: NOW - 70 * MIN, key: 'go on', follows: 'continues' }),
+  ]).length).toBe(1)
+})
+
+test('episodes: older records without follows count each prompt as its own task, unless it is the same text', () => {
+  const eps = episodes([
+    decision({ ts: NOW - 60 * MIN, key: 'why is it slow' }),
+    decision({ ts: NOW - 55 * MIN, key: 'thanks' }),
+    decision({ ts: NOW - 50 * MIN, key: 'thanks' }),
+    // Another chat at the same time is its own task.
+    decision({ ts: NOW - 52 * MIN, chat: 'c2', key: 'thanks' }),
+  ])
+  // Oldest first by where each task started.
+  expect(eps.map(e => [e.chat, e.decisions.length])).toEqual([['c1', 1], ['c1', 2], ['c2', 1]])
+})
+
+test('episodes: turns before the first prompt the router saw form a task with no prompt', () => {
+  const eps = episodes([turn('opus', 'opus', { ts: NOW - 60 * MIN }), decision({ ts: NOW - 50 * MIN, key: 'next', follows: 'new' })])
+  expect(eps.map(e => [e.decisions.length, e.turns.length])).toEqual([[0, 1], [1, 0]])
 })

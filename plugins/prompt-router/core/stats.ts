@@ -255,6 +255,47 @@ function reworkedSet(records: readonly Entry[]) {
   return out
 }
 
+// One task: a prompt, the prompts that went on with it or fixed it, and the turns that answered them.
+// No decisions = turns before the first prompt the router saw.
+export type Episode = { chat: string; start: number; end: number; decisions: Decision[]; turns: Turn[] }
+
+// Quiet after which the next prompt starts a new task, whatever the classifier read.
+export const EPISODE_GAP = 30 * 60_000
+
+// The same text again goes on with the task (a repeat, even after a switch); otherwise the classifier's
+// `follows` decides, and an older record without it starts a new task.
+function startsEpisode(d: Decision, cur: Episode) {
+  if (d.ts - cur.end > EPISODE_GAP) return true
+  if (d.key && cur.decisions.some(x => x.key === d.key)) return false
+  return d.follows === undefined || d.follows === 'new'
+}
+
+// The records grouped into tasks, per chat, oldest first by where each task started.
+export function episodes(records: readonly Entry[]): Episode[] {
+  const byChat = new Map<string, (Decision | Turn)[]>()
+  for (const r of records) {
+    if (r.kind === 'accept') continue
+    const list = byChat.get(r.chat)
+    if (list) list.push(r)
+    else byChat.set(r.chat, [r])
+  }
+  const out: Episode[] = []
+  for (const list of byChat.values()) {
+    list.sort((a, b) => a.ts - b.ts)
+    let cur: Episode | null = null
+    for (const r of list) {
+      if (!cur || (r.kind === 'decision' && startsEpisode(r, cur))) {
+        cur = { chat: r.chat, start: r.ts, end: r.ts, decisions: [], turns: [] }
+        out.push(cur)
+      }
+      if (r.kind === 'decision') cur.decisions.push(r)
+      else cur.turns.push(r)
+      cur.end = Math.max(cur.end, r.ts)
+    }
+  }
+  return out.sort((a, b) => a.start - b.start)
+}
+
 function add(s: Summary, r: Entry, taken: Set<string>, reworked: Set<string>) {
   if (r.kind === 'turn') addTurn(s, r)
   else if (r.kind === 'decision') {
