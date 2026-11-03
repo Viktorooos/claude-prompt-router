@@ -133,7 +133,7 @@ test('subagent pick: appends the AskUserQuestion note with the Agent call', asyn
   await start($)
   await submit($, 'run the whole test suite and tell me what fails')
   const t = seen.sent[0] ?? ''
-  expect(t.startsWith('run the whole test suite and tell me what fails\n\n[Prompt Router suggests')).toBe(true)
+  expect(t.startsWith('run the whole test suite and tell me what fails\n\n[ACTION FIRST, before any other step: call the AskUserQuestion tool')).toBe(true)
   expect(t).toMatch(/in a subagent \(Haiku · low\), because: just run the tests/)
   expect(t).toMatch(/AskUserQuestion/)
   expect(t).toMatch(/"Subagent \(Haiku · low\)", "Do it here \(Low\)", "Do it here \(keep Medium\)"/)
@@ -153,6 +153,19 @@ test('session pick: offers a new session first, with start_session', async ($: a
   expect(t).toMatch(/start_session/)
   expect(t).toMatch(/model "claude-sonnet-5-5", effort "medium"/)
   expect(t).toMatch(/Where should this go\?/)
+})
+
+test('the suggestion opens with the question, then the choices, the recommended one first', async ($: any, on: any) => {
+  const seen = engine(on, PICK.session)
+  await start($)
+  await submit($, 'unrelated: add a shopping list')
+  const t = seen.sent[0] ?? ''
+  expect(t.startsWith('unrelated: add a shopping list\n\n[ACTION FIRST, before any other step: call the AskUserQuestion tool')).toBe(true)
+  expect(t).toMatch(/the question "Where should this go\?"/)
+  expect(t).toMatch(/with the options "New session \(Sonnet · medium\)", "Subagent \(Sonnet · medium\)", "Do it here"/)
+  expect(t).toMatch(/the recommended one first, written in/)
+  expect(t).toMatch(/Do not answer or start the task until the user has picked one\. Prompt Router suggests running this prompt in a new session/)
+  expect(t.indexOf('AskUserQuestion')).toBeLessThan(t.indexOf('Prompt Router suggests running this prompt in a new session'))
 })
 
 test('the first prompt of a chat stays here', async ($: any, on: any) => {
@@ -602,8 +615,9 @@ test('here on a cheaper model (ask): offers a subagent or staying here, switches
   await start($)
   await submit($, 'rename the keys we just found')
   const t = seen.sent[0] ?? ''
-  expect(t.startsWith('rename the keys we just found\n\n[Prompt Router')).toBe(true)
+  expect(t.startsWith('rename the keys we just found\n\n[ACTION FIRST, before any other step: call the AskUserQuestion tool')).toBe(true)
   expect(t).toMatch(/fits Sonnet · low better than this chat's Opus, because: a mechanical edit/)
+  expect(t.indexOf('AskUserQuestion')).toBeLessThan(t.indexOf('Prompt Router: this prompt belongs'))
   expect(t).toMatch(/AskUserQuestion/)
   expect(t).toMatch(/"Subagent \(Sonnet · low\)", "Stay here \(Low\)", "Stay here \(keep Medium\)"/)
   expect(t).toMatch(/Agent tool with model "sonnet" and effort "low"/)
