@@ -53,6 +53,9 @@ export type Turn = {
   /** Wall-clock ms of the turn as the platform reports it (the classifier's wait is not in it).
    *  Missing in older records and on platforms that do not time it. */
   durationMs?: number
+  /** A main-chat turn that ran after the person moved the model or effort picker above what the
+   *  router had set: a sign its pick was too low. */
+  manual?: true
 }
 
 // The user took an asked decision (switched, or ran the suggested subagent). `decision` is its `ts`.
@@ -100,7 +103,7 @@ export type Summary = {
   perTurnUsd: number
   /** Prompts the router sent to a cheaper model or effort. */
   routed: number
-  /** Routed prompts that came again soon after (see reworkedSet). */
+  /** Routed prompts whose answer did not do the job, each by its FAILURE_WEIGHTS (see reworkedSet). */
   rework: number
   /** (1 − rework / routed) as a percent; null when nothing was routed. An estimate. */
   accuracyPct: number | null
@@ -236,20 +239,50 @@ function takenSet(records: readonly Entry[]) {
 // A prompt the router sent to a cheaper model or effort than the person's pick.
 const routedDecision = (d: Decision) => d.outcome === 'applied' && d.where !== 'keep' && (d.to.model !== d.from.model || d.to.effort !== d.from.effort)
 
-// Re-work: a routed prompt whose same text (`key`) comes again within the next few prompts of the chat.
-// The person had to ask twice, so the cheaper answer did not do the job. A guess: a repeat can also be
-// a second try at the same question on purpose.
+// How surely each sign says a cheaper answer did not do the job (1 = surely). Guesses, to tune:
+// switched = the person moved the picker up and went on, repeated = the same text again, corrected =
+// the classifier read the next prompt as a fix of the answer, interrupted = the answer was cut off.
+export const FAILURE_WEIGHTS = { switched: 1, repeated: 1, corrected: 0.7, interrupted: 0.4 } as const
+
+export type FailureReason = keyof typeof FAILURE_WEIGHTS
+export type Failure = { weight: number; reasons: FailureReason[] }
+
+// The strongest sign counts; the reasons are all listed.
+function failure(reasons: FailureReason[]): Failure {
+  return { weight: Math.max(0, ...reasons.map(r => FAILURE_WEIGHTS[r])), reasons }
+}
+
+const main = (t: Turn) => !t.agentId
+
+// Re-work: a routed prompt whose same text (`key`) comes again within the next few prompts of the chat,
+// whose next prompt corrects it, whose next prompt ran after a switch up by hand, or whose answer was
+// cut off. A guess: a repeat can also be a second try at the same question on purpose.
 const REWORK_WINDOW = 3
 
 function reworkedSet(records: readonly Entry[]) {
-  const byChat = new Map<string, Decision[]>()
-  for (const r of records) if (r.kind === 'decision') byChat.set(r.chat, [...(byChat.get(r.chat) ?? []), r])
-  const out = new Set<string>()
-  for (const list of byChat.values()) {
-    list.sort((a, b) => a.ts - b.ts)
-    list.forEach((d, i) => {
-      if (!routedDecision(d) || !d.key) return
-      if (list.slice(i + 1, i + 1 + REWORK_WINDOW).some(n => n.key === d.key)) out.add(takenKey(d.chat, d.ts))
+  const byChat = new Map<string, { decisions: Decision[]; turns: Turn[] }>()
+  for (const r of records) {
+    if (r.kind === 'accept' || (r.kind === 'turn' && !main(r))) continue
+    let c = byChat.get(r.chat)
+    if (!c) byChat.set(r.chat, (c = { decisions: [], turns: [] }))
+    if (r.kind === 'decision') c.decisions.push(r)
+    else c.turns.push(r)
+  }
+  const out = new Map<string, Failure>()
+  for (const { decisions, turns } of byChat.values()) {
+    decisions.sort((a, b) => a.ts - b.ts)
+    turns.sort((a, b) => a.ts - b.ts)
+    decisions.forEach((d, i) => {
+      if (!routedDecision(d)) return
+      const next = decisions.slice(i + 1, i + 1 + REWORK_WINDOW)
+      const until = (k: number) => next[k]?.ts ?? Infinity
+      const answer = turns.find(t => t.ts >= d.ts && t.ts < until(0))
+      const reasons: FailureReason[] = []
+      if (d.key && next.some(n => n.key === d.key)) reasons.push('repeated')
+      if (next[0]?.follows === 'corrects') reasons.push('corrected')
+      if (next[0] && turns.some(t => t.manual && t.ts >= next[0]!.ts && t.ts < until(1))) reasons.push('switched')
+      if (answer && !answer.usage) reasons.push('interrupted')
+      if (reasons.length) out.set(takenKey(d.chat, d.ts), failure(reasons))
     })
   }
   return out
@@ -296,14 +329,27 @@ export function episodes(records: readonly Entry[]): Episode[] {
   return out.sort((a, b) => a.start - b.start)
 }
 
-function add(s: Summary, r: Entry, taken: Set<string>, reworked: Set<string>) {
+// Whether a task's answers did the job, from the signs anywhere in it: a repeat of an earlier prompt,
+// a correction, a switch up by hand after its first answer, a main-chat answer cut off.
+export function failureOf(e: Episode): Failure {
+  const reasons: FailureReason[] = []
+  if (!e.decisions.length) return failure(reasons)
+  if (e.decisions.some((d, i) => d.key && e.decisions.slice(0, i).some(x => x.key === d.key))) reasons.push('repeated')
+  if (e.decisions.slice(1).some(d => d.follows === 'corrects')) reasons.push('corrected')
+  const answers = e.turns.filter(main)
+  if (answers.slice(1).some(t => t.manual)) reasons.push('switched')
+  if (answers.some(t => !t.usage)) reasons.push('interrupted')
+  return failure(reasons)
+}
+
+function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>) {
   if (r.kind === 'turn') addTurn(s, r)
   else if (r.kind === 'decision') {
     addDecision(s, r, taken.has(takenKey(r.chat, r.ts)))
     s.classifierUsd += classifierUsd(r)
     if (routedDecision(r)) {
       s.routed++
-      if (reworked.has(takenKey(r.chat, r.ts))) s.rework++
+      s.rework += reworked.get(takenKey(r.chat, r.ts))?.weight ?? 0
     }
   }
 }

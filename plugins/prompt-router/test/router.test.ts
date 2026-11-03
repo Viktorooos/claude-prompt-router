@@ -1022,6 +1022,27 @@ test("stats: a main-chat turn notes the effort it ran at and the person's own", 
   expect(t).toMatchObject({ effort: 'low', baseEffort: 'high' })
 })
 
+test('stats: a turn after the person moved the picker above what the router set is marked manual', { options: { effortDetection: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "low", "why": "quick"}')
+  on('turn.step', async function* (_: unknown, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for await (const _ of $.turn.step({ turnId: 't0', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 }));
+  await submit($, 'why is the list slow')
+  // The picker shows the level the router set.
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'low', messageCount: 1 }));
+  await $.turn.complete(TURN_DONE)
+  // The person moves the picker to max and asks again.
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-opus-5-5', effort: 'max', messageCount: 1 }));
+  await $.turn.complete(TURN_DONE)
+  for await (const _ of $.turn.step({ turnId: 't3', index: 0, model: 'claude-opus-5-5', effort: 'max', messageCount: 1 }));
+  await $.turn.complete(TURN_DONE)
+  const ts = statsLines(seen).filter((x: any) => x.kind === 'turn')
+  expect(ts.map((t: any) => t.manual)).toEqual([undefined, true, undefined])
+})
+
 test('stats: a subagent the router did not offer counts at its own price', async ($: any, on: any) => {
   const seen = engine(on, PICK.same)
   on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a2' }))

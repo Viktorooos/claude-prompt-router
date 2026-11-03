@@ -68,6 +68,16 @@ export function knownModel(v: unknown): Model | '' {
   return ALL_MODELS.find(m => t.includes(m)) ?? ''
 }
 
+// Whether effort level or model `a` is above `b` (low … max, haiku … fable); false when either is unknown.
+export function above(a: unknown, b: unknown): boolean {
+  const la = asLevel(a)
+  const lb = asLevel(b)
+  if (la && lb) return LEVELS.indexOf(la) > LEVELS.indexOf(lb)
+  const ma = knownModel(a)
+  const mb = knownModel(b)
+  return !!ma && !!mb && ALL_MODELS.indexOf(ma) > ALL_MODELS.indexOf(mb)
+}
+
 // A model the router may offer: an unknown or unavailable one falls back to Opus.
 export function asModel(v: unknown, models: readonly Model[] = ALL_MODELS): Model {
   const m = knownModel(v)

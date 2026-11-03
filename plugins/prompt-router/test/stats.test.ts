@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { EFFORT_OUTPUT, REFERENCE, byDay, episodes, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
+import { EFFORT_OUTPUT, FAILURE_WEIGHTS, REFERENCE, byDay, episodes, failureOf, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -377,6 +377,75 @@ test('episodes: older records without follows count each prompt as its own task,
   ])
   // Oldest first by where each task started.
   expect(eps.map(e => [e.chat, e.decisions.length])).toEqual([['c1', 1], ['c1', 2], ['c2', 1]])
+})
+
+test('re-work also counts a correction, a switch up by hand and a cut-off answer, each by its weight', () => {
+  const routed = (ts: number, key: string) => decision({ ts, key, from: { model: 'opus', effort: 'medium' }, to: cheap })
+  const records: Entry[] = [
+    // Corrected: the next prompt says the answer was wrong.
+    routed(NOW - 10 * HOUR, 'fix the parser'),
+    turn('haiku', 'opus', { ts: NOW - 10 * HOUR + MIN }),
+    decision({ ts: NOW - 10 * HOUR + 2 * MIN, key: 'still broken', follows: 'corrects' }),
+    // Switched: the answer to the next prompt ran after the person moved the picker up.
+    routed(NOW - 8 * HOUR, 'why is it slow'),
+    turn('haiku', 'opus', { ts: NOW - 8 * HOUR + MIN }),
+    decision({ ts: NOW - 8 * HOUR + 2 * MIN, key: 'look again', follows: 'continues' }),
+    turn('opus', 'opus', { ts: NOW - 8 * HOUR + 3 * MIN, manual: true }),
+    // Interrupted: the answer was cut off (no usage).
+    routed(NOW - 6 * HOUR, 'rename the field'),
+    turn('haiku', 'opus', { ts: NOW - 6 * HOUR + MIN, usage: undefined }),
+    // Fine: the next step goes on.
+    routed(NOW - 4 * HOUR, 'add a test'),
+    turn('haiku', 'opus', { ts: NOW - 4 * HOUR + MIN }),
+    decision({ ts: NOW - 4 * HOUR + 2 * MIN, key: 'now commit', follows: 'continues' }),
+  ]
+  const total = summarize(records, NOW).total
+  expect(total.routed).toBe(4)
+  close(total.rework, FAILURE_WEIGHTS.corrected + FAILURE_WEIGHTS.switched + FAILURE_WEIGHTS.interrupted)
+  close(total.accuracyPct, (1 - total.rework / 4) * 100)
+})
+
+test('re-work: a subagent cut off or a switch before the next prompt is not the routed answer failing', () => {
+  const records: Entry[] = [
+    decision({ ts: NOW - 2 * HOUR, key: 'audit deps', to: cheap }),
+    turn('haiku', 'opus', { ts: NOW - 2 * HOUR + MIN, agentId: 'a1', usage: undefined }),
+    turn('haiku', 'opus', { ts: NOW - 2 * HOUR + 2 * MIN, manual: true }),
+  ]
+  expect(summarize(records, NOW).total.rework).toBe(0)
+})
+
+test('failureOf: the strongest sign in the task wins, with every reason listed', () => {
+  const eps = episodes([
+    decision({ ts: NOW - 60 * MIN, key: 'fix the parser', follows: 'new', to: cheap }),
+    turn('haiku', 'opus', { ts: NOW - 59 * MIN, usage: undefined }),
+    decision({ ts: NOW - 55 * MIN, key: 'still broken', follows: 'corrects' }),
+    turn('opus', 'opus', { ts: NOW - 50 * MIN, manual: true }),
+    decision({ ts: NOW - 45 * MIN, key: 'fix the parser', follows: 'corrects' }),
+  ])
+  expect(eps.length).toBe(1)
+  const f = failureOf(eps[0]!)
+  expect(f.reasons.sort()).toEqual(['corrected', 'interrupted', 'repeated', 'switched'])
+  expect(f.weight).toBe(1)
+})
+
+test('failureOf: a task that went on without trouble has no failure; a lone correction weighs less than a repeat', () => {
+  const [ok] = episodes([
+    decision({ ts: NOW - 60 * MIN, key: 'add a button', follows: 'new', to: cheap }),
+    turn('haiku', 'opus', { ts: NOW - 59 * MIN }),
+    decision({ ts: NOW - 55 * MIN, key: 'and a test', follows: 'continues' }),
+    turn('opus', 'opus', { ts: NOW - 54 * MIN }),
+  ])
+  expect(failureOf(ok!)).toEqual({ weight: 0, reasons: [] })
+  const [fixed] = episodes([
+    decision({ ts: NOW - 60 * MIN, key: 'add a button', follows: 'new', to: cheap }),
+    turn('haiku', 'opus', { ts: NOW - 59 * MIN }),
+    decision({ ts: NOW - 55 * MIN, key: 'the button is not visible', follows: 'corrects' }),
+  ])
+  expect(failureOf(fixed!)).toEqual({ weight: FAILURE_WEIGHTS.corrected, reasons: ['corrected'] })
+  expect(FAILURE_WEIGHTS.corrected).toBeLessThan(FAILURE_WEIGHTS.repeated)
+  // A switch up before the task's first answer is no sign against the task.
+  const [first] = episodes([turn('opus', 'opus', { ts: NOW - 59 * MIN, manual: true }), decision({ ts: NOW - 58 * MIN, key: 'x', follows: 'continues' })])
+  expect(failureOf(first!).reasons).toEqual([])
 })
 
 test('episodes: turns before the first prompt the router saw form a task with no prompt', () => {

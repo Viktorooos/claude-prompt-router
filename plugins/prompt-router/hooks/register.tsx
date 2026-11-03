@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
@@ -62,6 +62,8 @@ const routedAgents = new Map<string, { base: string; context: number }>()
 const agentSteps = new Map<string, number>()
 // The model of the main chat's last finished turn, to tell a turn the router switched models on.
 let lastTurnModel = ''
+// The person moved the picker above the model or effort the router set, since the last main-chat turn.
+let manualUp = false
 // openPane on: the pane was opened (and placed, or retried on the first prompt) this session.
 let paneOpened = false
 // The period the pane's savings show (a pane button picks it).
@@ -636,6 +638,7 @@ export const register: Register = (on, options) => {
     routedAgents.clear()
     agentSteps.clear()
     lastTurnModel = ''
+    manualUp = false
     await loadOptions($)
     await $.command.register({ name: 'router', description: 'Prompt Router: status, off / on, stats, or the panel', argumentHint: '[off|on|stats|panel]' })
     await $.tool.register({
@@ -717,17 +720,20 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined || typeof e.effort !== 'string') return yield* next(e)
     lastEffort = e.effort
     if (!hold && !(routedLevel && e.effort === routedLevel)) {
+      if (routedLevel && above(e.effort, routedLevel)) manualUp = true
       routedLevel = ''
       effortBase = e.effort
     }
     // Without the router the chat runs on the person's own pick; a model the router set keeps the old one.
     if (!modelHold && !(routed && knownModel(e.model) === knownModel(routed))) {
+      if (routed && above(e.model, routed)) manualUp = true
       routed = ''
       baseline = e.model
     }
     // The person picked another model: the mod lets go of the one it held.
     if (modelHold && !modelHold.base) modelHold = { ...modelHold, base: e.model }
     if (modelHold && e.model !== modelHold.base) {
+      if (above(e.model, modelHold.model)) manualUp = true
       modelHold = null
       await $.state.set(MODEL_HOLD, null)
       redraw($)
@@ -738,6 +744,7 @@ export const register: Register = (on, options) => {
     // Taken before the mod saw a request (e.g. right after a reload): this request's level is the base.
     if (hold && !hold.base) hold = { ...hold, base: e.effort }
     if (hold && e.effort !== hold.base) {
+      if (above(e.effort, hold.level)) manualUp = true
       hold = null
       await $.state.set(OVERRIDE, null)
       redraw($)
@@ -788,9 +795,12 @@ export const register: Register = (on, options) => {
       // The router moved this chat to another model since the last turn (not the person's own switch).
       const switched = !e.agentId && !!lastTurnModel && !!model && model !== lastTurnModel && model !== base
       if (!e.agentId && model) lastTurnModel = model
+      const manual = !e.agentId && manualUp
+      if (!e.agentId) manualUp = false
       pending.push({
         kind: 'turn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, ...(e.agentId ? { agentId: e.agentId } : {}), model, baseline: base, ...(usage ? { usage } : {}),
         ...(typeof e.durationMs === 'number' ? { durationMs: e.durationMs } : {}),
+        ...(manual ? { manual: true } : {}),
         ...(agent?.context && requests ? { mainContext: agent.context, requests } : {}),
         ...(switched ? { switched: true } : {}),
         ...(!e.agentId && stepEffort?.effort && stepEffort.base ? { effort: stepEffort.effort, baseEffort: stepEffort.base } : {}),
