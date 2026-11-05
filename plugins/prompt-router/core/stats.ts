@@ -2,7 +2,7 @@
 // Every dollar is an estimate from core/prices.ts. Honest by design: the classifier's cost comes off
 // the saving, a stronger model is shown as extra cost, an effort change is priced apart as a guess, and
 // the balance takes all of them in.
-import { LEVELS, MODEL_NAMES, NAMES, above, knownModel } from './router.ts'
+import { LEVELS, MODEL_NAMES, NAMES, above, asLevel, knownModel } from './router.ts'
 import type { Level } from './router.ts'
 import { cost } from './prices.ts'
 import type { Usage } from './prices.ts'
@@ -186,54 +186,101 @@ function withoutUsage(t: Turn, u: Usage, scale = 1): Usage {
 }
 
 // What the savings are measured against (option compareWith): a model at an effort for every turn,
-// or null for each turn's own `baseline` (the chat's first model). Applied when the log is read, so a
-// new choice reprices the old turns too.
-export type Compare = { model: string; effort: Level } | null
+// a mix of them (history: what the user ran before the router, each part's share of the tokens), or
+// null for each turn's own `baseline` (the chat's first model). Applied when the log is read, so a
+// new choice reprices the old turns too. `fallback` says why a target stands in for history.
+export type Target = { model: string; effort: Level; fallback?: 'pending' | 'none' }
+export type MixPart = { model: string; effort: Level; share: number }
+export type Compare = Target | { mix: MixPart[] } | null
 
 // The turn as if it would have run on `c` without the router. A turn with no known effort (a
 // subagent) keeps its output: only the model is repriced.
-function against(t: Turn, c: Compare): Turn {
+function against(t: Turn, c: Target | MixPart | null): Turn {
   return c ? { ...t, baseline: c.model, baseEffort: c.effort } : t
 }
 
+type Priced = { without: number; saved: number; extra: number; effort: number; unpriced: boolean }
+
+// What one turn would have cost on its baseline, the model's part and the effort's part apart.
+function priceWithout(t: Turn, usage: Usage, actual: number, listActual: number | null): Priced {
+  const scale = effortScale(t)
+  const sameEffort = withoutUsage(t, usage)
+  if (t.model === t.baseline && sameEffort === usage && scale === 1) return { without: actual, saved: 0, extra: 0, effort: 0, unpriced: false }
+  // The saving compares list prices on both sides; without one of them, no saving is claimed.
+  const listModel = cost(sameEffort, t.baseline)
+  const listWithout = scale === 1 ? listModel : cost(withoutUsage(t, usage, scale), t.baseline)
+  if (listActual === null || listModel === null || listWithout === null) return { without: actual, saved: 0, extra: 0, effort: 0, unpriced: true }
+  // The model's part and the effort's part apart: the effort's is the guess.
+  const diff = listModel - listActual
+  const effortDiff = listWithout - listModel
+  return { without: actual + diff + effortDiff, saved: Math.max(diff, 0), extra: Math.max(-diff, 0), effort: effortDiff, unpriced: false }
+}
+
 function addTurn(s: Summary, turn: Turn, c: Compare) {
-  const t = against(turn, c)
-  if (!t.usage) {
+  if (!turn.usage) {
     s.unknownTurns++
     return
   }
-  const sum = (s.tokens[t.model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
-  for (const k of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) sum[k] += t.usage[k] ?? 0
-  const listActual = cost(t.usage, t.model)
-  const actual = t.usd ?? listActual
+  const sum = (s.tokens[turn.model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
+  for (const k of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) sum[k] += turn.usage[k] ?? 0
+  const listActual = cost(turn.usage, turn.model)
+  const actual = turn.usd ?? listActual
   if (actual === null) {
     s.unpricedTurns++
     return
   }
   s.actualUsd += actual
   s.pricedTurns++
-  s.referenceUsd += cost(withoutUsage(t, t.usage, referenceScale(t)), REFERENCE.model) ?? actual
-  const scale = effortScale(t)
-  const sameEffort = withoutUsage(t, t.usage)
-  if (t.model === t.baseline && sameEffort === t.usage && scale === 1) {
-    s.withoutUsd += actual
-    return
-  }
-  // The saving compares list prices on both sides; without one of them, no saving is claimed.
-  const listModel = cost(sameEffort, t.baseline)
-  const listWithout = scale === 1 ? listModel : cost(withoutUsage(t, t.usage, scale), t.baseline)
-  if (listActual === null || listModel === null || listWithout === null) {
+  s.referenceUsd += cost(withoutUsage(turn, turn.usage, referenceScale(turn)), REFERENCE.model) ?? actual
+  // A mix prices the turn on each part and weights the results by the parts' shares.
+  const parts: [Turn, number][] = c && 'mix' in c ? c.mix.map(p => [against(turn, p), p.share]) : [[against(turn, c), 1]]
+  const priced = parts.map(([t, w]) => [priceWithout(t, turn.usage!, actual, listActual), w] as const)
+  if (priced.some(([p]) => p.unpriced)) {
     s.unpricedTurns++
     s.withoutUsd += actual
     return
   }
-  // The model's part and the effort's part apart: the effort's is the guess.
-  const diff = listModel - listActual
-  const effortDiff = listWithout - listModel
-  s.withoutUsd += actual + diff + effortDiff
-  if (diff > 0) s.savedUsd += diff
-  else s.extraUsd -= diff
-  s.effortUsd += effortDiff
+  for (const [p, w] of priced) {
+    s.withoutUsd += p.without * w
+    s.savedUsd += p.saved * w
+    s.extraUsd += p.extra * w
+    s.effortUsd += p.effort * w
+  }
+}
+
+// What history-scan.mjs writes: the tokens before the router per "<model id>|<effort>".
+export type History = { version: number; before: number; computedAt: number; ms?: number; files?: number; tokens: { [key: string]: number } }
+
+// The history as a mix: tokens per known model and effort (medium when the transcript had none),
+// each part's share of the whole, biggest first; parts under 0.5 % fold into the others. Null with
+// no priced tokens.
+export function historyMix(h: History | null | undefined): MixPart[] | null {
+  const by = new Map<string, number>()
+  for (const [key, n] of Object.entries(h?.tokens ?? {})) {
+    const [id = '', e = ''] = key.split('|')
+    const model = knownModel(id)
+    if (!model || !(n > 0) || cost({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }, model) === null) continue
+    const k = `${model}|${asLevel(e) || 'medium'}`
+    by.set(k, (by.get(k) ?? 0) + n)
+  }
+  const total = [...by.values()].reduce((a, b) => a + b, 0)
+  if (!total) return null
+  const kept = [...by].filter(([, n]) => n / total >= 0.005)
+  const keptTotal = kept.reduce((a, [, n]) => a + n, 0)
+  return kept
+    .map(([k, n]) => {
+      const [model = '', effort = 'medium'] = k.split('|')
+      return { model, effort: effort as Level, share: n / keptTotal }
+    })
+    .sort((a, b) => b.share - a.share)
+}
+
+// compareWith history: the mix once computed, else Opus medium with why (still computing, or no
+// sessions from before the router).
+export function historyCompare(h: History | null | undefined, computing: boolean): Compare {
+  const mix = historyMix(h)
+  if (mix) return { mix }
+  return { ...REFERENCE, fallback: h || !computing ? 'none' : 'pending' }
 }
 
 function finish(s: Summary): Summary {
@@ -634,17 +681,25 @@ export const usd = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2
 // "Opus medium" for a compare target, "the chat's first model" for null.
 export function compareLabel(c: Compare): string {
   if (!c) return "the chat's first model"
+  if ('mix' in c) return `your history (${mixLabel(c.mix)})`
+  return targetLabel(c)
+}
+
+function targetLabel(c: { model: string; effort: Level }) {
   const m = knownModel(c.model)
   return `${m ? MODEL_NAMES[m] : c.model} ${NAMES[c.effort].toLowerCase()}`
 }
 
-export const isReference = (c: Compare) => !!c && knownModel(c.model) === REFERENCE.model && c.effort === REFERENCE.effort
+// "70 % Opus high, 25 % Sonnet medium, 5 % Haiku medium"
+export const mixLabel = (mix: readonly MixPart[]) => mix.map(p => `${Math.round(p.share * 100)} % ${targetLabel(p)}`).join(', ')
+
+export const isReference = (c: Compare) => !!c && !('mix' in c) && knownModel(c.model) === REFERENCE.model && c.effort === REFERENCE.effort
 
 // The rows of /router stats, shared by the text table and the pane. With a compare target the cost
 // without router is that model's, and the reference row goes when it is the same yardstick.
 export function statsRowList(c: Compare = null): readonly [string, (s: Summary) => string][] {
   const rows = STATS_ROWS.filter(([n]) => !(isReference(c) && n.startsWith('Vs. always')))
-  return c ? rows.map(([n, f]) => [n === 'Cost without router' ? `Cost on ${compareLabel(c)}` : n, f] as const) : rows
+  return c ? rows.map(([n, f]) => [n === 'Cost without router' ? `Cost on ${'mix' in c ? 'your history' : compareLabel(c)}` : n, f] as const) : rows
 }
 
 export const STATS_ROWS: readonly [string, (s: Summary) => string][] = [
@@ -666,7 +721,16 @@ export const STATS_ROWS: readonly [string, (s: Summary) => string][] = [
   ['Turns unknown / unpriced', s => `${s.unknownTurns} / ${s.unpricedTurns}`],
 ]
 
-const NOTE_COMPARE = (c: Compare) => c
+const FALLBACK = {
+  pending: 'compareWith is history, but the sessions from before the router are still being counted: compared with Opus medium until then.',
+  none: 'compareWith is history, but there are no sessions from before the router to count: compared with Opus medium.',
+}
+
+const NOTE_COMPARE = (c: Compare) => c && 'mix' in c
+  ? `Compared with ${compareLabel(c)}: the models and efforts you ran before the router, weighted by their tokens (option compareWith: history). Each turn is priced on every part and the results weighted by its share; the output weighted to each part's effort (a guess).`
+  : c?.fallback
+  ? FALLBACK[c.fallback]
+  : c
   ? `Compared with ${compareLabel(c)} for every turn (option compareWith; first = the chat's first model): the same tokens priced on it, the output weighted to its effort (a guess); a turn with no known effort is priced at its own output.`
   : "Compared with the chat's first model (option compareWith: first)."
 

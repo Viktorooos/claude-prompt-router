@@ -104,9 +104,9 @@
     "compareWith": {
       "type": "string",
       "title": "Compare savings with",
-      "description": "What the savings are measured against: a model at an effort for every chat (opus-medium, Anthropic's pick for everyday work), or first: the model the chat started on. Repriced from the logged tokens, so old data follows the choice.",
+      "description": "What the savings are measured against: a model at an effort for every chat (opus-medium, Anthropic's pick for everyday work), first: the model the chat started on, or history: the mix of models and efforts you ran before the router, weighted by tokens (counted once in the background from your transcripts; Opus medium until then). Repriced from the logged tokens, so old data follows the choice.",
       "default": "opus-medium",
-      "options": ["opus-medium", "opus-low", "opus-high", "opus-xhigh", "opus-max", "haiku-medium", "haiku-low", "haiku-high", "haiku-xhigh", "haiku-max", "sonnet-medium", "sonnet-low", "sonnet-high", "sonnet-xhigh", "sonnet-max", "fable-medium", "fable-low", "fable-high", "fable-xhigh", "fable-max", "first"]
+      "options": ["opus-medium", "opus-low", "opus-high", "opus-xhigh", "opus-max", "haiku-medium", "haiku-low", "haiku-high", "haiku-xhigh", "haiku-max", "sonnet-medium", "sonnet-low", "sonnet-high", "sonnet-xhigh", "sonnet-max", "fable-medium", "fable-low", "fable-high", "fable-xhigh", "fable-max", "first", "history"]
     }
   }
 }

@@ -1365,6 +1365,7 @@ test('compareWith: Opus medium by default, first and any model-effort pair, junk
   expect(toConfig({ compareWith: 'first' }).compareWith).toBe('first')
   expect(toConfig({ compareWith: 'sonnet-high' }).compareWith).toBe('sonnet-high')
   expect(toConfig({ compareWith: 'gpt-5' }).compareWith).toBe('opus-medium')
+  expect(toConfig({ compareWith: 'history' }).compareWith).toBe('history')
 })
 
 test('/router stats compares with compareWith: a Haiku chat escalated to Opus is not a loss against Opus medium', { options: { compareWith: 'opus-medium' } } as any, async ($: any, on: any) => {
@@ -1391,4 +1392,28 @@ test('/router stats with compareWith first keeps the chat\'s first model', { opt
   expect(r.text).toMatch(/Cost without router\s+\$0\.50/)
   expect(r.text).toMatch(/Balance\s+−\$19\.50/)
   expect(r.text).toMatch(/^Vs\. always opus medium/m)
+})
+
+test('/router stats with compareWith history prices on the mix from prompt-router-history.json', { options: { compareWith: 'history' } } as any, async ($: any, on: any) => {
+  const now = Date.now()
+  const log = [
+    { kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-opus-5-5', baseline: 'claude-haiku-5-5', effort: 'medium', baseEffort: 'medium', usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } },
+    { kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-haiku-5-5', baseline: 'claude-haiku-5-5', effort: 'medium', baseEffort: 'medium', usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } },
+  ].map(r => JSON.stringify(r)).join('\n')
+  const history = JSON.stringify({ version: 1, before: 0, computedAt: 0, tokens: { 'claude-opus-5-5|medium': 100, 'claude-haiku-5-5|': 100 } })
+  engine(on, PICK.same, { now, files: { '*/prompt-router-stats.jsonl': `${log}\n`, '*/prompt-router-history.json': history } })
+  await start($)
+  const r = await $.command.run({ command: 'router', args: 'stats' })
+  expect(r.text).toMatch(/Cost on your history\s+\$20\.50/)
+  expect(r.text).toMatch(/Compared with your history \(50 % Opus medium, 50 % Haiku medium\)/)
+})
+
+test('/router stats with compareWith history and no history file falls back to Opus medium and says so', { options: { compareWith: 'history' } } as any, async ($: any, on: any) => {
+  const now = Date.now()
+  const log = JSON.stringify({ kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-haiku-5-5', baseline: 'claude-haiku-5-5', effort: 'medium', baseEffort: 'medium', usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } })
+  engine(on, PICK.same, { now, files: { '*/prompt-router-stats.jsonl': `${log}\n` } })
+  await start($)
+  const r = await $.command.run({ command: 'router', args: 'stats' })
+  expect(r.text).toMatch(/Cost on Opus medium\s+\$20\.00/)
+  expect(r.text).toMatch(/compareWith is history, but .*compared with Opus medium/)
 })
