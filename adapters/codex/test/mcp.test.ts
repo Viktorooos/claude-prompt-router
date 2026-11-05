@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { findTranscript, route, serve } from '../mcp.ts'
+import { readStats } from '../stats.ts'
 import { PICK, home } from './helpers.ts'
 
 // A rollout of a chat whose current turn (t9) is still open, the prompt already in it.
@@ -129,4 +130,25 @@ test('tools/call route returns the note as text', async () => {
   const out = await rpc([{ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'route', arguments: { prompt: 'napiš zprávu' } } }], { codexHome: h, runner: async () => PICK.subagent.replace('subagent', 'here') })
   assert.equal(out[0].id, 7)
   assert.match(out[0].result.content[0].text, /switch with `\/model gpt-6-luna low`/)
+})
+
+// The desktop has no spawn_agent: a subagent pick stays here, as with subagentSuggestions off.
+test('the desktop never offers a subagent, with subagentSuggestions ask or auto', async () => {
+  for (const subagentSuggestions of ['ask', 'auto']) {
+    const h = home({ subagentSuggestions })
+    rollout(sessions(h), 'a', 'spusť testy', { model: 'gpt-6.1-sol', replied: true })
+    const r = await route({ prompt: 'spusť testy' }, { codexHome: h, runner: async () => PICK.subagent })
+    assert.doesNotMatch(r, /Subagent|spawn_agent/)
+    const s = await route({ prompt: 'spusť testy' }, { codexHome: h, runner: async () => PICK.session })
+    assert.match(s, /New session/)
+    assert.doesNotMatch(s, /Subagent|spawn_agent/)
+  }
+})
+
+test('the desktop logs each decision under the chat id from the rollout', async () => {
+  const h = home()
+  rollout(sessions(h), 'chat-42', 'napiš zprávu pro kolegu')
+  await route({ prompt: 'napiš zprávu pro kolegu' }, { codexHome: h, runner: async () => PICK.first })
+  const d = readStats(h).find(r => r.kind === 'decision')
+  assert.equal(d?.kind === 'decision' && d.chat, 'chat-42')
 })

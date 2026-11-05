@@ -31,7 +31,7 @@ import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { fromTiers, shownOptions, tierLine } from '../shared/tiers.ts'
+import { fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
 import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, preferSession, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
@@ -99,7 +99,9 @@ export async function loadOptions(home: string): Promise<Options> {
     // The defaults.
   }
   // `raw` stays as written (/router off|on writes it back); the parsing reads tier keys.
-  const given = fromTiers({ ...CODEX_DEFAULTS, ...raw })
+  // A classifier value that names no tier or model falls back to the Codex default, not toConfig's.
+  const classifier = tierModel(raw.classifier) ? raw.classifier : CODEX_DEFAULTS.classifier
+  const given = fromTiers({ ...CODEX_DEFAULTS, ...raw, classifier })
   const cfg = toConfig(given)
   return {
     raw,
@@ -146,7 +148,7 @@ export async function configDefaults(home: string) {
   }
 }
 
-export type History = { users: string[]; reply: string; isFirst: boolean; model: string; effort: string; tokens: number | undefined; window?: number; openTurns: string[] }
+export type History = { id: string; users: string[]; reply: string; isFirst: boolean; model: string; effort: string; tokens: number | undefined; window?: number; openTurns: string[] }
 
 const INJECTED = /^\s*(<[a-z_]+[\s>/]|<\/[a-z_]+>|# AGENTS\.md instructions|\[Prompt Router|Codex could not read)/
 
@@ -162,7 +164,7 @@ function textParts(content: unknown) {
 // The chat so far, from the rollout JSONL. Its format is not a stable interface: anything that does
 // not read is skipped, and a missing file is an empty chat.
 export async function readHistory(path: string | null | undefined): Promise<History> {
-  const h: History = { users: [], reply: '', isFirst: true, model: '', effort: '', tokens: undefined, openTurns: [] }
+  const h: History = { id: '', users: [], reply: '', isFirst: true, model: '', effort: '', tokens: undefined, openTurns: [] }
   if (!path) return h
   let text = ''
   try {
@@ -184,7 +186,10 @@ export async function readHistory(path: string | null | undefined): Promise<Hist
     const p = j?.payload
     if (!p || typeof p !== 'object') continue
     try {
-      if (j.type === 'turn_context') {
+      if (j.type === 'session_meta') {
+        const id = p.id ?? p.session_id
+        if (typeof id === 'string' && !h.id) h.id = id
+      } else if (j.type === 'turn_context') {
         if (typeof p.model === 'string') h.model = p.model
         const e = typeof p.effort === 'string' ? p.effort : p.collaboration_mode?.settings?.reasoning_effort
         if (typeof e === 'string') h.effort = e
@@ -227,11 +232,21 @@ function schemaFile() {
   return { dir, file: join(dir, 'schema.json'), out: join(dir, 'last.txt') }
 }
 
+// Codex sends it as strict structured output: every property must be in required, so the fields
+// the template does not always ask for are nullable (parsePick reads a null as missing).
 const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['where', 'model', 'effort', 'why'],
-  properties: { where: { type: 'string', enum: ['keep', 'here', 'subagent', 'session'] }, model: { type: 'string' }, effort: { type: 'string' }, why: { type: 'string' } },
+  required: ['where', 'model', 'effort', 'work', 'why', 'follows', 'note'],
+  properties: {
+    where: { type: 'string', enum: ['keep', 'here', 'subagent', 'session'] },
+    model: { type: 'string' },
+    effort: { type: 'string' },
+    work: { type: ['string', 'null'], enum: ['new', 'continue', null] },
+    why: { type: 'string' },
+    follows: { type: ['string', 'null'], enum: ['continues', 'corrects', 'new', null] },
+    note: { type: ['string', 'null'] },
+  },
 }
 
 // The codex binary. The desktop app runs hooks with the short PATH of a Dock app (no Homebrew bin),
@@ -333,8 +348,12 @@ async function routerCommand(home: string, o: Options, arg: string, cur: { model
     let raw: Record<string, unknown> = {}
     try {
       raw = JSON.parse(await readFile(paths(home).options, 'utf8'))
-    } catch {
-      raw = {}
+    } catch (err) {
+      // No options file yet makes a new one; otherwise never replace the user's options with {enabled} alone.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        await log(home, `router ${a}`, err)
+        return `Prompt Router could not read ${paths(home).options}, so it is left as it is. Fix the file, then try /router ${a} again.`
+      }
     }
     await mkdir(home, { recursive: true })
     await writeFile(paths(home).options, `${JSON.stringify({ ...raw, enabled }, null, 2)}\n`)
@@ -353,6 +372,8 @@ async function routerCommand(home: string, o: Options, arg: string, cur: { model
 export async function handle(input: Input, deps: Deps = {}): Promise<Output | null> {
   const home = deps.codexHome ?? codexHome()
   const o = await loadOptions(home)
+  // The client has no spawn_agent: a subagent pick stays here, as with subagentSuggestions off.
+  if (deps.noSubagent) o.cfg = { ...o.cfg, subagentSuggestions: 'off' }
   const classifier = o.models[o.cfg.classifier]
   const text = typed(String(input.prompt ?? ''))
   if (!text) return null
@@ -371,7 +392,7 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
 
   const levels = await supported(home)
   const effortOf = (slug: string, l: Level) => effortFor(o.efforts, levels, slug, l)
-  const ctx: NoteCtx = { cfg: o.cfg, models: o.models, effortOf }
+  const ctx: NoteCtx = { cfg: o.cfg, models: o.models, effortOf, noSubagent: deps.noSubagent }
   // Fable only when the chat runs on its model or Codex lists it.
   const avail: Model[] = routerModel(o.models, model) === 'fable' || levels.has(o.models.fable) ? [...ALL_MODELS] : [...BASE_MODELS]
   const users = [...h.users]

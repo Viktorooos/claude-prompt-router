@@ -3,7 +3,7 @@
 import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 
 import { parseLog, summarize } from '../../plugins/prompt-router/core/stats.ts'
-import type { Entry, Summary } from '../../plugins/prompt-router/core/stats.ts'
+import type { Compare, Entry, Summary } from '../../plugins/prompt-router/core/stats.ts'
 
 const DAY = 86_400_000
 const KEEP_MS = 90 * DAY
@@ -74,8 +74,8 @@ function usd(n: number) {
 }
 
 // Today / 7 days / Total as a plain text table.
-export function statsTable(records: readonly Entry[], now: number): string {
-  const r = summarize(records, now)
+export function statsTable(records: readonly Entry[], now: number, compare: Compare = null): string {
+  const r = summarize(records, now, compare)
   const cols = [r.today, r.week, r.total]
   const rows: [string, (s: Summary) => string][] = [
     ['Prompts routed', s => String(s.prompts)],

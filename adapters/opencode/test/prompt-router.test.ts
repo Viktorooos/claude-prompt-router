@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
+import { agentFor } from '../notes.ts'
 import { PICK, named, ongoing, said, send, setup } from './helpers.ts'
 
 const S = 'ses_main'
@@ -507,9 +508,33 @@ test('newSessionAt: without a listed window the chat counts against 200k', async
   assert.match(said(await send(hooks, S, 'now add a favourites screen')), /75% of context/)
 })
 
-test('newSessionAt: a continuation or the option off stays here', async () => {
+test('newSessionAt: past the share a continuation is offered as a new session too; the option off stays here', async () => {
   const goOn = await setup({ reply: HERE_NEW.replace('"new"', '"continue"'), history: longChat(180_000), providers: withWindow(200_000) })
-  assert.equal(said(await send(goOn.hooks, S, 'fix it')), 'fix it')
+  assert.match(said(await send(goOn.hooks, S, 'fix it')), /"New session \(claude-opus-5-5 · medium\)"/)
   const off = await fromFile({ reply: HERE_NEW, history: longChat(180_000), providers: withWindow(200_000) }, { newSessionAt: 'off' })
   assert.equal(said(await send(off.hooks, S, 'now add a favourites screen')), 'now add a favourites screen')
+})
+
+test('router_session: only the prompt it sent skips routing; later prompts in that session are routed', async () => {
+  const { hooks, calls } = await setup({ reply: PICK.here, history: ongoing('scratch-1') }, { effortMode: 'auto' })
+  await hooks.tool.router_session.execute({ model: 'standard', effort: 'high', prompt: 'build the settings screen' }, { sessionID: S })
+  await send(hooks, 'scratch-1', 'build the settings screen')
+  assert.equal(named(calls, 'session.prompt').length, 0)
+  const next = await send(hooks, 'scratch-1', 'now rename that variable')
+  assert.equal(named(calls, 'session.prompt').length, 1)
+  assert.equal(next.message.variant, 'low')
+  assert.match(said(await send(hooks, 'scratch-1', '/router')), /Prompt Router/)
+})
+
+test('router_session: when its prompt cannot be sent, the user\'s own first prompt in that session is routed', async () => {
+  const { hooks, client, calls } = await setup({ reply: PICK.here, history: ongoing('scratch-1') }, { effortMode: 'auto' })
+  client.session.promptAsync = async () => { throw new Error('offline') }
+  await assert.rejects(hooks.tool.router_session.execute({ model: 'standard', effort: 'high', prompt: 'build the settings screen' }, { sessionID: S }))
+  await send(hooks, 'scratch-1', 'now rename that variable')
+  assert.equal(named(calls, 'session.prompt').length, 1)
+})
+
+test('options: an empty model id is ignored, the default stays', async () => {
+  const { config } = await setup({}, { models: { haiku: '' } })
+  assert.equal(config.agent[agentFor('haiku')].model, 'anthropic/claude-haiku-5-5')
 })

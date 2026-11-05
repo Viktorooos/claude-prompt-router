@@ -11,7 +11,8 @@ import { userLang } from '../../plugins/prompt-router/core/router.ts'
 
 export const SUBAGENT_TOOL = 'spawn_agent'
 
-export type NoteCtx = { cfg: Config; models: Record<Model, string>; effortOf: (slug: string, l: Level) => string }
+// noSubagent: the client has no spawn_agent (the ChatGPT desktop), so no Subagent option is offered.
+export type NoteCtx = { cfg: Config; models: Record<Model, string>; effortOf: (slug: string, l: Level) => string; noSubagent?: boolean }
 
 // The slash command that puts this chat on a model and effort.
 export function slash(ctx: NoteCtx, slug: string, l: Level) {
@@ -58,10 +59,11 @@ export function askNote(ctx: NoteCtx, p: Pick, cur: { model: string; now: Level 
   const l = label(ctx, p)
   const where = p.where === 'session' ? 'a new session' : 'a subagent'
   const session = `"New session (${l})"`
-  const agent = `"Subagent (${l})"`
+  // The Codex desktop has no spawn_agent: no subagent option there.
+  const agent = ctx.noSubagent ? '' : `"Subagent (${l})"`
   const here = hereChoice(ctx, 'Do it here', p, cur, !midTurn && p.effort !== cur.now && !!cur.model)
-  const options = p.where === 'session' ? `${session}, ${agent}, ${here.options}` : `${agent}, ${here.options}`
-  return `Prompt Router suggests running this prompt in ${where} (${l})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs on ${cur.model || 'an unknown model'} at effort ${cur.now || 'unknown'}. Before doing anything, ${ask('Where should this go?')} with the options ${options}. Write the question and options in ${userLang(cfg)}. Then: New session = give the user, in a bash code block, the command to run in a new terminal: ${sessionCommand(ctx, p)}, then stop here. Subagent = ${subagentCall(ctx, p)} ${here.then}`
+  const options = [p.where === 'session' ? session : '', agent, here.options].filter(Boolean).join(', ')
+  return `Prompt Router suggests running this prompt in ${where} (${l})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs on ${cur.model || 'an unknown model'} at effort ${cur.now || 'unknown'}. Before doing anything, ${ask('Where should this go?')} with the options ${options}. Write the question and options in ${userLang(cfg)}. Then: New session = give the user, in a bash code block, the command to run in a new terminal: ${sessionCommand(ctx, p)}, then stop here.${agent && ` Subagent = ${subagentCall(ctx, p)}`} ${here.then}`
 }
 
 // A prompt that stays here but fits another model: a subagent on that model, or here on the chat's

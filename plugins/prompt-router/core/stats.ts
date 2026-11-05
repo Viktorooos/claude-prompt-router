@@ -154,9 +154,12 @@ function classifierUsd(d: Decision) {
 // output. A guess, not a measurement, so what it prices is shown apart as an estimate.
 export const EFFORT_OUTPUT: Record<Level, number> = { low: 0.5, medium: 0.75, high: 1, xhigh: 1.4, max: 2 }
 
-// How much more output the turn would have made at the person's own effort; 1 when it did not change.
+// A level EFFORT_OUTPUT knows; anything else (a hand-edited log) counts as no effort info.
+const knownEffort = (e: unknown): e is Level => (LEVELS as readonly unknown[]).includes(e)
+
+// How much more output the turn would have made at the person's own effort; 1 when it did not change or is unknown.
 function effortScale(t: Turn) {
-  return t.effort && t.baseEffort && t.effort !== t.baseEffort ? EFFORT_OUTPUT[t.baseEffort] / EFFORT_OUTPUT[t.effort] : 1
+  return knownEffort(t.effort) && knownEffort(t.baseEffort) && t.effort !== t.baseEffort ? EFFORT_OUTPUT[t.baseEffort] / EFFORT_OUTPUT[t.effort] : 1
 }
 
 // The fixed yardstick: the balance above depends on the chat's own first pick (a Haiku-low chat
@@ -166,7 +169,7 @@ export const REFERENCE: { model: string; effort: Level } = { model: 'opus', effo
 
 // The output the turn would have made at REFERENCE's effort; 1 when the turn's effort is unknown.
 function referenceScale(t: Turn) {
-  return t.effort ? EFFORT_OUTPUT[REFERENCE.effort] / EFFORT_OUTPUT[t.effort] : 1
+  return knownEffort(t.effort) ? EFFORT_OUTPUT[REFERENCE.effort] / EFFORT_OUTPUT[t.effort] : 1
 }
 
 // The tokens the same work would have taken without the router (`scale`: the effort's share of the
@@ -479,7 +482,12 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     const later = e.decisions[1] ? turnsUsd(e.turns.filter(t => t.ts >= e.decisions[1]!.ts)) : 0
     const rework = f * later
     const k = classOf(d.where, d.to.model)
-    const cu = usdSpread.get(k)
+    // A subagent or session on the same model is cheaper (a fresh context); on a stronger one it is an escalation.
+    const down = above(d.from.model, d.to.model) || (d.from.model === d.to.model && (d.where !== 'here' || above(d.from.effort, d.to.effort)))
+    // Control tasks are only held back from a move down (neither the model nor the effort higher), so
+    // an escalation, even a partial one, is never measured against them.
+    const lower = down && !above(d.to.model, d.from.model) && !above(d.to.effort, d.from.effort)
+    const cu = lower ? usdSpread.get(k) : undefined
     let without: Spread
     if (cu) {
       out.measured++
@@ -491,15 +499,13 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
       without = { q1: s.withoutUsd, median: s.withoutUsd, q3: s.withoutUsd }
     }
     const firstGain = without.median - (actual - rework)
-    // A subagent or session on the same model is cheaper (a fresh context); on a stronger one it is an escalation.
-    const down = above(d.from.model, d.to.model) || (d.from.model === d.to.model && (d.where !== 'here' || above(d.from.effort, d.to.effort)))
     if (down) out.parts.cheaper += firstGain
     else out.parts.escalation += firstGain
     out.parts.rework -= rework
     usdLow += without.q1 - actual
     usdHigh += without.q3 - actual
     const ms = turnsMs(e.turns)
-    const cm = timed(e.turns) ? msSpread.get(k) : undefined
+    const cm = lower && timed(e.turns) ? msSpread.get(k) : undefined
     if (cm) {
       out.timed++
       msSaved += cm.median - ms

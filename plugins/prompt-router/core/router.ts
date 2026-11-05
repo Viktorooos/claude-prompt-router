@@ -40,7 +40,8 @@ export const SWITCHES = {
   // auto: the suggested subagent runs right away, with no "Where should this go?" (one line tells the user).
   subagentSuggestions: ['ask', 'auto', 'off'],
   sessionSuggestions: ['ask', 'off'],
-  // New work in a chat past this share of its model's context window is offered as a new session.
+  // In a chat past this share of its model's context window, any prompt that would stay here is
+  // offered as a new session (every reply here re-reads the whole context).
   newSessionAt: ['50%', 'off', '40%', '60%', '70%'],
   notifications: ['on', 'off'],
   stats: ['on', 'off'],
@@ -110,8 +111,9 @@ export function inHoldout(seed: string, pct: number): boolean {
 }
 
 // Whether the prompt itself asks for a model or an effort; the router then never holds it back.
+// The names take Czech case endings too (s opusem, na sonnetu, víc effortu).
 export function namesSetting(text: string): boolean {
-  return /\b(haiku|sonnet|opus|fable|effort|ultrathink|think (hard|harder|deeply))\b/i.test(text)
+  return /\b(haik(u|em)|sonnet(u|em|y|a)?|opus(u|em|y|a)?|fabl(e|u|em)|effort(s|u|em|y)?|ultrathink|think (hard|harder|deeply))\b/i.test(text)
 }
 
 // A model the router may offer: an unknown or unavailable one falls back to Opus.

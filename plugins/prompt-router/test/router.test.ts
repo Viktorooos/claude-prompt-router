@@ -573,6 +573,33 @@ test('app text in earlier messages is left out of the chat summary', async ($: a
   expect(seen.prompts[0]).not.toMatch(/Setup detail/)
 })
 
+// The engine hands the hook a prompt before it enters the session, so the transcript holds only the
+// earlier prompts: the last of them is the most recent one, not the new one.
+test('the classifier sees the last earlier prompt among the recent ones, and the new one only as the new prompt', async ($: any, on: any) => {
+  const messages = [
+    { role: 'user', text: 'Fix the duplicate recipes in search', toolUses: [] },
+    { role: 'assistant', text: 'Fixed.', toolUses: [] },
+    { role: 'user', text: 'Now the same on the favourites screen', toolUses: [] },
+    { role: 'assistant', text: 'Done there too.', toolUses: [] },
+  ]
+  const seen = engine(on, PICK.same, { messages })
+  await start($)
+  await submit($, 'and add a test for it')
+  const recent = /<recent>\n([\s\S]*?)\n<\/recent>/.exec(seen.prompts[0])?.[1] ?? ''
+  expect(recent).toMatch(/Now the same on the favourites screen/)
+  expect(recent).toMatch(/Fix the duplicate recipes in search/)
+  expect(recent).not.toMatch(/add a test for it/)
+  expect(seen.prompts[0]).toMatch(/<first>Fix the duplicate recipes in search<\/first>/)
+})
+
+test('on the first prompt the classifier sees it as the chat topic too', async ($: any, on: any) => {
+  const seen = engine(on, PICK.same, { isFirst: true })
+  await start($)
+  await submit($, 'Build a shopping list screen')
+  expect(seen.prompts[0]).toMatch(/<first>Build a shopping list screen<\/first>/)
+  expect(seen.prompts[0]).toMatch(/<recent>\n\(none\)\n<\/recent>/)
+})
+
 test('no start_session (terminal, VS Code): a session pick gives the claude command instead', async ($: any, on: any) => {
   const seen = engine(on, PICK.session, { tools: [], surfaces: ['terminal'] })
   await start($)
@@ -1077,6 +1104,11 @@ test('namesSetting: a prompt that asks for a model or effort', () => {
   for (const t of ['fix the empty search', 'run the tests', 'the magnum layout']) expect(namesSetting(t)).toBe(false)
 })
 
+test('namesSetting: inflected model names count too (Czech and other languages)', () => {
+  for (const t of ['udělej to s opusem', 'pusť to na sonnetu', 'zkus to přes haikem', 'použij fablem', 'efforts high', 'víc effortu']) expect(namesSetting(t)).toBe(true)
+  for (const t of ['the opusculum', 'fabled layout', 'a sonnets list screen']) expect(namesSetting(t)).toBe(false)
+})
+
 test('holdout: a share of lowering prompts keeps its setting and is noted as the control group', { options: { effortDetection: 'auto', holdoutPct: '20' } } as any, async ($: any, on: any) => {
   const seen = engine(on, PICK.here)
   on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
@@ -1168,7 +1200,8 @@ test('stats off: nothing is noted and /router stats says so', { options: { stats
   expect(r.text).toMatch(/stats are off/)
 })
 
-// newSessionAt: new work in a chat already past a share of its model's context window goes to a new session.
+// newSessionAt: any prompt that would stay here, in a chat already past a share of its model's context
+// window, goes to a new session; `work` is still asked for the stats.
 const HERE_NEW = '{"where": "here", "model": "opus", "effort": "medium", "work": "new", "why": "a new screen"}'
 const HERE_GO_ON = '{"where": "here", "model": "opus", "effort": "medium", "work": "continue", "why": "next step"}'
 const pickOf = (work?: 'new' | 'continue') => ({ where: 'here' as const, model: 'opus' as const, effort: 'medium' as const, why: 'a new screen', ...(work ? { work } : {}) })

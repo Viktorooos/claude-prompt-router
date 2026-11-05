@@ -165,8 +165,13 @@ async function applyModel($: EngineInterface, model: Model) {
   redraw($)
 }
 
-function chatOf(messages: readonly SessionMessage[], now: Level | '', tokens: number | undefined, window: number | undefined, model: string, models: readonly Model[]): Chat {
+// The engine hands the hook a prompt before it enters the session, so the transcript holds only the
+// earlier prompts; the new one is added last, so `recent` keeps the latest earlier prompt.
+function chatOf(messages: readonly SessionMessage[], text: string, now: Level | '', tokens: number | undefined, window: number | undefined, model: string, models: readonly Model[]): Chat {
   const users = messages.filter(m => m.role === 'user').map(m => typed(m.text)).filter(Boolean)
+  // Should the transcript already hold it, the classifier still sees it once, as the new prompt.
+  if (users.at(-1) === text) users.pop()
+  users.push(text)
   return {
     first: users[0] ?? '',
     recent: users.slice(-4, -1),
@@ -282,7 +287,7 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
   const model = seenModel || (await chatModel($))
   const models = await availableModels($, model)
   const began = await $.clock.now()
-  const r = await classify($, text, chatOf(messages, now, tokens, window, model, models))
+  const r = await classify($, text, chatOf(messages, text, now, tokens, window, model, models))
   const ms = Math.max(0, (await $.clock.now()) - began)
   if (!r.isAnswered) throw new Error(`pick failed: ${r.reason}`)
   const used = usageOf(r.usage)

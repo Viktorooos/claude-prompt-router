@@ -404,9 +404,9 @@ test('newSessionAt: without a window the chat counts against 200k', async () => 
   assert.match((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(150_000) })).system, /75% of context/)
 })
 
-test('newSessionAt: a continuation, a big window or the option off stays here', async () => {
+test('newSessionAt: a continuation goes to a session too; a big window or the option off stays here', async () => {
   const goOn = HERE_NEW.replace('"new"', '"continue"')
-  assert.equal((await send('fix it', { reply: goOn, transcript: longChat(200_000, 258_400) })).r, null)
+  assert.match((await send('fix it', { reply: goOn, transcript: longChat(200_000, 258_400) })).system, /new session/)
   assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(150_000, 1_000_000) })).r, null)
   assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { newSessionAt: 'off' } })).r, null)
   assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { sessionSuggestions: 'off' } })).r, null)
@@ -437,4 +437,37 @@ test('subagentSuggestions auto does not override midChatModelDetection auto (the
   const { context } = await send('rename the keys we just found', { reply: OTHER.lower, options: { subagentSuggestions: 'auto', midChatModelDetection: 'auto' } })
   assert.doesNotMatch(context, /start the subagent right away/)
   assert.match(context, /decide yourself/)
+})
+
+// Codex strict structured output: every property listed in required, the optional ones nullable.
+test('codexRunner: the output schema has every field the classifier template asks for', async () => {
+  const copy = join(tmp(), 'schema.json')
+  process.env.PROMPT_ROUTER_CODEX = fakeCodex(`s=""; o=""; while [ $# -gt 0 ]; do case "$1" in --output-schema) s="$2";; -o) o="$2";; esac; shift; done; cat > /dev/null; cp "$s" ${copy}; echo '{"where":"here"}' > "$o"`)
+  try {
+    await codexRunner('x', { model: 'm', effort: 'low', timeoutMs: 5000 })
+  } finally {
+    delete process.env.PROMPT_ROUTER_CODEX
+  }
+  const schema = JSON.parse(readFileSync(copy, 'utf8'))
+  const asked = ['where', 'model', 'effort', 'work', 'why', 'follows', 'note']
+  for (const k of asked) assert.ok(schema.properties[k], `schema lacks ${k}`)
+  assert.deepEqual([...schema.required].sort(), Object.keys(schema.properties).sort())
+  assert.deepEqual(schema.properties.work.enum, ['new', 'continue', null])
+  assert.deepEqual(schema.properties.follows.enum, ['continues', 'corrects', 'new', null])
+  assert.deepEqual(schema.properties.note.type, ['string', 'null'])
+})
+
+test('/router off leaves an options file it cannot read and logs the error', async () => {
+  const h = home()
+  const file = join(h, 'prompt-router.json')
+  writeFileSync(file, '{"classifier": "strong",')
+  const { system } = await send('/router off', { codexHome: h })
+  assert.equal(readFileSync(file, 'utf8'), '{"classifier": "strong",')
+  assert.match(system, /could not read/)
+  assert.match(readFileSync(join(h, 'log', 'prompt-router.log'), 'utf8'), /router off/)
+})
+
+test('an invalid classifier value falls back to the Codex default, light', async () => {
+  const { calls } = await send('fix it', { options: { classifier: 'bogus' } })
+  assert.equal(calls[0].model, 'gpt-6-luna')
 })

@@ -29,7 +29,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, preferSession, describeOptions, knownModel, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, preferSession, describeOptions, knownModel, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import { SESSION_TOOL, STATS_TOOL, SWITCH_TOOL, agentFor, askNote, modelName, otherAutoNote, otherNote, switchNote } from './notes.ts'
 import { TIER_NAMES, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
@@ -82,7 +82,7 @@ function split(id: string) {
 
 function strMap<K extends string>(keys: readonly K[], v: unknown, base: Record<K, string>): Record<K, string> {
   const out = { ...base }
-  if (v && typeof v === 'object') for (const k of keys) if (typeof (v as Record<string, unknown>)[k] === 'string') out[k] = (v as Record<K, string>)[k]
+  if (v && typeof v === 'object') for (const k of keys) if (typeof (v as Record<string, unknown>)[k] === 'string' && (v as Record<K, string>)[k]) out[k] = (v as Record<K, string>)[k]
   return out
 }
 
@@ -124,8 +124,11 @@ export function routerPlugin(tool: ToolFn) {
     const chats = new Map<string, ChatState>()
     // Sessions the router itself made (classifier calls, started sessions): never routed.
     const scratch = new Set<string>()
-    // Sessions the router started, with the chat that started them.
+    // Sessions the router started, with the chat that started them, until their own first prompt is
+    // answered: that prompt (the one router_session sent) is not routed and its turns count under the
+    // old chat; from the next prompt on, the session is a chat of its own.
     const started = new Map<string, string>()
+    const firstPrompt = new Set<string>()
     // Each session's parent ('' for a main chat).
     const parents = new Map<string, string>()
     const stats = statsLog(`${dir}/prompt-router-stats.jsonl`, dir)
@@ -445,8 +448,10 @@ export function routerPlugin(tool: ToolFn) {
         // A prompt typed over a running turn belongs to that work: its model and effort stay.
         if (midTurn) return note('keep', 'applied', fromSide)
         // Another model than the chat's: ask before anything is applied, the chat's model stays.
-        if (p.other) await note('here', 'asked', proposed)
-        if (p.other) return addNote(parts, (cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(ctx, p, p.other.now, now))
+        if (p.other) {
+          await note('subagent', 'asked', proposed)
+          return addNote(parts, (cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(ctx, p, p.other.now, now))
+        }
         const changes: string[] = []
         let askModel: { from: Model } | null = null
         let askEffort: { now: Level | '' } | null = null
@@ -491,7 +496,7 @@ export function routerPlugin(tool: ToolFn) {
         }
         return enabled ? 'Prompt Router is on.' : 'Prompt Router is off. Turn it back on with /router on.'
       }
-      if (arg === 'stats') return statsTable(await stats.read(), Date.now())
+      if (arg === 'stats') return statsTable(await stats.read(), Date.now(), compareTarget(cfg.compareWith))
       const st = chats.get(sid)
       const now = st?.seen ?? ''
       return [
@@ -529,7 +534,10 @@ export function routerPlugin(tool: ToolFn) {
       'chat.message': async (i: { sessionID: string; agent?: string; model?: { providerID: string; modelID: string }; variant?: string }, output: { message: any; parts: Part[] }) => {
         try {
           const sid = i.sessionID
-          if (scratch.has(sid) || started.has(sid)) return
+          if (scratch.has(sid)) return
+          // The prompt router_session sent is not routed again; the next one in that session is.
+          if (firstPrompt.delete(sid)) return
+          started.delete(sid)
           if (await isChild(sid)) {
             // A router subagent: its effort comes from the pick that sent it.
             const level = i.agent ? subEffort.get(i.agent) : undefined
@@ -605,7 +613,7 @@ export function routerPlugin(tool: ToolFn) {
           description: 'Prompt Router: shows what the router saved (today, 7 days, total), an estimate. Use when the user asks for the router stats.',
           args: {},
           async execute() {
-            return statsTable(await stats.read(), Date.now())
+            return statsTable(await stats.read(), Date.now(), compareTarget(cfg.compareWith))
           },
         }),
         [SWITCH_TOOL]: tool({
@@ -642,7 +650,15 @@ export function routerPlugin(tool: ToolFn) {
             const title = args.title?.trim() || clip(args.prompt, 50)
             const created = unwrap<{ id: string }>(await client.session.create({ body: { title } }))
             started.set(created.id, tc?.sessionID ?? '')
-            unwrap(await client.session.promptAsync({ path: { id: created.id }, body: { model: split(models[model]), variant: variantOf(level) || undefined, parts: [{ type: 'text', text: args.prompt }] } }))
+            firstPrompt.add(created.id)
+            try {
+              unwrap(await client.session.promptAsync({ path: { id: created.id }, body: { model: split(models[model]), variant: variantOf(level) || undefined, parts: [{ type: 'text', text: args.prompt }] } }))
+            } catch (err) {
+              // Nothing was sent: the user's own first prompt there is routed like any chat.
+              started.delete(created.id)
+              firstPrompt.delete(created.id)
+              throw err
+            }
             return `Started a new session "${title}" (${created.id}) on ${models[model]} at effort ${NAMES[level]}. The user opens it with /sessions.`
           },
         }),

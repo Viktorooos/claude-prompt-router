@@ -57,7 +57,7 @@ export async function route(args: { prompt?: unknown }, deps: Deps = {}): Promis
     const h = await readHistory(transcript)
     // The routed prompt's own turn is open already; it is not a running one. The desktop has no
     // spawn_agent, so a here prompt on another model only judges the effort, as before.
-    const r = await handle({ prompt, transcript_path: transcript, turn_id: h.openTurns.at(-1), model: h.model || undefined }, { ...deps, codexHome: home, noSubagent: true })
+    const r = await handle({ session_id: h.id || undefined, prompt, transcript_path: transcript, turn_id: h.openTurns.at(-1), model: h.model || undefined }, { ...deps, codexHome: home, noSubagent: true })
     return r?.hookSpecificOutput?.additionalContext ?? GO_ON
   } catch {
     return GO_ON

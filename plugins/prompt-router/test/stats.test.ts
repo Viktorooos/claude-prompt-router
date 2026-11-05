@@ -640,3 +640,35 @@ test('the rows name the comparison and drop the reference row when it is the sam
   expect(statsText(r, { model: 'opus', effort: 'medium' })).toMatch(/Compared with Opus medium for every turn/)
   expect(statsText(r)).toMatch(/compareWith: first/)
 })
+
+test('balance: an escalation never uses the control group, it falls back to the re-pricing with no time saved', () => {
+  // Control: opus chats the router wanted on haiku. The routed task went haiku low → haiku high, a step up.
+  const up = { from: { model: 'haiku', effort: 'low' as const }, to: { model: 'haiku', effort: 'high' as const } }
+  const records = [...CONTROL(MIN_CONTROL), ...task('a', up, [{ baseline: 'haiku', effort: 'high', baseEffort: 'low', durationMs: 60 * SEC }])]
+  const b = balance(records)
+  expect([b.routed, b.measured, b.estimated, b.timed]).toEqual([1, 0, 1, 0])
+  const without = cost({ ...U, output: U.output! * EFFORT_OUTPUT.low / EFFORT_OUTPUT.high }, 'haiku')!
+  close(b.parts.escalation, without - cost(U, 'haiku')!)
+  expect(b.parts.cheaper).toBe(0)
+})
+
+test('a turn with an unknown effort level gets no effort re-pricing instead of NaN', () => {
+  const bad = (x: Partial<Turn>) => turn('haiku', 'opus', x as Partial<Turn>)
+  const records = parseLog([
+    bad({ effort: 'turbo' as Turn['effort'], baseEffort: 'medium' }),
+    bad({ effort: 'medium', baseEffort: 'ultra' as Turn['effort'] }),
+  ].map(t => JSON.stringify(t)).join('\n'))
+  const s = summarize(records, NOW).today
+  close(s.withoutUsd, 2 * cost(U, 'opus')!)
+  close(s.effortUsd, 0)
+  // The first turn's effort is unknown: priced on Opus as it is; the second ran at medium, the reference's.
+  close(s.referenceUsd, 2 * cost(U, 'opus')!)
+  expect(Number.isFinite(s.balanceUsd)).toBe(true)
+  expect(Number.isFinite(s.vsReferenceUsd)).toBe(true)
+})
+
+test('balance: a cheaper model at a higher effort is partly an escalation, so it is not measured against the control group either', () => {
+  const mixed = { from: { model: 'opus', effort: 'medium' as const }, to: { model: 'haiku', effort: 'high' as const } }
+  const b = balance([...CONTROL(MIN_CONTROL), ...task('a', mixed, [{ effort: 'high', baseEffort: 'medium', durationMs: 60 * SEC }])])
+  expect([b.routed, b.measured, b.estimated, b.timed]).toEqual([1, 0, 1, 0])
+})

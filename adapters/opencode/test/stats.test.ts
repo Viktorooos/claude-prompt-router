@@ -215,3 +215,39 @@ test('stats: a router subagent is measured against the main chat model without t
   const [t] = turns(dir)
   assert.equal(t.baseline, 'claude-opus-5-5')
 })
+
+test('stats: a session the router started counts its first turn under the old chat, later turns as its own chat', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.same, history: ongoing('scratch-1') })
+  await hooks.tool.router_session.execute({ model: 'standard', effort: 'high', prompt: 'build the settings screen' }, { sessionID: S })
+  await send(hooks, 'scratch-1', 'build the settings screen')
+  await hooks.event(done('scratch-1', 'msg_1', { model: 'claude-sonnet-5-5' }))
+  await send(hooks, 'scratch-1', 'now the tests')
+  await hooks.event(done('scratch-1', 'msg_2', { model: 'claude-sonnet-5-5' }))
+  const [a, b] = turns(dir)
+  assert.equal(a.chat, S)
+  assert.equal(a.agentId, 'scratch-1')
+  assert.equal(b.chat, 'scratch-1')
+  assert.equal(b.agentId, undefined)
+  assert.equal(b.baseline, 'claude-sonnet-5-5')
+})
+
+test('stats: the other-model offer is logged as a subagent suggestion', async () => {
+  const { hooks, dir } = await setup({ reply: '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}', history: ongoing(S) }, { effortMode: 'ask', modelMode: 'ask' })
+  await send(hooks, S, 'rename the keys we just found')
+  const [d] = decisions(dir)
+  assert.equal(d.where, 'subagent')
+  assert.equal(d.outcome, 'asked')
+})
+
+test('stats: the table compares with the compareWith option', async () => {
+  const now = Date.now()
+  const line = { kind: 'turn', ts: now - DAY, platform: 'opencode', chat: 'old', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } }
+  const first = await setup({}, { compareWith: 'first' })
+  writeFileSync(join(first.dir, 'prompt-router-stats.jsonl'), JSON.stringify(line) + '\n')
+  assert.match(await first.hooks.tool.router_stats.execute({}, { sessionID: S }), /Saved .*\$3\.90/)
+  const haiku = await setup({}, { compareWith: 'haiku-low' })
+  writeFileSync(join(haiku.dir, 'prompt-router-stats.jsonl'), JSON.stringify(line) + '\n')
+  const out: string = await haiku.hooks.tool.router_stats.execute({}, { sessionID: S })
+  assert.doesNotMatch(out, /Saved .*\$3\.90/)
+  assert.match(out, /Saved \(cheaper model\)\s+\$0\.00\s+\$0\.00\s+\$0\.00/)
+})
