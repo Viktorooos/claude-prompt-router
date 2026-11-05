@@ -7,6 +7,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { childPath, codexBin, codexRunner, configDefaults, effortFor, readHistory } from '../hook.ts'
+import { readStats } from '../stats.ts'
 import { FIXTURE, PICK, home, send, tmp } from './helpers.ts'
 
 const HOOK = fileURLToPath(new URL('../hook.ts', import.meta.url))
@@ -409,4 +410,31 @@ test('newSessionAt: a continuation, a big window or the option off stays here', 
   assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(150_000, 1_000_000) })).r, null)
   assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { newSessionAt: 'off' } })).r, null)
   assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { sessionSuggestions: 'off' } })).r, null)
+})
+
+// subagentSuggestions auto: the subagent starts with no "Where should this go?".
+test('subagentSuggestions auto: a subagent pick runs right away and is logged as applied', async () => {
+  const { context, system, home: h } = await send('run the tests', { reply: PICK.subagent, options: { subagentSuggestions: 'auto' } })
+  assert.doesNotMatch(context, /Where should this go/)
+  assert.match(context, /start the subagent right away/)
+  assert.match(context, /tell the user in one sentence/)
+  assert.match(context, /spawn_agent tool with model "gpt-6-luna" and reasoning_effort "low"/)
+  assert.match(system, /^Prompt Router: subagent gpt-6-luna · low/)
+  const d = readStats(h).find(r => r.kind === 'decision')
+  assert.equal(d?.kind === 'decision' && d.outcome, 'applied')
+  assert.equal(d?.kind === 'decision' && d.where, 'subagent')
+})
+
+test('subagentSuggestions auto: another model mid-chat runs a subagent on it, without a system line when notifications are off', async () => {
+  const { context, system } = await send('work out the sync logic', { reply: OTHER.higher, model: 'gpt-6.1-terra', options: { subagentSuggestions: 'auto', notifications: 'off' } })
+  assert.doesNotMatch(context, /Where should this go/)
+  assert.match(context, /fits gpt-6\.1-sol · high better than this chat's gpt-6\.1-terra/)
+  assert.match(context, /give it everything it needs from this chat/)
+  assert.equal(system, '')
+})
+
+test('subagentSuggestions auto does not override midChatModelDetection auto (the agent decides)', async () => {
+  const { context } = await send('rename the keys we just found', { reply: OTHER.lower, options: { subagentSuggestions: 'auto', midChatModelDetection: 'auto' } })
+  assert.doesNotMatch(context, /start the subagent right away/)
+  assert.match(context, /decide yourself/)
 })

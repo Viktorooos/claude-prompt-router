@@ -55,9 +55,9 @@
     "subagentSuggestions": {
       "type": "string",
       "title": "Subagent suggestions",
-      "description": "ask: Claude offers a subagent for a self-contained task. off: such a prompt stays in this chat.",
+      "description": "ask: Claude offers a subagent for a self-contained task, or one on another model mid-chat. auto: the subagent starts right away and Claude says so in one sentence. off: such a prompt stays in this chat.",
       "default": "ask",
-      "options": ["ask", "off"]
+      "options": ["ask", "auto", "off"]
     },
     "sessionSuggestions": {
       "type": "string",
@@ -107,6 +107,13 @@
       "description": "This share (%) of prompts the router would move to a cheaper model or a lower effort keeps its setting, so the savings stats can compare real tasks with and without the router. Never a prompt that names a model or effort. 0: off.",
       "default": "10",
       "options": ["10", "0", "5", "20"]
+    },
+    "compareWith": {
+      "type": "string",
+      "title": "Compare savings with",
+      "description": "What the savings are measured against: a model at an effort for every chat (opus-medium, Anthropic's pick for everyday work), or first: the model the chat started on. Repriced from the logged tokens, so old data follows the choice.",
+      "default": "opus-medium",
+      "options": ["opus-medium", "opus-low", "opus-high", "opus-xhigh", "opus-max", "haiku-medium", "haiku-low", "haiku-high", "haiku-xhigh", "haiku-max", "sonnet-medium", "sonnet-low", "sonnet-high", "sonnet-xhigh", "sonnet-max", "fable-medium", "fable-low", "fable-high", "fable-xhigh", "fable-max", "first"]
     }
   }
 }

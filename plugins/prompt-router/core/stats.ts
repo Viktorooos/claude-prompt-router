@@ -2,7 +2,7 @@
 // Every dollar is an estimate from core/prices.ts. Honest by design: the classifier's cost comes off
 // the saving, a stronger model is shown as extra cost, an effort change is priced apart as a guess, and
 // the balance takes all of them in.
-import { LEVELS, above } from './router.ts'
+import { LEVELS, MODEL_NAMES, NAMES, above, knownModel } from './router.ts'
 import type { Level } from './router.ts'
 import { cost } from './prices.ts'
 import type { Usage } from './prices.ts'
@@ -182,7 +182,19 @@ function withoutUsage(t: Turn, u: Usage, scale = 1): Usage {
   }
 }
 
-function addTurn(s: Summary, t: Turn) {
+// What the savings are measured against (option compareWith): a model at an effort for every turn,
+// or null for each turn's own `baseline` (the chat's first model). Applied when the log is read, so a
+// new choice reprices the old turns too.
+export type Compare = { model: string; effort: Level } | null
+
+// The turn as if it would have run on `c` without the router. A turn with no known effort (a
+// subagent) keeps its output: only the model is repriced.
+function against(t: Turn, c: Compare): Turn {
+  return c ? { ...t, baseline: c.model, baseEffort: c.effort } : t
+}
+
+function addTurn(s: Summary, turn: Turn, c: Compare) {
+  const t = against(turn, c)
   if (!t.usage) {
     s.unknownTurns++
     return
@@ -475,7 +487,7 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     } else {
       out.estimated++
       const s = empty()
-      for (const t of e.turns) addTurn(s, t)
+      for (const t of e.turns) addTurn(s, t, null)
       without = { q1: s.withoutUsd, median: s.withoutUsd, q3: s.withoutUsd }
     }
     const firstGain = without.median - (actual - rework)
@@ -528,8 +540,8 @@ export function balances(records: readonly Entry[], now: number): Balances {
   return { today: balance(records, startOfDay(now)), week: balance(records, now - 7 * DAY), total: balance(records) }
 }
 
-function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>) {
-  if (r.kind === 'turn') addTurn(s, r)
+function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>, c: Compare) {
+  if (r.kind === 'turn') addTurn(s, r, c)
   else if (r.kind === 'decision') {
     addDecision(s, r, taken.has(takenKey(r.chat, r.ts)))
     s.classifierUsd += classifierUsd(r)
@@ -551,7 +563,7 @@ function dayKey(ts: number) {
 }
 
 // Today (local calendar day), the last 7 days and everything, as of `now`.
-export function summarize(records: readonly Entry[], now: number): Report {
+export function summarize(records: readonly Entry[], now: number, c: Compare = null): Report {
   const today = empty()
   const week = empty()
   const total = empty()
@@ -559,15 +571,15 @@ export function summarize(records: readonly Entry[], now: number): Report {
   const taken = takenSet(records)
   const reworked = reworkedSet(records)
   for (const r of records) {
-    add(total, r, taken, reworked)
-    if (r.ts >= now - 7 * DAY) add(week, r, taken, reworked)
-    if (r.ts >= dayStart) add(today, r, taken, reworked)
+    add(total, r, taken, reworked, c)
+    if (r.ts >= now - 7 * DAY) add(week, r, taken, reworked, c)
+    if (r.ts >= dayStart) add(today, r, taken, reworked, c)
   }
   return { today: finish(today), week: finish(week), total: finish(total) }
 }
 
 // The last `days` local days, oldest first, each with its own summary (for the graph).
-export function byDay(records: readonly Entry[], now: number, days: number): ({ day: string } & Summary)[] {
+export function byDay(records: readonly Entry[], now: number, days: number, c: Compare = null): ({ day: string } & Summary)[] {
   const keys: string[] = []
   for (let i = days - 1; i >= 0; i--) keys.push(dayKey(startOfDay(now) - i * DAY + 12 * 3_600_000))
   const map = new Map(keys.map(k => [k, empty()]))
@@ -575,7 +587,7 @@ export function byDay(records: readonly Entry[], now: number, days: number): ({ 
   const reworked = reworkedSet(records)
   for (const r of records) {
     const s = map.get(dayKey(r.ts))
-    if (s) add(s, r, taken, reworked)
+    if (s) add(s, r, taken, reworked, c)
   }
   return keys.map(day => ({ day, ...finish(map.get(day)!) }))
 }
@@ -613,7 +625,22 @@ export function rotate(text: string, now: number, maxBytes = MAX_BYTES): string 
 
 export const usd = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`
 
-// The rows of /router stats, shared by the text table and the pane.
+// "Opus medium" for a compare target, "the chat's first model" for null.
+export function compareLabel(c: Compare): string {
+  if (!c) return "the chat's first model"
+  const m = knownModel(c.model)
+  return `${m ? MODEL_NAMES[m] : c.model} ${NAMES[c.effort].toLowerCase()}`
+}
+
+export const isReference = (c: Compare) => !!c && knownModel(c.model) === REFERENCE.model && c.effort === REFERENCE.effort
+
+// The rows of /router stats, shared by the text table and the pane. With a compare target the cost
+// without router is that model's, and the reference row goes when it is the same yardstick.
+export function statsRowList(c: Compare = null): readonly [string, (s: Summary) => string][] {
+  const rows = STATS_ROWS.filter(([n]) => !(isReference(c) && n.startsWith('Vs. always')))
+  return c ? rows.map(([n, f]) => [n === 'Cost without router' ? `Cost on ${compareLabel(c)}` : n, f] as const) : rows
+}
+
 export const STATS_ROWS: readonly [string, (s: Summary) => string][] = [
   ['Prompts routed', s => String(s.prompts)],
   ['Model changes', s => String(s.modelChanges)],
@@ -633,19 +660,23 @@ export const STATS_ROWS: readonly [string, (s: Summary) => string][] = [
   ['Turns unknown / unpriced', s => `${s.unknownTurns} / ${s.unpricedTurns}`],
 ]
 
+const NOTE_COMPARE = (c: Compare) => c
+  ? `Compared with ${compareLabel(c)} for every turn (option compareWith; first = the chat's first model): the same tokens priced on it, the output weighted to its effort (a guess); a turn with no known effort is priced at its own output.`
+  : "Compared with the chat's first model (option compareWith: first)."
+
 const NOTE =
   "An estimate: tokens × list prices in core/prices.ts. Cost without router prices each turn on the model and effort it would have run at without the router; a routed subagent also counts the main chat's context its requests did not read; a turn after the router switched models counts the cache it rewrote. Balance = cost without router − cost with router (the work plus the classifier). Vs. always Opus medium prices the same work on Opus at medium effort for every chat, whatever its own pick, minus the cost with router; cost per turn is the cost with router over the priced turns. Effort is a guess (output tokens weighted per level); work moved to a new session is not priced."
 
 export const STATS_COLUMNS = ['Today', '7 days', 'Total'] as const
 
 // Each row's label and its three cells (today, 7 days, total).
-export function statsRows(r: Report): { label: string; cells: string[] }[] {
-  return STATS_ROWS.map(([label, f]) => ({ label, cells: [r.today, r.week, r.total].map(f) }))
+export function statsRows(r: Report, c: Compare = null): { label: string; cells: string[] }[] {
+  return statsRowList(c).map(([label, f]) => ({ label, cells: [r.today, r.week, r.total].map(f) }))
 }
 
 // A plain text table of the three periods (for /router stats and the Codex and OpenCode adapters).
-export function statsText(r: Report, b?: Balance): string {
-  const rows = statsRows(r)
+export function statsText(r: Report, c: Compare = null, b?: Balance): string {
+  const rows = statsRows(r, c)
   const w = Math.max(...rows.map(x => x.label.length)) + 2
   const line = (n: string, cells: readonly string[]) => `${n.padEnd(w)}${cells.map((t, i) => (i < 2 ? t.padEnd(16) : t)).join('')}`
   return [
@@ -653,6 +684,7 @@ export function statsText(r: Report, b?: Balance): string {
     ...rows.map(x => line(x.label, x.cells)),
     '',
     NOTE,
+    NOTE_COMPARE(c),
     ...(b ? ['', balanceText(b)] : []),
   ].join('\n')
 }
@@ -664,7 +696,7 @@ export function savingLabel(s: Summary): string {
 }
 
 // A self-contained page for /router stats: the three periods and the balance per day as bars.
-export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[], b?: Balance): string {
+export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[], c: Compare = null, b?: Balance): string {
   const W = 720
   const H = 200
   const pad = 24
@@ -682,7 +714,7 @@ export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[
     .join('')
   const first = days[0]?.day ?? ''
   const last = days.at(-1)?.day ?? ''
-  const table = STATS_ROWS.map(([n, f]) => `<tr><th>${n}</th>${[r.today, r.week, r.total].map(s => `<td>${f(s)}</td>`).join('')}</tr>`).join('')
+  const table = statsRowList(c).map(([n, f]) => `<tr><th>${n}</th>${[r.today, r.week, r.total].map(s => `<td>${f(s)}</td>`).join('')}</tr>`).join('')
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Prompt Router stats</title>
@@ -707,7 +739,7 @@ thead th { color: var(--muted); font-weight: 500; }
 </style></head>
 <body><main>
 <h1>Prompt Router stats</h1>
-<p>${NOTE}</p>
+<p>${NOTE} ${NOTE_COMPARE(c)}</p>
 <div class="big">${usd(r.week.balanceUsd)} <span style="font-size:15px;font-weight:400;color:var(--muted)">balance, last 7 days</span></div>
 <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Balance per day"><line class="axis" x1="${pad}" x2="${W - pad}" y1="${zero}" y2="${zero}"/>${bars}</svg>
 <div class="days"><span>${first}</span><span>balance per day</span><span>${last}</span></div>

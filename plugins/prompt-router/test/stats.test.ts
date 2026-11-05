@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { EFFORT_OUTPUT, FAILURE_WEIGHTS, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, episodes, failureOf, parseLog, rotate, savingLabel, statsHtml, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
+import { EFFORT_OUTPUT, FAILURE_WEIGHTS, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -567,10 +567,10 @@ test('balanceText and statsText: the per-task section under the token table', ()
   expect(t).toMatch(/  Cheaper picks  \+\$2\.00/)
   expect(t).toMatch(/Accuracy   100 % \(95 %: 21–100 %\)/)
   expect(t).toMatch(/haiku  1 +5 +\$1\.01/)
-  const all = statsText(summarize(records, NOW), b)
+  const all = statsText(summarize(records, NOW), null, b)
   expect(all).toContain(t)
   expect(statsText(summarize(records, NOW))).not.toMatch(/Per task/)
-  expect(statsHtml(summarize(records, NOW), [], b)).toMatch(/<h2>Per task, against the control group<\/h2>/)
+  expect(statsHtml(summarize(records, NOW), [], null, b)).toMatch(/<h2>Per task, against the control group<\/h2>/)
 })
 
 test('balance: an older routed task without turn times saves no time, even where control times exist', () => {
@@ -590,4 +590,53 @@ test('balance: a subagent on a stronger model is an escalation, not a cheaper pi
   const extra = cost(U, 'claude-opus-5-5')! - cost(U, 'claude-haiku-5-5')!
   close(b.parts.cheaper, 0)
   close(b.parts.escalation, -extra)
+})
+
+// compareWith: the same tokens priced on one model and effort for every turn, from the log alone.
+test('compareWith reprices old turns on the chosen model and effort, whatever baseline they logged', () => {
+  const t = turn('opus', 'haiku', { effort: 'high', baseEffort: 'low' })
+  const first = summarize([t], NOW).today
+  expect(first.balanceUsd < 0).toBe(true)
+  const s = summarize([t], NOW, { model: 'opus', effort: 'medium' }).today
+  const without = cost({ ...U, output: U.output * (EFFORT_OUTPUT.medium / EFFORT_OUTPUT.high) }, 'opus')!
+  close(s.withoutUsd, without)
+  close(s.balanceUsd, without - cost(U, 'opus')!)
+  // Same model: no model saving, only the effort part (the guess).
+  expect(s.savedUsd).toBe(0)
+  expect(s.extraUsd).toBe(0)
+  close(s.effortUsd, without - cost(U, 'opus')!)
+  // Against the reference it matches the fixed yardstick.
+  close(s.balanceUsd, s.vsReferenceUsd)
+})
+
+test('compareWith on a cheaper model: a turn on a stronger one is extra cost; a turn with no effort keeps its output', () => {
+  const sub = turn('opus', 'opus', { agentId: 'a1' })
+  const s = summarize([sub], NOW, { model: 'sonnet', effort: 'high' }).today
+  close(s.withoutUsd, cost(U, 'sonnet')!)
+  close(s.extraUsd, cost(U, 'opus')! - cost(U, 'sonnet')!)
+  expect(s.effortUsd).toBe(0)
+})
+
+test('compareWith first is the old behaviour; byDay takes the same choice', () => {
+  const records = [turn('haiku', 'opus'), turn('opus', 'sonnet')]
+  expect(summarize(records, NOW, null)).toEqual(summarize(records, NOW))
+  const c = { model: 'fable', effort: 'medium' } as const
+  const d = byDay(records, NOW, 1, c).at(-1)!
+  close(d.withoutUsd, summarize(records, NOW, c).today.withoutUsd)
+  close(d.withoutUsd, 2 * cost(U, 'fable')!)
+})
+
+test('the rows name the comparison and drop the reference row when it is the same yardstick', () => {
+  expect(compareLabel(null)).toBe("the chat's first model")
+  expect(compareLabel({ model: 'opus', effort: 'medium' })).toBe('Opus medium')
+  expect(compareLabel({ model: 'claude-sonnet-5-5', effort: 'xhigh' })).toBe('Sonnet extra high')
+  const r = summarize([turn('haiku', 'opus')], NOW)
+  const labels = (c: Parameters<typeof statsRows>[1]) => statsRows(r, c).map(x => x.label)
+  expect(labels(null)).toContain('Cost without router')
+  expect(labels(null).some(l => l.startsWith('Vs. always'))).toBe(true)
+  expect(labels({ model: 'opus', effort: 'medium' })).toContain('Cost on Opus medium')
+  expect(labels({ model: 'opus', effort: 'medium' }).some(l => l.startsWith('Vs. always'))).toBe(false)
+  expect(labels({ model: 'sonnet', effort: 'medium' }).some(l => l.startsWith('Vs. always'))).toBe(true)
+  expect(statsText(r, { model: 'opus', effort: 'medium' })).toMatch(/Compared with Opus medium for every turn/)
+  expect(statsText(r)).toMatch(/compareWith: first/)
 })

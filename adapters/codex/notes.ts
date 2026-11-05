@@ -1,5 +1,5 @@
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { DECIDE_OTHER, NAMES, TOLD_OTHER } from '../../plugins/prompt-router/core/router.ts'
+import { DECIDE_OTHER, NAMES, RUN_SUBAGENT, TOLD_OTHER } from '../../plugins/prompt-router/core/router.ts'
 import type { Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import { userLang } from '../../plugins/prompt-router/core/router.ts'
 
@@ -81,6 +81,20 @@ export function otherAutoNote(ctx: NoteCtx, p: Pick, cur: { model: string; now: 
     : ctx.cfg.effortDetection === 'ask' ? `${ask('Effort?')} about the effort only, with the options ${here.options}, in ${userLang(ctx.cfg)}; ${here.then}`
     : `give the user the line "${line(ctx, cur.model, p.effort, '')}" (this chat cannot be switched from inside it), then handle the prompt at the current setting.`
   return `Prompt Router: this prompt belongs to this chat but fits ${l} better than this chat's ${cur.model}${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${cur.now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. ${DECIDE_OTHER} Subagent = ${subagentCall(ctx, p, '; it does not see this chat, so give it everything it needs from this chat in its message,')} Here = ${stay} ${TOLD_OTHER}`
+}
+
+// subagentSuggestions auto: the subagent starts at once, no "Where should this go?". `other` is the
+// chat's model when the prompt belongs to this chat but fits another model (the subagent does not see the chat).
+export function runAgentNote(ctx: NoteCtx, p: Pick, other?: string) {
+  const l = label(ctx, p)
+  const head = other ? `Prompt Router: this prompt fits ${l} better than this chat's ${other}` : `Prompt Router: run this prompt in a subagent (${l})`
+  const brief = other ? '; it does not see this chat, so give it everything it needs from this chat in its message,' : ''
+  return `${head}${p.why ? `, because: ${p.why}` : ''}. ${RUN_SUBAGENT} Then ${subagentCall(ctx, p, brief)}`
+}
+
+// The system line for a subagent the router started by itself.
+export function runAgentLine(ctx: NoteCtx, p: Pick) {
+  return `Prompt Router: subagent ${label(ctx, p)}${p.why ? ` (${p.why})` : ''}`
 }
 
 // Mode auto: Codex cannot switch the chat, so the agent names the switch in one line and goes on.

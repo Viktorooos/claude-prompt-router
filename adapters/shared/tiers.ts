@@ -32,6 +32,9 @@ export function fromTiers(raw: Record<string, unknown>): Record<string, unknown>
     out.models = models
   }
   if (typeof raw.classifier === 'string' && raw.classifier in TIERS) out.classifier = TIERS[raw.classifier as Tier]
+  // compareWith names a tier and an effort (strong-medium); the core reads the model (opus-medium).
+  const cw = typeof raw.compareWith === 'string' ? raw.compareWith.split('-') : []
+  if (cw.length === 2 && cw[0] in TIERS) out.compareWith = `${TIERS[cw[0] as Tier]}-${cw[1]}`
   // Rules are free text for the classifier, which knows the core's names: it gets the key too.
   if (typeof raw.rules === 'string' && raw.rules.trim()) out.rules = `${raw.rules.trim()} ${TIER_KEY}`
   return out
@@ -50,5 +53,7 @@ export function shownOptions(raw: Record<string, unknown>): Record<string, unkno
 
 // A describeOptions or optionsLine text with the classifier named by its tier.
 export function tierLine(s: string): string {
-  return s.replace(/\bclassifier([:=] ?)(haiku|sonnet|opus|fable)\b/, (_, sep: string, m: Model) => `classifier${sep}${TIER_OF[m]}`)
+  return s
+    .replace(/\bclassifier([:=] ?)(haiku|sonnet|opus|fable)\b/, (_, sep: string, m: Model) => `classifier${sep}${TIER_OF[m]}`)
+    .replace(/\bcompareWith([:=] ?)(haiku|sonnet|opus|fable)-/, (_, sep: string, m: Model) => `compareWith${sep}${TIER_OF[m]}-`)
 }

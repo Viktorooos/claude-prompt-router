@@ -46,3 +46,11 @@ test('/router and the log name the classifier by its tier and show the rules as 
   assert.ok(lines.includes('rules: "keep it short" (set)'), lines.join('\n'))
   assert.equal(tierLine('language=auto classifier=haiku effortDetection=ask'), 'language=auto classifier=light effortDetection=ask')
 })
+
+test('compareWith names a tier and an effort; the core reads the model, /router shows the tier', async () => {
+  assert.equal(fromTiers({ compareWith: 'strong-medium' }).compareWith, 'opus-medium')
+  assert.equal(fromTiers({ compareWith: 'light-high' }).compareWith, 'haiku-high')
+  assert.equal(fromTiers({ compareWith: 'first' }).compareWith, 'first')
+  assert.equal(fromTiers({ compareWith: 'sonnet-low' }).compareWith, 'sonnet-low')
+  assert.equal(tierLine('compareWith: opus-medium'), 'compareWith: strong-medium')
+})
