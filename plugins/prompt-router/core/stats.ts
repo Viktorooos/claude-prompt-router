@@ -767,7 +767,7 @@ export const ROUGH_BELOW = 12
 // A rough balance: few tasks, or some priced by the token re-pricing instead of the control group.
 export const isRough = (b: Balance) => b.estimated > 0 || b.routed < ROUGH_BELOW
 
-// The short line for the band or footer: money, then time once it is measured; "~" marks a rough
+// The short line for the footer: money, then time once it is measured; "~" marks a rough
 // figure. '' with nothing to show.
 export function balanceLabel(b: Balance): string {
   if (!b.routed && Math.abs(b.usd.value) < 0.005) return ''

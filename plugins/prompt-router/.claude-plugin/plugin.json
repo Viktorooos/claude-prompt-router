@@ -94,13 +94,6 @@
       "default": "off",
       "options": ["off", "on"]
     },
-    "band": {
-      "type": "string",
-      "title": "Line above the prompt",
-      "description": "on: one always-visible line above the prompt with the model and effort, the context used and today's saving, and a button that opens the pane. off: no line.",
-      "default": "on",
-      "options": ["on", "off"]
-    },
     "holdoutPct": {
       "type": "string",
       "title": "Control group for the savings stats",

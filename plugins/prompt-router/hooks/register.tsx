@@ -1249,30 +1249,12 @@ export const register: Register = (on, options) => {
     )
   })
 
-  // The band above the prompt: the pane's headline in one line, always in view, no extra tab.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (!enabled || cfg.band === 'off' || e.props.hasSurvey) return next(e)
-    const d = await paneData($)
-    const parts = [
-      d.header,
-      d.share !== null ? `context ${Math.round(d.share)} %${d.at ? ` of ${d.at} %` : ''}` : '',
-      d.savings ? `today ${signed(d.savings.report.today.balanceUsd)}${d.savings.balance.today.timed ? ` · ${timeText(d.savings.balance.today.minutes.value)}` : ''} · 7 days ${signed(d.savings.report.week.balanceUsd)}` : '',
-    ].filter(Boolean)
-    const { Box, Text, Button } = $.ui.resolve(e)
-    return (
-      <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-        <Text color={ACCENT} wrap="truncate-end">Router · {parts.join(' · ')}</Text>
-        <Button key="open-pane" label="Panel" variant="secondary" onPress={async () => { await $.ui.open({ id: PANE, title: PANE_TITLE }) }} />
-      </Box>
-    )
-  })
-
   // The app's effort menu does not move, so the footer names the level the mod really sends.
   on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
     if (!enabled || cfg.notifications === 'off') return next(e)
     const { value } = await $.state.get(OVERRIDE)
     const { value: model } = await $.state.get(MODEL_HOLD)
-    // Only what the router holds: its model and its effort. The saving is in the pane and the band.
+    // Only what the router holds: its model and its effort. The saving is in the pane.
     if (!value && !model) return next(e)
     const label = [model ? MODEL_NAMES[model] : '', value ? `Effort ${SHORT[value]}` : ''].filter(Boolean).join(' · ')
     if (e.surface === 'desktop' || e.surface === 'vscode') {

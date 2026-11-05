@@ -46,8 +46,6 @@ export const SWITCHES = {
   stats: ['on', 'off'],
   // Claude Code: open the Prompt Router pane by itself when a session starts.
   openPane: ['off', 'on'],
-  // Claude Code: one line above the prompt (model · effort, context, today's saving), no extra tab.
-  band: ['on', 'off'],
   // Share of prompts the router would move lower that keep their setting, as a control group for the
   // savings stats. 0 turns it off.
   holdoutPct: ['10', '0', '5', '20'],
