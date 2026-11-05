@@ -1065,7 +1065,7 @@ export const register: Register = (on, options) => {
           <Box key="saved-v" flexDirection="column">
             {term
               ? <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
-              : <Svg source={bigNumberSvg(savedText, MONEY_COLOR[money(s.balanceUsd)] ?? TONES.idle[0], px)} alt={`${savedWord}: ${savedText}`} width={px} height={45} />}
+              : <Svg source={bigNumberSvg(savedText, money(s.balanceUsd) === 'up' ? '#2fb67c' : MONEY_COLOR[money(s.balanceUsd)] ?? TONES.idle[0], px, 38)} alt={`${savedWord}: ${savedText}`} width={px} height={48} />}
             <Text dimColor>{`compared with ${against}`}</Text>
           </Box>
         ),
@@ -1087,8 +1087,8 @@ export const register: Register = (on, options) => {
         {row('ctx-head', d.header, ctxRight, { dim: false })}
         {term
           ? <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
-          : <Svg source={contextBarSvg(d.share, d.at, px, 10)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} width={px} height={16} />}
-        <Text dimColor>{[used, asks].filter(Boolean).join(' · ')}</Text>
+          : <Svg source={contextBarSvg(d.share, d.at, px, 8)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} width={px} height={14} />}
+        {term ? <Text dimColor>{[used, asks].filter(Boolean).join(' · ')}</Text> : row('ctx-foot', used, asks, { dim: true })}
       </Box>,
     )
 
@@ -1129,6 +1129,7 @@ export const register: Register = (on, options) => {
       ...(cm === 'first' ? [] : [{ key: 'compareEffort', name: 'at effort', what: '', values: same(COMPARE_EFFORTS), now: () => cfg.compareWith.split('-')[1] ?? '', pick: (l: string) => saveOption($, 'compareWith', compareValue(cfg.compareWith.split('-')[0] ?? 'first', l)) }]),
       opt('openPane', 'Open this pane on start', 'Opens this pane by itself when a session starts.'),
     ]
+    const isSwitch = (x: Setting) => x.values.length === 2 && x.values.every(([v]) => v === 'on' || v === 'off')
     const setting = (x: Setting, i: number) => {
       const current = x.now()
       const label = x.values.find(([v]) => v === current)?.[1] ?? current
@@ -1144,9 +1145,14 @@ export const register: Register = (on, options) => {
             : (
               <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
                 <Text bold>{x.name}</Text>
-                <Box flexDirection="row" gap={0}>
-                  {x.values.map(([v, l]) => <Button key={`toggle-${x.key}-${v}`} label={l} variant={v === current ? 'primary' : 'secondary'} onPress={() => x.pick(v)} />)}
-                </Box>
+                {isSwitch(x)
+                  // A switch: one press flips it; the key names the value it sets.
+                  ? <Button key={`toggle-${x.key}-${current === 'on' ? 'off' : 'on'}`} label={current === 'on' ? '● On' : '○ Off'} variant={current === 'on' ? 'primary' : 'secondary'} dimColor={current !== 'on'} onPress={() => x.pick(current === 'on' ? 'off' : 'on')} />
+                  : (
+                    <Box flexDirection="row" gap={0}>
+                      {x.values.map(([v, l]) => <Button key={`toggle-${x.key}-${v}`} label={l} variant={v === current ? 'primary' : 'secondary'} dimColor={v !== current} onPress={() => x.pick(v)} />)}
+                    </Box>
+                  )}
               </Box>
             )}
           {x.what ? <Text dimColor>{x.what}</Text> : null}

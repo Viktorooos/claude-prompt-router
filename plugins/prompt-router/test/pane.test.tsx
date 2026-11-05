@@ -75,7 +75,7 @@ test('the pane draws on every surface: the context against the new-session share
     const ui = await $.ui.mount({ ...PANE, surface })
     const texts = await textsOf(ui)
     expect(texts).toMatch(/Opus · Medium\n94k of 200k tokens/)
-    expect(texts).toMatch(/47 % used · asks for a new session at 50 % \(100k\)/)
+    expect(texts).toMatch(/47 % used(?: · |\n)asks for a new session at 50 % \(100k\)/)
     const key = (k: string, v: string) => (surface === 'terminal' ? `toggle-${k}` : `toggle-${k}-${v}`)
     expect(await ui.find({ type: 'Button', key: key('effortDetection', 'ask') })).toBeDefined()
     expect(await ui.find({ type: 'Button', key: key('newSessionAt', '50%') })).toBeDefined()
