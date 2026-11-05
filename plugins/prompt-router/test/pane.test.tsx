@@ -10,11 +10,15 @@ const PANE = {
 
 const SESSION_PICK = '{"where": "session", "model": "sonnet", "effort": "medium", "work": "new", "why": "unrelated feature"}'
 
-type Seen = { sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[] }
+type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[] }
+
+// The mod's /config rows where the engine lists them (a terminal session); the desktop app lists none.
+const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions', 'newSessionAt', 'notifications', 'stats', 'openPane', 'holdoutPct', 'compareWith', 'classifier']
+  .map(k => ({ key: `prompt-router.${k}`, label: k, kind: 'choice', value: '', options: [], provider: { plugin: 'prompt-router', tier: 'user' }, isLocked: false }))
 
 // The engine beneath the plugin, as far as the pane needs it.
-function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string; rows?: any[] } = {}): Seen {
-  const seen: Seen = { sets: [], store: new Map(), opened: [], sent: [] }
+function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string; rows?: any[]; settings?: string } = {}): Seen {
+  const seen: Seen = { writes: new Map(), sets: [], store: new Map(), opened: [], sent: [] }
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__prompt-router__${e.name}` } }))
@@ -27,7 +31,7 @@ function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens:
   }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: opts.usage ?? { tokens: 94_000, window: 200_000 }, rateLimits: [] } }))
-  on('config.list', () => ({ value: [{ key: 'effort', label: 'Effort', kind: 'choice', value: 'medium', options: ['low', 'medium', 'high', 'xhigh', 'max'], provider: { plugin: 'engine' }, isLocked: false }, ...(opts.rows ?? [])] }))
+  on('config.list', () => ({ value: [{ key: 'effort', label: 'Effort', kind: 'choice', value: 'medium', options: ['low', 'medium', 'high', 'xhigh', 'max'], provider: { plugin: 'engine' }, isLocked: false }, ...(opts.rows ?? MOD_ROWS)] }))
   on('config.set', (_: unknown, e: any) => {
     if (opts.rows && !opts.rows.some(r => r.key === e.key)) throw new Error(`no /config row with key ${e.key}`)
     seen.sets.push({ key: e.key, value: e.value })
@@ -46,8 +50,15 @@ function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens:
     return { value: undefined }
   })
   on('fs.exists', () => ({ value: false }))
-  on('fs.read', (_: unknown, e: any) => ({ value: String(e.path).endsWith('prompt-router-stats.jsonl') ? (opts.log ?? '') : '' }))
-  on('fs.write', () => ({ value: undefined }))
+  on('fs.read', (_: unknown, e: any) => {
+    const path = String(e.path)
+    if (seen.writes.has(path)) return { value: seen.writes.get(path) }
+    return { value: path.endsWith('prompt-router-stats.jsonl') ? (opts.log ?? '') : path.endsWith('.claude/settings.json') ? (opts.settings ?? '') : '' }
+  })
+  on('fs.write', (_: unknown, e: any) => {
+    seen.writes.set(String(e.path), String(e.text))
+    return { value: undefined }
+  })
   on('tool.list', () => ({ value: [{ name: 'mcp__ccd_session__start_session', description: '', mcp: true }] }))
   on('session.surfaces', () => ({ value: ['desktop'] }))
   on('clock.now', () => ({ value: opts.now ?? 0 }))
@@ -298,4 +309,24 @@ test('an installed mod saves through its marketplace-named /config rows', async 
     { key: `${ID}.notifications`, value: 'off' },
   ])
   await ui.unmount()
+})
+
+test('with no /config row for the mod, a press saves the option in settings.json, under the id it is read from', async ($: any, on: any) => {
+  const ID = 'prompt-router@prompt-router'
+  const settings = JSON.stringify({ model: 'opus', pluginConfigs: { other: { options: { a: 1 } }, [ID]: { options: { language: 'Czech', modelMode: 'auto' } } } }, null, 2) + '\n'
+  const seen = engine(on, { rows: [], settings })
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'toggle-firstChatDetection-ask' })
+  await ui.press({ key: 'toggle-newSessionAt-60%' })
+  const file = [...seen.writes].find(([p]) => p.endsWith('.claude/settings.json'))?.[1] ?? ''
+  const saved = JSON.parse(file)
+  expect(saved.model).toBe('opus')
+  expect(saved.pluginConfigs.other).toEqual({ options: { a: 1 } })
+  expect(saved.pluginConfigs[ID].options).toEqual({ language: 'Czech', modelMode: 'auto', firstChatDetection: 'ask', newSessionAt: '60%' })
+  expect(file.endsWith('}\n')).toBe(true)
+  await ui.unmount()
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(JSON.stringify(await again.find({ type: 'Button', key: 'toggle-firstChatDetection-ask' }))).toMatch(/"variant":"primary"/)
+  await again.unmount()
 })

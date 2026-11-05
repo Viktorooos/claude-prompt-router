@@ -625,21 +625,36 @@ function nextCompare(part: 'model' | 'effort'): string {
 
 const shown = (k: Option, v: string) => (k === 'holdoutPct' ? (v === '0' ? 'off' : `${v} %`) : v)
 
+// Where settings.json keeps the mod's options: the entry loadOptions reads them from.
+function optionsEntry(all: Record<string, unknown>) {
+  return Object.keys(all).find(k => k.startsWith(`${NAME}@`)) ?? (NAME in all ? NAME : `${NAME}@${NAME}`)
+}
+
 // Saves one option as /config does (settings.json pluginConfigs, through the engine), and goes by it now.
+// The desktop app lists no /config rows for an installed mod, so there the option goes straight into
+// settings.json, read just before the write so nothing else in the file is lost.
 async function saveOption($: EngineInterface, k: Option, value: string) {
   try {
-    // An installed mod is named `<name>@<marketplace>`, and so are its rows.
     const ours = (p = '') => p === NAME || p.startsWith(`${NAME}@`)
-    const rows = await $.config.list()
-    const row = rows.find(r => r.key === `${NAME}.${k}` || (ours(r.provider?.plugin) && r.key.endsWith(`.${k}`)))
-    if (!row) await log($, 'save option', `${k}: no row; the mod's rows: ${rows.filter(r => ours(r.provider?.plugin) || r.key.startsWith(NAME)).map(r => r.key).join(', ') || 'none'}`)
-    const r = await $.config.set({ key: row?.key ?? `${NAME}.${k}`, value })
-    if (r.deny) {
-      await log($, 'save option', `${k}: ${r.deny}`)
-      return
+    const row = (await $.config.list()).find(r => r.key === `${NAME}.${k}` || (ours(r.provider?.plugin) && r.key.endsWith(`.${k}`)))
+    if (row) {
+      const r = await $.config.set({ key: row.key, value })
+      if (r.deny) {
+        await log($, 'save option', `${k}: ${r.deny}`)
+        return
+      }
+    } else {
+      const path = `${home}/.claude/settings.json`
+      const text = String(await $.fs.read(path).catch(() => '{}')) || '{}'
+      const file = JSON.parse(text) as { pluginConfigs?: Record<string, { options?: Record<string, unknown> }> }
+      const all = (file.pluginConfigs ??= {})
+      const id = optionsEntry(all)
+      const entry = (all[id] ??= {})
+      entry.options = { ...entry.options, [k]: value }
+      await $.fs.write(path, `${JSON.stringify(file, null, 2)}\n`)
     }
   } catch (err) {
-    await log($, 'save option', err)
+    await log($, 'save option', `${k}: ${err}`)
     return
   }
   opts = { ...opts, [k]: value }
@@ -658,7 +673,7 @@ async function loadOptions($: EngineInterface) {
   try {
     const all = (JSON.parse(String(await $.fs.read(`${home}/.claude/settings.json`))) as { pluginConfigs?: Record<string, { options?: unknown }> }).pluginConfigs ?? {}
     const full = Object.keys(all).find(k => k.startsWith(`${NAME}@`))
-    const entry = all[full ?? NAME]?.options
+    const entry = all[optionsEntry(all)]?.options
     if (entry && typeof entry === 'object') {
       saved = entry as Record<string, unknown>
       if (!full) cfgNote = `Options come from "pluginConfigs" › "${NAME}" in ~/.claude/settings.json. Rename that key to "${NAME}@${NAME}", the name Claude Code reads them under.`
