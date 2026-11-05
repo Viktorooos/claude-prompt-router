@@ -10,7 +10,7 @@ const PANE = {
 
 const SESSION_PICK = '{"where": "session", "model": "sonnet", "effort": "medium", "work": "new", "why": "unrelated feature"}'
 
-type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[]; redraws: number }
+type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[]; redraws: number; state: Map<string, unknown> }
 
 // The mod's /config rows where the engine lists them (a terminal session); the desktop app lists none.
 const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions', 'newSessionAt', 'notifications', 'stats', 'openPane', 'holdoutPct', 'compareWith', 'classifier']
@@ -18,7 +18,7 @@ const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetectio
 
 // The engine beneath the plugin, as far as the pane needs it.
 function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string; rows?: any[]; settings?: string } = {}): Seen {
-  const seen: Seen = { writes: new Map(), sets: [], store: new Map(), opened: [], sent: [], redraws: 0 }
+  const seen: Seen = { writes: new Map(), sets: [], store: new Map(), opened: [], sent: [], redraws: 0, state: new Map() }
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__prompt-router__${e.name}` } }))
@@ -46,6 +46,11 @@ function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens:
   on('ui.open', (_: unknown, e: any) => {
     seen.opened.push(e)
     return { value: { isPlaced: true } }
+  })
+  on('state.get', (_: unknown, e: any) => ({ value: { value: seen.state.get(JSON.stringify(e.key ?? e)) ?? null } }))
+  on('state.set', (_: unknown, e: any) => {
+    seen.state.set(JSON.stringify(e.key ?? e), e.value)
+    return { value: undefined }
   })
   on('store.get', (_: unknown, e: any) => ({ value: seen.store.get(e.key) }))
   on('store.set', (_: unknown, e: any) => {
@@ -367,6 +372,14 @@ test('More settings, folded: the classifier, what the saving is compared with, t
   await again.select({ key: 'pick-compareModel', value: 'opus' })
   expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'opus-medium' })
   await again.unmount()
+  // History mixes the models and efforts used before the router: it has no effort to pick.
+  const hist = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await hist.select({ key: 'pick-compareModel', value: 'history' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'history' })
+  await hist.unmount()
+  const histAgain = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await histAgain.find({ type: 'Select', key: 'pick-compareEffort' })).toBeUndefined()
+  await histAgain.unmount()
 })
 
 test('the router switch turns the router off and on as /router off and /router on do', async ($: any, on: any) => {
@@ -456,4 +469,30 @@ test('with no /config row for the mod, a press saves the option in settings.json
   const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(JSON.stringify(await again.find({ type: 'Select', key: 'pick-firstChatDetection' }))).toMatch(/"value":"ask"/)
   await again.unmount()
+})
+
+test('a fold stays open while a value under it changes', async ($: any, on: any) => {
+  const now = 30 * 86_400_000
+  const seen = engine(on, { now, log: controlLog(now) })
+  await start($)
+  const draw = async (act?: (ui: any) => Promise<void>) => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const shown = { more: /Hide/.test(JSON.stringify(await ui.find({ type: 'Button', key: 'fold-more' }))), details: /Hide/.test(JSON.stringify(await ui.find({ type: 'Button', key: 'fold-details' }))) }
+    if (act) await act(ui)
+    await ui.unmount()
+    return shown
+  }
+  await draw(async ui => {
+    for (const id of ['more', 'details']) {
+      if (/Show/.test(JSON.stringify(await ui.find({ type: 'Button', key: `fold-${id}` })))) await ui.press({ key: `fold-${id}` })
+    }
+  })
+  // Saving an option reloads the mod, which keeps $.state but not module variables: the folds live there.
+  expect(JSON.stringify([...seen.state.values()])).toMatch(/"more"[\s\S]*"details"|"details"[\s\S]*"more"/)
+  await draw(ui => ui.select({ key: 'pick-classifier', value: 'haiku' }))
+  expect(await draw()).toEqual({ more: true, details: true })
+  await draw(ui => ui.select({ key: 'pick-compareModel', value: 'opus' }))
+  expect(await draw()).toEqual({ more: true, details: true })
+  await draw(ui => ui.select({ key: 'pick-newSessionAt', value: '60%' }))
+  expect(await draw()).toEqual({ more: true, details: true })
 })

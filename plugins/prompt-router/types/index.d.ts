@@ -24,6 +24,8 @@ declare module 'claude-code' {
       model: 'haiku' | 'sonnet' | 'opus' | 'fable' | null
       /** The last routing decision, for the pane. */
       last: Shaped<LastDecision | null>
+      /** The pane's open folds, kept across the reload that saving an option causes. */
+      paneOpen: string[] | null
     }
   }
 }

@@ -14,6 +14,8 @@ import type { Balance, Balances, Compare, Decision, Entry, History, Report } fro
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
 const MODEL_HOLD = { plugin: 'prompt-router', key: 'model' } as const
+// The pane's open folds: saving an option reloads the mod, and a reload keeps $.state only.
+const PANE_OPEN = { plugin: 'prompt-router', key: 'paneOpen' } as const
 const TEST_TOOL = `mcp__${NAME}__test`
 const SWITCH_TOOL = `mcp__${NAME}__switch`
 const SHORT: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
@@ -879,6 +881,8 @@ export const register: Register = (on, options) => {
     if (kept && enabled) hold = { level: kept, base: '' }
     const keptModel = (await $.state.get(MODEL_HOLD)).value
     if (keptModel && enabled) modelHold = { model: keptModel, base: '' }
+    const keptOpen = (await $.state.get(PANE_OPEN)).value
+    if (Array.isArray(keptOpen)) for (const id of keptOpen) paneOpen.add(String(id))
     paneOpened = false
     await openPaneUnasked($, false)
     return next(e)
@@ -1113,6 +1117,7 @@ export const register: Register = (on, options) => {
     const narrow = cols < 34
     const flip = (id: string) => async () => {
       if (!paneOpen.delete(id)) paneOpen.add(id)
+      await $.state.set(PANE_OPEN, [...paneOpen])
       redraw($)
     }
     const pickPeriod = (k: typeof panePeriod) => async () => {
@@ -1318,7 +1323,7 @@ export const register: Register = (on, options) => {
       opt('classifier', 'cpu', 'Decided by', 'The model that reads your prompt and decides. Haiku is cheaper, Sonnet more accurate.',
         same(CLASSIFIERS.filter(x => x !== 'opus' || cfg.classifier === 'opus'))),
       { key: 'compareModel', icon: 'scale', name: 'Savings compared with', what: 'What "You saved" is measured against.', values: COMPARE_MODELS.map(m => [m, m === 'first' ? 'first model' : m] as const), now: () => cfg.compareWith.split('-')[0] ?? 'first', pick: m => saveOption($, 'compareWith', compareValue(m, cfg.compareWith.split('-')[1] ?? '')) },
-      ...(cm === 'first' ? [] : [{ key: 'compareEffort', icon: 'gauge', name: 'at effort', what: '', values: same(COMPARE_EFFORTS), now: () => cfg.compareWith.split('-')[1] ?? '', pick: (l: string) => saveOption($, 'compareWith', compareValue(cfg.compareWith.split('-')[0] ?? 'first', l)) }]),
+      ...(cm === 'first' || cm === 'history' ? [] : [{ key: 'compareEffort', icon: 'gauge', name: 'at effort', what: '', values: same(COMPARE_EFFORTS), now: () => cfg.compareWith.split('-')[1] ?? '', pick: (l: string) => saveOption($, 'compareWith', compareValue(cfg.compareWith.split('-')[0] ?? 'first', l)) }]),
       opt('openPane', 'pane', 'Open this pane on start', 'Opens this pane by itself when a session starts.'),
     ]
     const isSwitch = (x: Setting) => x.values.length === 2 && x.values.every(([v]) => v === 'on' || v === 'off')
