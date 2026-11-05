@@ -7,7 +7,8 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { REFERENCE, accuracyText, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
-import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, kTokens, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, foldHeadSvg, kTokens, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import type { FoldIcon } from '../core/panel.ts'
 import type { Balance, Balances, Decision, Entry, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
@@ -1069,18 +1070,24 @@ export const register: Register = (on, options) => {
       ))
     // A hairline between sections (strong) and between settings (faint); the terminal leaves the gap.
     const rule = (key: string, strong = true) => (term ? null : <Svg key={key} source={ruleSvg(px, strong)} alt="" height={1} />)
-    const fold = (id: string, label: string, body: () => unknown, inline = false) => (inline ? (key: string, ...c: unknown[]) => <Box key={key} flexDirection="column" gap={term ? 0 : 1}>{c}</Box> : section)(id,
-      term
-        ? <Button key={`fold-${id}`} plain label={`${paneOpen.has(id) ? '▾' : '▸'} ${label}`} onPress={flip(id)} />
-        // Desktop: the heading lines up with the others, the native button sits on the right like a setting's.
-        : (
-          <Box key={`fold-row-${id}`} flexDirection="row" justifyContent="space-between" alignItems="center">
-            <Text dimColor>{label.toUpperCase()}</Text>
-            <Button key={`fold-${id}`} label={paneOpen.has(id) ? 'Hide' : 'Show'} variant="secondary" onPress={flip(id)} />
+    // A fold: on the app surfaces its own card with an icon heading that says what is inside, so it reads
+    // as something to open; open, the card takes the accent outline. Inline, it is a card within a card.
+    const fold = (id: string, label: string, sub: string, icon: FoldIcon, body: () => unknown, inline = false) => {
+      const open = paneOpen.has(id)
+      if (term) {
+        const wrap = inline ? (key: string, ...c: unknown[]) => <Box key={key} flexDirection="column" gap={0}>{c}</Box> : section
+        return wrap(id, <Button key={`fold-${id}`} plain label={`${open ? '▾' : '▸'} ${label}`} onPress={flip(id)} />, open ? body() : null)
+      }
+      return (
+        <Box key={id} flexDirection="column" gap={1} borderStyle="round" borderColor={open ? ACCENT : undefined} borderDimColor={!open} paddingX={narrow ? 1 : inline ? 1 : 2} paddingY={1}>
+          <Box key={`fold-row-${id}`} flexDirection={narrow ? 'column' : 'row'} justifyContent="space-between" alignItems={narrow ? 'flex-start' : 'center'} gap={1}>
+            <Box flexGrow={1}><Svg source={foldHeadSvg(label, sub, icon, open, animate)} alt={`${label}: ${sub}`} height={40} /></Box>
+            <Button key={`fold-${id}`} label={open ? 'Hide ▴' : 'Show ▾'} variant={open ? 'secondary' : 'primary'} onPress={flip(id)} />
           </Box>
-        ),
-      paneOpen.has(id) ? body() : null,
-    )
+          {open ? body() : null}
+        </Box>
+      )
+    }
 
     const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
     const tabs = d.savings ? (
@@ -1205,10 +1212,10 @@ export const register: Register = (on, options) => {
     const settings = section('settings',
       title('settings-title', 'Settings'),
       ...main.flatMap((x, i) => [i ? rule(`rule-${x.key}`, false) : null, setting(x, i)]),
-      rule('rule-more', false),
-      fold('more', 'More settings', () => (
+      term ? rule('rule-more', false) : null,
+      fold('more', 'More settings', `${more.length} more: ${more.map(x => x.name.toLowerCase()).slice(0, 2).join(', ')}…`, 'sliders', () => (
         <Box key="more-body" flexDirection="column" gap={term ? 0 : 1}>
-          {more.flatMap((x, i) => [rule(`rule-${x.key}`, false), setting(x, main.length + i)])}
+          {more.flatMap((x, i) => [i || term ? rule(`rule-${x.key}`, false) : null, setting(x, main.length + i)])}
           {d.savings ? null : <Button key="stats-on" label="Turn the savings stats on" onPress={() => saveOption($, 'stats', 'on')} />}
         </Box>
       ), true),
@@ -1217,7 +1224,7 @@ export const register: Register = (on, options) => {
 
     // Details: the strict balance against your own setting, how often it was right, where tasks went.
     const t = b ? modelTable(b) : []
-    const details = b ? fold('details', 'Details', () => (
+    const details = b ? fold('details', 'Details', `Balance ${signed(b.usd.value)} · decisions right ${accuracyText(b)}`, 'chart', () => (
       <Box key="details-body" flexDirection="column" gap={term ? 0 : 1}>
         <Box flexDirection="column">
           {row('balance', `Router balance${isRough(b) ? ' (rough)' : ''}`, signed(b.usd.value), { bold: true, color: MONEY_COLOR[money(b.usd.value)] })}

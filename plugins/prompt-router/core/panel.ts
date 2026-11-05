@@ -171,3 +171,26 @@ export function ruleSvg(_width = 280, strong = true): string {
 .l{fill:#1d1f23;opacity:${strong ? '.12' : '.07'}}@media (prefers-color-scheme: dark){.l{fill:#f2f3f5;opacity:${strong ? '.12' : '.07'}}}
 </style><rect class="l" width="100%" height="1"/></svg>`
 }
+
+// Icons for the fold headings, drawn on a 24×24 grid.
+const ICONS = {
+  sliders: '<path d="M5 8h9M18 8h1M5 16h3M12 16h7"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
+  chart: '<path d="M5 19V11M10 19V6M15 19v-5M20 19V9"/>',
+} as const
+export type FoldIcon = keyof typeof ICONS
+
+// A fold's heading: an icon on an accent tile, a bold name and a line that says what is inside, so a
+// closed section still reads as something to open. animate: the tile pops and the words slide in,
+// only on the one redraw after a turn ends.
+export function foldHeadSvg(name: string, sub: string, icon: FoldIcon, open: boolean, animate = false, color: string = ACCENT): string {
+  const font = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif"'
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="40" role="img"><title>${esc(name)}${open ? '' : ', closed'}</title><style>
+.n{fill:#1d1f23}.s{fill:#1d1f23;opacity:.55}.b{fill:${color};opacity:${open ? '.22' : '.14'}}
+@media (prefers-color-scheme: dark){.n{fill:#f2f3f5}.s{fill:#f2f3f5;opacity:.6}.b{opacity:${open ? '.3' : '.2'}}}
+.i{transform-origin:20px 20px}
+${animate ? `.i{animation:p .55s cubic-bezier(.3,1.6,.5,1) both}@keyframes p{from{transform:scale(.4);opacity:0}}
+.w{animation:w .5s .12s cubic-bezier(.2,.8,.2,1) both}@keyframes w{from{opacity:0;transform:translateX(-6px)}}
+${STILL}` : ''}
+</style><g class="i"><rect class="b" x="2" y="2" width="36" height="36" rx="10"/><g transform="translate(8 8)" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round">${ICONS[icon]}</g></g>
+<g class="w"><text class="n" x="50" y="17" ${font} font-size="14" font-weight="650">${esc(name)}</text><text class="s" x="50" y="34" ${font} font-size="12">${esc(sub)}</text></g></svg>`
+}

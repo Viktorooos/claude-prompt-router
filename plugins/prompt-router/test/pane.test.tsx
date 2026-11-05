@@ -132,8 +132,11 @@ test('You saved comes first: the period\'s saving against compareWith, without a
   // As the preview: no header line, the periods inside You saved, a hairline above each section and between settings.
   expect(texts).not.toMatch(/PROMPT ROUTER/)
   expect(JSON.stringify(await ui.find({ key: 'saved' }))).toMatch(/period-week/)
-  // Cards part the sections; hairlines part the six settings and the More settings fold inside its card.
-  expect(JSON.stringify(await ui.findAll({ type: 'Svg' })).split('role=\\"presentation\\"').length - 1).toBe(7)
+  // Cards part the sections; hairlines part the six settings; More settings is a card of its own inside Settings.
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' })).split('role=\\"presentation\\"').length - 1).toBe(6)
+  // Each fold is headed by an icon, its name and what is inside; closed, its button says Show.
+  expect(JSON.stringify(await ui.find({ key: 'more' }))).toMatch(/More settings, closed/)
+  expect(JSON.stringify(await ui.find({ type: 'Button', key: 'fold-more' }))).toMatch(/Show/)
   // 7 days by default; the picked period is the primary button.
   expect(JSON.stringify(await ui.find({ type: 'Button', key: 'period-week' }))).toMatch(/"variant":"primary"/)
   await ui.press({ key: 'period-today' })
