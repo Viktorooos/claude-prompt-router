@@ -20,11 +20,11 @@ export type Where = 'here' | 'subagent' | 'session'
 
 const COMPARE_MODELS = ['opus', 'haiku', 'sonnet', 'fable'] as const
 const COMPARE_LEVELS = ['medium', 'low', 'high', 'xhigh', 'max'] as const
-type CompareValue = `${(typeof COMPARE_MODELS)[number]}-${(typeof COMPARE_LEVELS)[number]}` | 'first'
+type CompareValue = `${(typeof COMPARE_MODELS)[number]}-${(typeof COMPARE_LEVELS)[number]}` | 'first' | 'history'
 // opus-medium first (the default): Anthropic's pick for everyday work.
-const COMPARE_VALUES = [...COMPARE_MODELS.flatMap(m => COMPARE_LEVELS.map(l => `${m}-${l}` as CompareValue)), 'first' as const] as readonly CompareValue[]
+const COMPARE_VALUES = [...COMPARE_MODELS.flatMap(m => COMPARE_LEVELS.map(l => `${m}-${l}` as CompareValue)), 'first' as const, 'history' as const] as readonly CompareValue[]
 
-// compareWith as a model and effort; null for `first`.
+// compareWith as a model and effort; null for `first` and `history` (history: core/stats.ts historyCompare).
 export function compareTarget(v: string): { model: Model; effort: Level } | null {
   const [m, l] = v.split('-')
   const model = knownModel(m)

@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { EFFORT_OUTPUT, FAILURE_WEIGHTS, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
+import { EFFORT_OUTPUT, FAILURE_WEIGHTS, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -671,4 +671,36 @@ test('balance: a cheaper model at a higher effort is partly an escalation, so it
   const mixed = { from: { model: 'opus', effort: 'medium' as const }, to: { model: 'haiku', effort: 'high' as const } }
   const b = balance([...CONTROL(MIN_CONTROL), ...task('a', mixed, [{ effort: 'high', baseEffort: 'medium', durationMs: 60 * SEC }])])
   expect([b.routed, b.measured, b.estimated, b.timed]).toEqual([1, 0, 1, 0])
+})
+
+test('history: tokens per model and effort become shares, biggest first, medium when the transcript had none', () => {
+  const mix = historyMix({ version: 1, before: 0, computedAt: 0, tokens: {
+    'claude-opus-5-5|high': 600, 'claude-opus-5|high': 100, 'claude-sonnet-5-5|': 250, 'claude-haiku-5-5|medium': 50,
+    '<synthetic>|': 999, 'gpt-5|high': 999, 'claude-fable-5-1|low': 1,
+  } })!
+  expect(mix.map(p => `${p.model} ${p.effort}`)).toEqual(['opus high', 'sonnet medium', 'haiku medium'])
+  close(mix[0]!.share, 700 / 1000)
+  close(mix[1]!.share, 250 / 1000)
+  close(mix.reduce((a, p) => a + p.share, 0), 1)
+  expect(compareLabel({ mix })).toBe('your history (70 % Opus high, 25 % Sonnet medium, 5 % Haiku medium)')
+})
+
+test('history: no file yet is Opus medium while counting, no sessions before the router is Opus medium too', () => {
+  expect(historyMix(null)).toBe(null)
+  expect(historyCompare(null, true)).toEqual({ ...REFERENCE, fallback: 'pending' })
+  expect(historyCompare(null, false)).toEqual({ ...REFERENCE, fallback: 'none' })
+  expect(historyCompare({ version: 1, before: 0, computedAt: 0, tokens: {} }, true)).toEqual({ ...REFERENCE, fallback: 'none' })
+  expect(statsText(summarize([], NOW), historyCompare(null, true))).toMatch(/still being counted: compared with Opus medium/)
+  expect(statsText(summarize([], NOW), historyCompare(null, false))).toMatch(/no sessions from before the router/)
+})
+
+test('history: a turn costs the share-weighted average of its price on each part', () => {
+  const t = [turn('haiku', 'haiku', { effort: 'medium', baseEffort: 'medium' })]
+  const opus = summarize(t, NOW, { model: 'opus', effort: 'high' }).today
+  const sonnet = summarize(t, NOW, { model: 'sonnet', effort: 'medium' }).today
+  const mix = summarize(t, NOW, { mix: [{ model: 'opus', effort: 'high', share: 0.7 }, { model: 'sonnet', effort: 'medium', share: 0.3 }] }).today
+  for (const k of ['withoutUsd', 'savedUsd', 'extraUsd', 'effortUsd', 'balanceUsd'] as const) close(mix[k], 0.7 * opus[k] + 0.3 * sonnet[k])
+  close(mix.actualUsd, opus.actualUsd)
+  expect(mix.pricedTurns).toBe(1)
+  expect(statsRows(summarize(t, NOW), { mix: [{ model: 'opus', effort: 'high', share: 1 }] }).some(r => r.label === 'Cost on your history')).toBe(true)
 })

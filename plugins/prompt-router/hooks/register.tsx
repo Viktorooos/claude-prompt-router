@@ -6,10 +6,10 @@ import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWi
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, accuracyText, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
+import { REFERENCE, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CardIcon } from '../core/panel.ts'
-import type { Balance, Balances, Decision, Entry, Report } from '../core/stats.ts'
+import type { Balance, Balances, Compare, Decision, Entry, History, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -421,6 +421,43 @@ function switchNote(p: Pick, model: { from: Model } | null, effort: { now: Level
 
 const statsPath = () => `${home}/.claude/mods-logs/prompt-router-stats.jsonl`
 
+// compareWith history: the token mix of the sessions from before the router, counted once by
+// scripts/history-scan.mjs in the background and kept beside the stats log (it never changes).
+const historyPath = () => `${home}/.claude/mods-logs/prompt-router-history.json`
+let history: History | null = null
+let historyComputing = false
+
+const compareNow = (): Compare => (cfg.compareWith === 'history' ? historyCompare(history, historyComputing) : compareTarget(cfg.compareWith))
+
+async function readHistory($: EngineInterface): Promise<History | null> {
+  try {
+    const h = JSON.parse(String(await $.fs.read(historyPath()))) as History
+    return h && typeof h.tokens === 'object' ? h : null
+  } catch {
+    return null
+  }
+}
+
+async function loadHistory($: EngineInterface) {
+  if (cfg.compareWith !== 'history' || history || historyComputing) return
+  history = await readHistory($)
+  if (history || historyComputing) return
+  historyComputing = true
+  // Not awaited: the scan must not hold the prompt or the session's start.
+  void (async () => {
+    try {
+      const scan = $.process.spawn({ argv: ['node', `${$.plugin.root}/scripts/history-scan.mjs`, `${home}/.claude/projects`, statsPath(), historyPath()] })
+      for await (const _ of scan) void _
+      history = await readHistory($)
+    } catch (err) {
+      await log($, 'history', err)
+    } finally {
+      historyComputing = false
+      redraw($)
+    }
+  })()
+}
+
 // The prompt's text in a form that repeats when the same question comes again (case and spaces ignored).
 let lastPromptKey = ''
 const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 200)
@@ -644,7 +681,7 @@ function nextCompare(part: 'model' | 'effort'): string {
   const step = <T,>(list: readonly T[], v: T) => list[(list.indexOf(v) + 1) % list.length]!
   const model = part === 'model' ? step(COMPARE_MODELS, m) : m
   const effort = part === 'effort' ? step(COMPARE_EFFORTS, l as Level) : l || COMPARE_EFFORTS.find(x => x === 'medium') || COMPARE_EFFORTS[0]!
-  const v = model === 'first' ? 'first' : `${model}-${effort}`
+  const v = model === 'first' || model === 'history' ? model : `${model}-${effort}`
   return (SWITCHES.compareWith as readonly string[]).includes(v) ? v : SWITCHES.compareWith.find(x => x.startsWith(`${model}-`)) ?? SWITCHES.compareWith[0]
 }
 
@@ -685,6 +722,7 @@ async function saveOption($: EngineInterface, k: Option, value: string) {
   opts = { ...opts, [k]: value }
   cfg = toConfig(opts)
   paneAnimate = ANIMATES_ON_SAVE[k] ?? paneAnimate
+  void loadHistory($)
   redraw($)
 }
 
@@ -712,6 +750,7 @@ async function loadOptions($: EngineInterface) {
     if (!(k in saved) && opts[k] === SWITCHES[k][0]) delete opts[k]
   }
   cfg = toConfig(opts)
+  void loadHistory($)
   if (cfgNote) await log($, 'options', cfgNote)
   // Once per session, so the log shows what this copy of the mod really goes by.
   await log($, 'effective options', `${$.plugin.root} | ${optionsLine(opts)}`)
@@ -740,7 +779,7 @@ async function paneData($: EngineInterface) {
   let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances } | null = null
   if (cfg.stats === 'on') {
     const records = [...parseLog(await readStats($)), ...pending]
-    const c = compareTarget(cfg.compareWith)
+    const c = compareNow()
     savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now) }
   }
   return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
@@ -1018,8 +1057,9 @@ export const register: Register = (on, options) => {
       if (cfg.stats !== 'on') return { text: 'Prompt Router stats are off (option stats). Turn them on with "stats": "on".' }
       await flush($)
       const now = await $.clock.now()
+      await loadHistory($)
       const records = parseLog(await readStats($))
-      const c = compareTarget(cfg.compareWith)
+      const c = compareNow()
       const report = summarize(records, now, c)
       const perTask = balance(records)
       const page = `${home}/.claude/mods-logs/prompt-router-stats.html`
@@ -1041,6 +1081,7 @@ export const register: Register = (on, options) => {
         'Options (value and where it came from):',
         ...describeOptions(opts).map(l => `  ${l}`),
         cfgNote,
+        ...(cfg.stats === 'on' ? [`Savings compared with ${compareLabel(compareNow())}${cfg.compareWith === 'history' && !history ? (historyComputing ? ' (history still being counted)' : ' (no history from before the router)') : ''}.`] : []),
         'Commands: /router off, /router on, /router stats.',
         'The pane beside the chat: /router panel.',
       ].filter(Boolean).join('\n'),
@@ -1082,7 +1123,7 @@ export const register: Register = (on, options) => {
     }
     const s = d.savings?.report[panePeriod] ?? null
     const b: Balance | null = d.savings?.balance[panePeriod] ?? null
-    const c = compareTarget(cfg.compareWith)
+    const c = compareNow()
     const money = (v: number) => (Math.abs(v) < 0.005 ? 'none' : v > 0 ? 'up' : 'down')
     const MONEY_COLOR = { up: TONES.calm[0], down: TONES.over[0], none: undefined }
 
@@ -1250,7 +1291,7 @@ export const register: Register = (on, options) => {
       ({ key: k, icon, name, what, values, now: () => String(cfg[k]), pick: v => saveOption($, k, v) })
     const cm = cfg.compareWith.split('-')[0] ?? 'first'
     const compareValue = (m: string, l: string) => {
-      const v = m === 'first' ? 'first' : `${m}-${l || 'medium'}`
+      const v = m === 'first' || m === 'history' ? m : `${m}-${l || 'medium'}`
       return (SWITCHES.compareWith as readonly string[]).includes(v) ? v : SWITCHES.compareWith.find(x => x.startsWith(`${m}-`)) ?? SWITCHES.compareWith[0]
     }
     const main: Setting[] = [
