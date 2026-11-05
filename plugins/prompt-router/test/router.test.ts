@@ -1,5 +1,11 @@
-import { expect, test } from 'claude-code/testing'
-import { TEMPLATE, compactWindow, describeOptions, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { expect, test as base } from 'claude-code/testing'
+import { TEMPLATE, compactWindow, describeOptions, inHoldout, namesSetting, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+
+// The routing tests run without the control group (holdoutPct 0), so no prompt lands in it by chance;
+// the holdout tests below turn it on.
+const OFF = { holdoutPct: '0' }
+const test = ((name: string, a: any, b?: any) =>
+  typeof a === 'function' ? base(name, { options: OFF } as any, a) : base(name, { ...a, options: { ...OFF, ...a.options } }, b)) as typeof base
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -245,7 +251,7 @@ test('config reaches the classifier prompt and model', { options: { project: 'a 
   const p = seen.prompts[0] ?? ''
   expect(p).toMatch(/chat about a Flutter food delivery app\./)
   expect(p).toMatch(/PROJECT RULES[^\n]*\nPayments: opus, high\./)
-  expect(p).toMatch(/in Czech"\}$/)
+  expect(p).toMatch(/in Czech", "follows[^}]*\}$/)
   expect(seen.models[0]).toBe('claude-haiku-5-5')
 })
 
@@ -256,7 +262,7 @@ test('defaults: neutral project, prompt language, sonnet', async ($: any, on: an
   const p = seen.prompts[0] ?? ''
   expect(p).toMatch(/chat about a software project\./)
   expect(p).not.toMatch(/PROJECT RULES/)
-  expect(p).toMatch(/in the language of the new prompt"\}$/)
+  expect(p).toMatch(/in the language of the new prompt", "follows[^}]*\}$/)
   expect(seen.models[0]).toBe('claude-sonnet-5-5')
 })
 
@@ -299,7 +305,7 @@ test('the test tool takes per-case config and repeats runs', async ($: any, on: 
   expect(text).toMatch(/a: here opus medium ×2/)
   expect(seen.prompts[0]).toMatch(/about a recipe app\./)
   expect(seen.prompts[0]).toMatch(/Search: haiku\./)
-  expect(seen.prompts[0]).toMatch(/in German"\}$/)
+  expect(seen.prompts[0]).toMatch(/in German", "follows[^}]*\}$/)
 })
 
 test('/router off, on and status', async ($: any, on: any) => {
@@ -954,12 +960,39 @@ test('stats: a routed first prompt and its turn are noted, priced against the mo
   await $.turn.complete(TURN_DONE)
   const [d, t] = statsLines(seen)
   expect(d).toMatchObject({ kind: 'decision', platform: 'claude-code', where: 'here', from: { model: 'opus', effort: 'medium' }, to: { model: 'haiku', effort: 'low' }, outcome: 'applied' })
-  expect(d.classifier).toEqual({ model: 'claude-sonnet-5-5', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 } })
+  expect(d.classifier).toEqual({ model: 'claude-sonnet-5-5', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, ms: 0 })
   expect(t).toMatchObject({ kind: 'turn', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 1000, output: 2000, cacheRead: 0, cacheWrite: 0 } })
   expect(t.chat).toBe(d.chat)
   await $.ui.render({ component: 'SessionMode', surface: 'terminal', props: { modes: [] } })
   // The model the router holds, and no saving.
   expect(seen.modes.at(-1)).toEqual(['Haiku'])
+})
+
+test('stats: the decision keeps what the classifier read as follows, the turn its duration', { options: { firstChatDetection: 'auto', effortDetection: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "low", "why": "quick", "follows": "corrects"}', { isFirst: true })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-haiku-5-5' } }))
+  await start($)
+  await submit($, 'that did not work, try again')
+  await $.turn.complete({ ...TURN_DONE, durationMs: 4200 })
+  const [d, t] = statsLines(seen)
+  expect(d.follows).toBe('corrects')
+  expect(d.classifier.ms).toBe(0)
+  expect(t.durationMs).toBe(4200)
+})
+
+test('stats: a keep reply still notes follows; a reply without it notes none', async ($: any, on: any) => {
+  let reply = '{"where": "keep", "model": "keep", "effort": "keep", "why": "approval", "follows": "continues"}'
+  const seen = engine(on, () => reply)
+  on('turn.complete', () => ({ text: '' }))
+  await start($)
+  await submit($, 'yes, go on')
+  await $.turn.complete(TURN_DONE)
+  reply = PICK.keep
+  await submit($, 'ok')
+  await $.turn.complete(TURN_DONE)
+  const ds = statsLines(seen).filter(l => l.kind === 'decision')
+  expect(ds[0].follows).toBe('continues')
+  expect(ds[1].follows).toBe(undefined)
 })
 
 test('stats: a subagent the user took is an accepted offer, priced against the main chat model', async ($: any, on: any) => {
@@ -1007,6 +1040,82 @@ test("stats: a main-chat turn notes the effort it ran at and the person's own", 
   await $.turn.complete(TURN_DONE)
   const t = statsLines(seen).filter((x: any) => x.kind === 'turn').at(-1)
   expect(t).toMatchObject({ effort: 'low', baseEffort: 'high' })
+})
+
+test('stats: a turn after the person moved the picker above what the router set is marked manual', { options: { effortDetection: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "low", "why": "quick"}')
+  on('turn.step', async function* (_: unknown, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for await (const _ of $.turn.step({ turnId: 't0', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 }));
+  await submit($, 'why is the list slow')
+  // The picker shows the level the router set.
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'low', messageCount: 1 }));
+  await $.turn.complete(TURN_DONE)
+  // The person moves the picker to max and asks again.
+  for await (const _ of $.turn.step({ turnId: 't2', index: 0, model: 'claude-opus-5-5', effort: 'max', messageCount: 1 }));
+  await $.turn.complete(TURN_DONE)
+  for await (const _ of $.turn.step({ turnId: 't3', index: 0, model: 'claude-opus-5-5', effort: 'max', messageCount: 1 }));
+  await $.turn.complete(TURN_DONE)
+  const ts = statsLines(seen).filter((x: any) => x.kind === 'turn')
+  expect(ts.map((t: any) => t.manual)).toEqual([undefined, true, undefined])
+})
+
+test('inHoldout: the same seed lands the same way, and about pct % of seeds land in the control group', () => {
+  const share = (pct: number) => Array.from({ length: 20_000 }, (_, i) => inHoldout(`chat-${i % 97}:${i * 7919}:prompt ${i}`, pct)).filter(Boolean).length / 20_000
+  expect(share(0)).toBe(0)
+  for (const pct of [5, 10, 20]) {
+    expect(Math.abs(share(pct) - pct / 100)).toBeLessThan(0.01)
+  }
+  expect(inHoldout('a:1:fix it', 10)).toBe(inHoldout('a:1:fix it', 10))
+})
+
+test('namesSetting: a prompt that asks for a model or effort', () => {
+  for (const t of ['use opus for this', 'Sonnet je na to dost', 'high effort please', 'ultrathink about the cache']) expect(namesSetting(t)).toBe(true)
+  for (const t of ['fix the empty search', 'run the tests', 'the magnum layout']) expect(namesSetting(t)).toBe(false)
+})
+
+test('holdout: a share of lowering prompts keeps its setting and is noted as the control group', { options: { effortDetection: 'auto', holdoutPct: '20' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  const prompts = Array.from({ length: 40 }, (_, i) => `fix the empty search in list ${i}`)
+  for (const t of [...prompts, 'use opus, fix the empty search in list 99']) {
+    await submit($, t)
+    await $.turn.complete(TURN_DONE)
+  }
+  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
+  expect(ds.length).toBe(41)
+  const held = ds.filter((d: any) => d.holdout)
+  // Each prompt lands where its seed says; some do, most do not.
+  for (const d of ds.slice(0, 40)) expect(!!d.holdout).toBe(inHoldout(`${d.chat}:0:${d.key}`, 20))
+  expect(held.length).toBeGreaterThan(0)
+  expect(held.length).toBeLessThan(20)
+  for (const d of held) {
+    expect(d.where).toBe('keep')
+    expect(d.to).toEqual(d.from)
+    expect(d.wanted).toEqual({ model: 'opus', effort: 'low' })
+  }
+  // The effort moved only for the prompts outside the control group.
+  expect(seen.sets.length).toBe(41 - held.length)
+  // A prompt that names a model is never held back.
+  expect(ds[40].holdout).toBeUndefined()
+  expect(ds[40].where).toBe('here')
+})
+
+test('holdout: never a raise or an xhigh pick', { options: { effortDetection: 'auto', holdoutPct: '20' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "xhigh", "why": "hard"}')
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for (let i = 0; i < 30; i++) {
+    await submit($, `rework the cache layer ${i}`)
+    await $.turn.complete(TURN_DONE)
+  }
+  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
+  expect(ds.length).toBe(30)
+  expect(ds.some((d: any) => d.holdout)).toBe(false)
 })
 
 test('stats: a subagent the router did not offer counts at its own price', async ($: any, on: any) => {
@@ -1143,7 +1252,7 @@ test('pickPrompt: a short chat asks for no note', async ($: any, on: any) => {
   await start($)
   await submit($, 'now add a favourites screen')
   expect(seen.prompts[0]).not.toMatch(/"note"/)
-  expect(seen.prompts[0]).toMatch(/in the language of the new prompt"\}$/)
+  expect(seen.prompts[0]).toMatch(/in the language of the new prompt", "follows[^}]*\}$/)
 })
 
 test('newSessionAt: new work in a long chat is offered as a new session', async ($: any, on: any) => {

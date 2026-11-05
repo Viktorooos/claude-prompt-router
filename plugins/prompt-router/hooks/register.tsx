@@ -2,13 +2,13 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
-import type { Chat, Config, Model, Pick, Switch, Where } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, inHoldout, namesSetting, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import type { Chat, Config, Follows, Model, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, byDay, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
+import { REFERENCE, accuracyText, balance, balanceParts, balances, byDay, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, kTokens, partBarSvg, pulseSvg, ringSvg, sparkSvg, sparkText, tone } from '../core/panel.ts'
-import type { Decision, Entry, Report } from '../core/stats.ts'
+import type { Balance, Balances, Decision, Entry, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -52,7 +52,9 @@ let routed = ''
 let effortBase = ''
 let routedLevel = ''
 let stepEffort: { effort: Level | ''; base: Level | '' } | null = null
-let lastClassifier: { model: string; usage: Usage } | null = null
+let lastClassifier: { model: string; usage: Usage; ms?: number } | null = null
+// What the classifier read of the prompt it just judged, for the decision record.
+let lastFollows: Follows | undefined
 let lastAsked: { ts: number; where: Where; model: Model } | null = null
 // A subagent the router sent work to: the main chat's model, and the main chat's context then.
 const routedAgents = new Map<string, { base: string; context: number }>()
@@ -60,6 +62,8 @@ const routedAgents = new Map<string, { base: string; context: number }>()
 const agentSteps = new Map<string, number>()
 // The model of the main chat's last finished turn, to tell a turn the router switched models on.
 let lastTurnModel = ''
+// The person moved the picker above the model or effort the router set, since the last main-chat turn.
+let manualUp = false
 // openPane on: the pane was opened (and placed, or retried on the first prompt) this session.
 let paneOpened = false
 // The period the pane's savings show (a pane button picks it).
@@ -271,13 +275,16 @@ async function pick($: EngineInterface, text: string, now: Level | ''): Promise<
   lastCtx = { tokens: tokens ?? null, window: window ?? null }
   const model = seenModel || (await chatModel($))
   const models = await availableModels($, model)
+  const began = await $.clock.now()
   const r = await classify($, text, chatOf(messages, now, tokens, window, model, models))
+  const ms = Math.max(0, (await $.clock.now()) - began)
   if (!r.isAnswered) throw new Error(`pick failed: ${r.reason}`)
   const used = usageOf(r.usage)
-  lastClassifier = used ? { model: MODELS[cfg.classifier], usage: used } : null
+  lastClassifier = used ? { model: MODELS[cfg.classifier], usage: used, ms } : null
   pickedFrom = knownModel(model) || model
   if (!baseline) baseline = model
   const parsed = parsePick(r.text, models)
+  lastFollows = parseFollows(r.text)
   if (!parsed && !/"where"\s*:\s*"keep"/.test(r.text)) await log($, 'parse', 'reply could not be parsed')
   const p = parsed && preferSession(allowed(parsed, cfg), { tokens, window }, cfg)
   const isFirst = !messages.some(m => m.role === 'assistant')
@@ -382,12 +389,13 @@ const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' 
 
 // Notes one routing decision (with what the classifier cost); returns its time stamp. Every result of
 // decide() passes here once, so the pane's last decision is written here too.
-async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick) {
+async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick, wanted?: Decision['to']) {
   const ts = await $.clock.now()
   if (cfg.stats === 'on') {
-    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}) })
+    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(wanted ? { holdout: true as const, wanted } : {}) })
   }
   lastClassifier = null
+  lastFollows = undefined
   const last: LastDecision = { where: p?.other ? 'other' : where, outcome: outcome === 'asked' ? 'asked' : 'applied', model: to.model, effort: to.effort, why: p?.why ?? '', ts, ...lastCtx }
   try {
     // Readers of the atom (the pane) draw again.
@@ -430,6 +438,18 @@ async function flush($: EngineInterface) {
   }
 }
 
+// The control group for the savings stats: a prompt the router would only move lower (never to xhigh
+// or max, never one that names a model or effort) keeps its setting for holdoutPct % of prompts.
+async function holdsOut($: EngineInterface, text: string, p: Pick, now: Level | '') {
+  const from = p.first?.now
+  const model = !!from && p.model !== from && cfg.firstChatDetection !== 'off'
+  const effort = p.effort !== now && cfg.effortDetection !== 'off'
+  if (!model && !effort) return false
+  if ((model && !above(from, p.model)) || (effort && !above(now, p.effort))) return false
+  if (p.effort === 'xhigh' || p.effort === 'max' || namesSetting(text)) return false
+  return inHoldout(`${chatId}:${await $.clock.now()}:${lastPromptKey}`, Number(cfg.holdoutPct))
+}
+
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
 async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!enabled || e.command || e.isMeta) return e
@@ -467,6 +487,10 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     }
     if (p.other) await noteAsked($, 'subagent', p, now)
     if (p.other) return { ...e, text: `${e.text}\n\n[${(cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(p, p.other.now, now)}]` }
+    if (await holdsOut($, text, p, now)) {
+      await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now, p, { model: p.model, effort: p.effort })
+      return e
+    }
     const changes: string[] = []
     let askModel: { from: Model } | null = null
     let askEffort: { now: Level | '' } | null = null
@@ -594,10 +618,10 @@ async function paneData($: EngineInterface) {
   const at = cfg.sessionSuggestions === 'off' ? 0 : Number.parseInt(cfg.newSessionAt, 10) || 0
   const model = knownModel(seenModel || (await chatModel($)))
   const effort = await currentLevel($)
-  let savings: { report: Report; days: ReturnType<typeof byDay> } | null = null
+  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances } | null = null
   if (cfg.stats === 'on') {
     const records = [...parseLog(await readStats($)), ...pending]
-    savings = { report: summarize(records, now), days: byDay(records, now, 14) }
+    savings = { report: summarize(records, now), days: byDay(records, now, 14), balance: balances(records, now) }
   }
   return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
 }
@@ -636,6 +660,7 @@ export const register: Register = (on, options) => {
     routedAgents.clear()
     agentSteps.clear()
     lastTurnModel = ''
+    manualUp = false
     await loadOptions($)
     await $.command.register({ name: 'router', description: 'Prompt Router: status, off / on, stats, or the panel', argumentHint: '[off|on|stats|panel]' })
     await $.tool.register({
@@ -717,17 +742,20 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined || typeof e.effort !== 'string') return yield* next(e)
     lastEffort = e.effort
     if (!hold && !(routedLevel && e.effort === routedLevel)) {
+      if (routedLevel && above(e.effort, routedLevel)) manualUp = true
       routedLevel = ''
       effortBase = e.effort
     }
     // Without the router the chat runs on the person's own pick; a model the router set keeps the old one.
     if (!modelHold && !(routed && knownModel(e.model) === knownModel(routed))) {
+      if (routed && above(e.model, routed)) manualUp = true
       routed = ''
       baseline = e.model
     }
     // The person picked another model: the mod lets go of the one it held.
     if (modelHold && !modelHold.base) modelHold = { ...modelHold, base: e.model }
     if (modelHold && e.model !== modelHold.base) {
+      if (above(e.model, modelHold.model)) manualUp = true
       modelHold = null
       await $.state.set(MODEL_HOLD, null)
       redraw($)
@@ -738,6 +766,7 @@ export const register: Register = (on, options) => {
     // Taken before the mod saw a request (e.g. right after a reload): this request's level is the base.
     if (hold && !hold.base) hold = { ...hold, base: e.effort }
     if (hold && e.effort !== hold.base) {
+      if (above(e.effort, hold.level)) manualUp = true
       hold = null
       await $.state.set(OVERRIDE, null)
       redraw($)
@@ -788,8 +817,12 @@ export const register: Register = (on, options) => {
       // The router moved this chat to another model since the last turn (not the person's own switch).
       const switched = !e.agentId && !!lastTurnModel && !!model && model !== lastTurnModel && model !== base
       if (!e.agentId && model) lastTurnModel = model
+      const manual = !e.agentId && manualUp
+      if (!e.agentId) manualUp = false
       pending.push({
         kind: 'turn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, ...(e.agentId ? { agentId: e.agentId } : {}), model, baseline: base, ...(usage ? { usage } : {}),
+        ...(typeof e.durationMs === 'number' ? { durationMs: e.durationMs } : {}),
+        ...(manual ? { manual: true } : {}),
         ...(agent?.context && requests ? { mainContext: agent.context, requests } : {}),
         ...(switched ? { switched: true } : {}),
         ...(!e.agentId && stepEffort?.effort && stepEffort.base ? { effort: stepEffort.effort, baseEffort: stepEffort.base } : {}),
@@ -863,15 +896,16 @@ export const register: Register = (on, options) => {
       const now = await $.clock.now()
       const records = parseLog(await readStats($))
       const report = summarize(records, now)
+      const perTask = balance(records)
       const page = `${home}/.claude/mods-logs/prompt-router-stats.html`
       let link = ''
       try {
-        await $.fs.write(page, statsHtml(report, byDay(records, now, 30)))
+        await $.fs.write(page, statsHtml(report, byDay(records, now, 30), perTask))
         link = `\n\nWith a graph of the last 30 days: file://${page}`
       } catch (err) {
         await log($, 'stats page', err)
       }
-      return { text: `${statsText(report)}${link}` }
+      return { text: `${statsText(report, perTask)}${link}` }
     }
     const now = await currentLevel($)
     const { value } = await $.state.get(OVERRIDE)
@@ -907,6 +941,7 @@ export const register: Register = (on, options) => {
     const atLine = d.at ? `New session at ${d.at}%` : 'New-session rule off'
 
     const s = d.savings?.report[panePeriod] ?? null
+    const b: Balance | null = d.savings?.balance[panePeriod] ?? null
     const pickPeriod = (k: typeof panePeriod) => async () => {
       panePeriod = k
       redraw($)
@@ -959,6 +994,40 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
+    // The balance per task against the control group: money and time first, then the parts, the
+    // accuracy and the models (both surfaces, stacked rows that fit a narrow pane).
+    const taskView = (Box: any, Text: any) => {
+      if (!b) return null
+      const t = modelTable(b)
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="column">
+            <Text dimColor>Per task, against the control group</Text>
+            <Text bold color={MONEY_COLOR[money(b.usd.value)]}>{`${isRough(b) ? '~' : ''}${signed(b.usd.value)} · ${b.timed ? timeText(b.minutes.value) : 'time not measured yet'}`}</Text>
+            <Text dimColor>{sampleNote(b)}</Text>
+          </Box>
+          <Box flexDirection="column">
+            {balanceParts(b).map(([k, label, v]) => (
+              <Box key={`task-${k}`} flexDirection="row" justifyContent="space-between">
+                <Text dimColor={money(v) === 'none'}>{`  ${label}`}</Text>
+                <Text dimColor={money(v) === 'none'} color={MONEY_COLOR[money(v)]}>{money(v) === 'none' ? '$0.00' : signed(v)}</Text>
+              </Box>
+            ))}
+            <Box flexDirection="row" justifyContent="space-between">
+              <Text>Accuracy</Text>
+              <Text bold>{accuracyText(b)}</Text>
+            </Box>
+          </Box>
+          {t.length > 1 ? (
+            <Box flexDirection="column">
+              {t.slice(1).map(r => (
+                <Text key={`model-${r[0]}`} dimColor>{`${r[0]}: ${r[1]} tasks, ${r[2]} control · ${r[3]}/task · re-work ${r[4]} · ${r[5]} min/task`}</Text>
+              ))}
+            </Box>
+          ) : null}
+        </Box>
+      )
+    }
     const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
 
     if (e.surface === 'terminal') {
@@ -997,6 +1066,7 @@ export const register: Register = (on, options) => {
                 <Text dimColor>{verdict}</Text>
               </Box>
               {billView(Box, Text)}
+              {taskView(Box, Text)}
               <Box flexDirection="column">
                 <Text color="claude">{sparkText(d.savings.days.map(x => x.balanceUsd))}</Text>
                 <Text dimColor>balance per day, last 14 days</Text>
@@ -1108,6 +1178,7 @@ export const register: Register = (on, options) => {
                 </Box>
               )
             })()}
+            {taskView(Box, Text)}
             <Box flexDirection="column" gap={1}>
               <Box flexDirection="column">
                 <Text dimColor>{`Vs. always ${REFERENCE.model} ${REFERENCE.effort}`}</Text>
@@ -1148,7 +1219,7 @@ export const register: Register = (on, options) => {
     const parts = [
       d.header,
       d.share !== null ? `context ${Math.round(d.share)} %${d.at ? ` of ${d.at} %` : ''}` : '',
-      d.savings ? `today ${signed(d.savings.report.today.balanceUsd)} · 7 days ${signed(d.savings.report.week.balanceUsd)}` : '',
+      d.savings ? `today ${signed(d.savings.report.today.balanceUsd)}${d.savings.balance.today.timed ? ` · ${timeText(d.savings.balance.today.minutes.value)}` : ''} · 7 days ${signed(d.savings.report.week.balanceUsd)}` : '',
     ].filter(Boolean)
     const { Box, Text, Button } = $.ui.resolve(e)
     return (

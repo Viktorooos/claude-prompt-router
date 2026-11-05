@@ -129,6 +129,32 @@ test('savings: the bill for the picked period (without, with, where the differen
   await term.unmount()
 })
 
+// Five control tasks ($1…$5, 1…5 min: median $3, 3 min) and one routed task ($1, 1 min), all today.
+function controlLog(now: number) {
+  const dec = (chat: string, ts: number, over: object) => JSON.stringify({ kind: 'decision', ts, platform: 'claude-code', chat, where: 'here', from: { model: 'opus', effort: 'medium' }, to: { model: 'haiku', effort: 'low' }, outcome: 'applied', follows: 'new', ...over })
+  const turn = (chat: string, ts: number, model: string, usd: number, min: number) => JSON.stringify({ kind: 'turn', ts, platform: 'claude-code', chat, model, baseline: 'opus', usage: { input: 10, output: 10 }, usd, durationMs: min * 60_000 })
+  const lines: string[] = []
+  for (let i = 0; i < 5; i++) lines.push(dec(`k${i}`, now - 3 * HOUR, { where: 'keep', to: { model: 'opus', effort: 'medium' }, holdout: true, wanted: { model: 'haiku', effort: 'low' } }), turn(`k${i}`, now - 3 * HOUR + 1, 'opus', i + 1, i + 1))
+  lines.push(dec('r', now - HOUR, {}), turn('r', now - HOUR + 1, 'haiku', 1, 1))
+  return lines.join('\n')
+}
+
+test('savings: the balance per task against the control group, with its parts, accuracy and models', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  engine(on, { now, log: controlLog(now) })
+  await start($)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
+    expect(texts).toMatch(/Per task, against the control group\n~\+\$2\.00 · 2 min saved/)
+    expect(texts).toMatch(/1 routed tasks \(1 against the control group\) · 5 control tasks · rough estimate/)
+    expect(texts).toMatch(/Cheaper picks\n\+\$2\.00/)
+    expect(texts).toMatch(/Accuracy\n100 % \(95 %: 21–100 %\)/)
+    expect(texts).toMatch(/haiku: 1 tasks, 5 control · \$1\.00\/task · re-work 0 % · 1\.0 min\/task/)
+    await ui.unmount()
+  }
+})
+
 test('a switch press saves the option the way /config does, and the pane shows it', async ($: any, on: any) => {
   const seen = engine(on)
   await start($)
@@ -206,6 +232,16 @@ test('the band above the prompt: model · effort, context and saving in one line
     await ui.unmount()
   }
   expect(seen.opened.some((o: any) => o.id === 'prompt-router')).toBe(true)
+})
+
+test('the band adds the time saved today once control tasks measure it', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  engine(on, { now, log: controlLog(now) })
+  await start($)
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const line = (await ui.find({ type: 'Text', text: /^Router · / }))?.text ?? ''
+  expect(line).toMatch(/today [+−]\$\d+\.\d\d · 2 min saved · 7 days/)
+  await ui.unmount()
 })
 
 test('the band yields to a survey', async ($: any, on: any) => {

@@ -2,7 +2,7 @@
 // Every dollar is an estimate from core/prices.ts. Honest by design: the classifier's cost comes off
 // the saving, a stronger model is shown as extra cost, an effort change is priced apart as a guess, and
 // the balance takes all of them in.
-import { LEVELS } from './router.ts'
+import { LEVELS, above } from './router.ts'
 import type { Level } from './router.ts'
 import { cost } from './prices.ts'
 import type { Usage } from './prices.ts'
@@ -21,8 +21,13 @@ export type Decision = {
   to: Side
   /** The prompt's normalized text (promptKey): the same key again means the same question came back. */
   key?: string
+  /** What the classifier read of the prompt: a fix of the last answer, the next step, or new work. */
+  follows?: 'continues' | 'corrects' | 'new'
   outcome: 'applied' | 'asked' | 'declined'
-  classifier?: { model: string; usage: Usage; usd?: number }
+  classifier?: { model: string; usage: Usage; usd?: number; ms?: number }
+  /** A control-group prompt: the router would have moved it to `wanted` but kept the setting (`where: 'keep'`). */
+  holdout?: true
+  wanted?: Side
 }
 
 // One finished turn (main chat, or a subagent with `agentId`). `baseline` is the model it would
@@ -48,6 +53,12 @@ export type Turn = {
   /** A main-chat turn: the effort it ran at and the person's own pick (what it would have run at). */
   effort?: Level
   baseEffort?: Level
+  /** Wall-clock ms of the turn as the platform reports it (the classifier's wait is not in it).
+   *  Missing in older records and on platforms that do not time it. */
+  durationMs?: number
+  /** A main-chat turn that ran after the person moved the model or effort picker above what the
+   *  router had set: a sign its pick was too low. */
+  manual?: true
 }
 
 // The user took an asked decision (switched, or ran the suggested subagent). `decision` is its `ts`.
@@ -95,7 +106,7 @@ export type Summary = {
   perTurnUsd: number
   /** Prompts the router sent to a cheaper model or effort. */
   routed: number
-  /** Routed prompts that came again soon after (see reworkedSet). */
+  /** Routed prompts whose answer did not do the job, each by its FAILURE_WEIGHTS (see reworkedSet). */
   rework: number
   /** (1 − rework / routed) as a percent; null when nothing was routed. An estimate. */
   accuracyPct: number | null
@@ -231,33 +242,300 @@ function takenSet(records: readonly Entry[]) {
 // A prompt the router sent to a cheaper model or effort than the person's pick.
 const routedDecision = (d: Decision) => d.outcome === 'applied' && d.where !== 'keep' && (d.to.model !== d.from.model || d.to.effort !== d.from.effort)
 
-// Re-work: a routed prompt whose same text (`key`) comes again within the next few prompts of the chat.
-// The person had to ask twice, so the cheaper answer did not do the job. A guess: a repeat can also be
-// a second try at the same question on purpose.
+// How surely each sign says a cheaper answer did not do the job (1 = surely). Guesses, to tune:
+// switched = the person moved the picker up and went on, repeated = the same text again, corrected =
+// the classifier read the next prompt as a fix of the answer, interrupted = the answer was cut off.
+export const FAILURE_WEIGHTS = { switched: 1, repeated: 1, corrected: 0.7, interrupted: 0.4 } as const
+
+export type FailureReason = keyof typeof FAILURE_WEIGHTS
+export type Failure = { weight: number; reasons: FailureReason[] }
+
+// The strongest sign counts; the reasons are all listed.
+function failure(reasons: FailureReason[]): Failure {
+  return { weight: Math.max(0, ...reasons.map(r => FAILURE_WEIGHTS[r])), reasons }
+}
+
+const main = (t: Turn) => !t.agentId
+
+// Re-work: a routed prompt whose same text (`key`) comes again within the next few prompts of the chat,
+// whose next prompt corrects it, whose next prompt ran after a switch up by hand, or whose answer was
+// cut off. A guess: a repeat can also be a second try at the same question on purpose.
 const REWORK_WINDOW = 3
 
 function reworkedSet(records: readonly Entry[]) {
-  const byChat = new Map<string, Decision[]>()
-  for (const r of records) if (r.kind === 'decision') byChat.set(r.chat, [...(byChat.get(r.chat) ?? []), r])
-  const out = new Set<string>()
-  for (const list of byChat.values()) {
-    list.sort((a, b) => a.ts - b.ts)
-    list.forEach((d, i) => {
-      if (!routedDecision(d) || !d.key) return
-      if (list.slice(i + 1, i + 1 + REWORK_WINDOW).some(n => n.key === d.key)) out.add(takenKey(d.chat, d.ts))
+  const byChat = new Map<string, { decisions: Decision[]; turns: Turn[] }>()
+  for (const r of records) {
+    if (r.kind === 'accept' || (r.kind === 'turn' && !main(r))) continue
+    let c = byChat.get(r.chat)
+    if (!c) byChat.set(r.chat, (c = { decisions: [], turns: [] }))
+    if (r.kind === 'decision') c.decisions.push(r)
+    else c.turns.push(r)
+  }
+  const out = new Map<string, Failure>()
+  for (const { decisions, turns } of byChat.values()) {
+    decisions.sort((a, b) => a.ts - b.ts)
+    turns.sort((a, b) => a.ts - b.ts)
+    decisions.forEach((d, i) => {
+      if (!routedDecision(d)) return
+      const next = decisions.slice(i + 1, i + 1 + REWORK_WINDOW)
+      const until = (k: number) => next[k]?.ts ?? Infinity
+      const answer = turns.find(t => t.ts >= d.ts && t.ts < until(0))
+      const reasons: FailureReason[] = []
+      if (d.key && next.some(n => n.key === d.key)) reasons.push('repeated')
+      if (next[0]?.follows === 'corrects') reasons.push('corrected')
+      if (next[0] && turns.some(t => t.manual && t.ts >= next[0]!.ts && t.ts < until(1))) reasons.push('switched')
+      if (answer && !answer.usage) reasons.push('interrupted')
+      if (reasons.length) out.set(takenKey(d.chat, d.ts), failure(reasons))
     })
   }
   return out
 }
 
-function add(s: Summary, r: Entry, taken: Set<string>, reworked: Set<string>) {
+// One task: a prompt, the prompts that went on with it or fixed it, and the turns that answered them.
+// No decisions = turns before the first prompt the router saw.
+export type Episode = { chat: string; start: number; end: number; decisions: Decision[]; turns: Turn[] }
+
+// Quiet after which the next prompt starts a new task, whatever the classifier read.
+export const EPISODE_GAP = 30 * 60_000
+
+// The same text again goes on with the task (a repeat, even after a switch); otherwise the classifier's
+// `follows` decides, and an older record without it starts a new task.
+function startsEpisode(d: Decision, cur: Episode) {
+  if (d.ts - cur.end > EPISODE_GAP) return true
+  if (d.key && cur.decisions.some(x => x.key === d.key)) return false
+  return d.follows === undefined || d.follows === 'new'
+}
+
+// The records grouped into tasks, per chat, oldest first by where each task started.
+export function episodes(records: readonly Entry[]): Episode[] {
+  const byChat = new Map<string, (Decision | Turn)[]>()
+  for (const r of records) {
+    if (r.kind === 'accept') continue
+    const list = byChat.get(r.chat)
+    if (list) list.push(r)
+    else byChat.set(r.chat, [r])
+  }
+  const out: Episode[] = []
+  for (const list of byChat.values()) {
+    list.sort((a, b) => a.ts - b.ts)
+    let cur: Episode | null = null
+    for (const r of list) {
+      if (!cur || (r.kind === 'decision' && startsEpisode(r, cur))) {
+        cur = { chat: r.chat, start: r.ts, end: r.ts, decisions: [], turns: [] }
+        out.push(cur)
+      }
+      if (r.kind === 'decision') cur.decisions.push(r)
+      else cur.turns.push(r)
+      cur.end = Math.max(cur.end, r.ts)
+    }
+  }
+  return out.sort((a, b) => a.start - b.start)
+}
+
+// Whether a task's answers did the job, from the signs anywhere in it: a repeat of an earlier prompt,
+// a correction, a switch up by hand after its first answer, a main-chat answer cut off.
+export function failureOf(e: Episode): Failure {
+  const reasons: FailureReason[] = []
+  if (!e.decisions.length) return failure(reasons)
+  if (e.decisions.some((d, i) => d.key && e.decisions.slice(0, i).some(x => x.key === d.key))) reasons.push('repeated')
+  if (e.decisions.slice(1).some(d => d.follows === 'corrects')) reasons.push('corrected')
+  const answers = e.turns.filter(main)
+  if (answers.slice(1).some(t => t.manual)) reasons.push('switched')
+  if (answers.some(t => !t.usage)) reasons.push('interrupted')
+  return failure(reasons)
+}
+
+// A class of tasks: where the router sent it and the model it picked (for a control task, the model
+// it would have picked). Control tasks exist only for `here`, so other classes always fall back.
+const classOf = (where: string, model: string) => `${where}:${model}`
+
+// Control tasks a class needs before its medians replace the token re-pricing.
+export const MIN_CONTROL = 5
+
+const turnUsd = (t: Turn) => (t.usage ? (t.usd ?? cost(t.usage, t.model) ?? 0) : 0)
+const turnsUsd = (ts: readonly Turn[]) => ts.reduce((n, t) => n + turnUsd(t), 0)
+const turnsMs = (ts: readonly Turn[]) => ts.filter(main).reduce((n, t) => n + (t.durationMs ?? 0), 0)
+const classifierMs = (ds: readonly Decision[]) => ds.reduce((n, d) => n + (d.classifier?.ms ?? 0), 0)
+// Whether the task's main turns carry their times (older records and some platforms do not).
+const timed = (ts: readonly Turn[]) => ts.some(t => main(t) && t.durationMs !== undefined)
+
+// The q-quantile of sorted values, linear between neighbours.
+function quantile(sorted: readonly number[], q: number) {
+  const i = (sorted.length - 1) * q
+  const lo = Math.floor(i)
+  return sorted[lo]! + (sorted[Math.min(lo + 1, sorted.length - 1)]! - sorted[lo]!) * (i - lo)
+}
+
+type Spread = { q1: number; median: number; q3: number }
+
+function spread(values: number[]): Spread {
+  const s = [...values].sort((a, b) => a - b)
+  return { q1: quantile(s, 0.25), median: quantile(s, 0.5), q3: quantile(s, 0.75) }
+}
+
+// The Wilson 95 % interval of a share (successes may be fractional: failures are weighted).
+export function wilson(successes: number, n: number): { low: number; high: number } {
+  if (n <= 0) return { low: 0, high: 1 }
+  const z = 1.96
+  const p = successes / n
+  const d = 1 + (z * z) / n
+  const c = (p + (z * z) / (2 * n)) / d
+  const h = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d
+  return { low: Math.max(0, c - h), high: Math.min(1, c + h) }
+}
+
+// A range with its point: low and high from the control quartiles (equal to the point where the
+// re-pricing stood in).
+export type Range = { value: number; low: number; high: number }
+
+export type ModelRow = { model: string; tasks: number; control: number; usdPerTask: number; reworkPct: number; minutesPerTask: number | null }
+
+export type Balance = {
+  /** Tasks the router changed (model, effort, subagent, session), and control tasks. */
+  routed: number
+  control: number
+  /** Routed tasks priced against control medians, and those priced by the token re-pricing. */
+  measured: number
+  estimated: number
+  /** Routed tasks whose time was compared with control times (0 = the time is not measured yet). */
+  timed: number
+  /** Money and minutes the router saved (+) or cost (−) against no router, classifier included. */
+  usd: Range
+  minutes: Range
+  /** usd split: cheaper picks, higher picks (escalation), re-work after a failed answer, classifier. */
+  parts: { cheaper: number; escalation: number; rework: number; classifier: number }
+  /** Share of routed tasks that did the job (weighted failures), with its Wilson interval. */
+  accuracy: { pct: number; low: number; high: number } | null
+  byModel: ModelRow[]
+}
+
+// The router's balance per task. A routed task is compared with the median control task of its class
+// (what the same kind of task cost and took with the person's own setting); with fewer than
+// MIN_CONTROL control tasks, with today's token re-pricing and no saving of time, counted in
+// `estimated`. A task's later prompts after a failure count as re-work, by the failure's weight.
+// `since`: only tasks that started then or later count; the control medians always use every record.
+export function balance(records: readonly Entry[], since = -Infinity): Balance {
+  const taken = takenSet(records)
+  const changed = (d: Decision) => routedDecision(d) || (d.outcome === 'asked' && taken.has(takenKey(d.chat, d.ts)))
+  const eps = episodes(records).filter(e => e.decisions.length)
+  const control = new Map<string, { usd: number[]; ms: number[] }>()
+  for (const e of eps) {
+    const d = e.decisions[0]!
+    if (!d.holdout || !d.wanted) continue
+    const k = classOf('here', d.wanted.model)
+    const c = control.get(k) ?? { usd: [], ms: [] }
+    control.set(k, c)
+    // Without the router there is no classifier: only the turns count.
+    c.usd.push(turnsUsd(e.turns))
+    if (timed(e.turns)) c.ms.push(turnsMs(e.turns))
+  }
+  const usdSpread = new Map([...control].filter(([, c]) => c.usd.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.usd)]))
+  const msSpread = new Map([...control].filter(([, c]) => c.ms.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.ms)]))
+
+  const out: Balance = {
+    routed: 0, control: 0, measured: 0, estimated: 0, timed: 0,
+    usd: { value: 0, low: 0, high: 0 }, minutes: { value: 0, low: 0, high: 0 },
+    parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [],
+  }
+  const rows = new Map<string, { tasks: number; control: number; usd: number; rework: number; ms: number; timed: number }>()
+  const row = (m: string) => rows.get(m) ?? (rows.set(m, { tasks: 0, control: 0, usd: 0, rework: 0, ms: 0, timed: 0 }), rows.get(m)!)
+  let fails = 0
+  let msLow = 0
+  let msHigh = 0
+  let msSaved = 0
+  let usdLow = 0
+  let usdHigh = 0
+  for (const e of eps) {
+    if (e.start < since) continue
+    const d = e.decisions[0]!
+    const clsUsd = e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
+    const clsMs = classifierMs(e.decisions)
+    out.parts.classifier -= clsUsd
+    msSaved -= clsMs
+    msLow -= clsMs
+    msHigh -= clsMs
+    if (d.holdout && d.wanted) {
+      out.control++
+      row(d.wanted.model).control++
+      continue
+    }
+    if (!changed(d)) continue
+    out.routed++
+    const f = failureOf(e).weight
+    fails += f
+    const actual = turnsUsd(e.turns)
+    const later = e.decisions[1] ? turnsUsd(e.turns.filter(t => t.ts >= e.decisions[1]!.ts)) : 0
+    const rework = f * later
+    const k = classOf(d.where, d.to.model)
+    const cu = usdSpread.get(k)
+    let without: Spread
+    if (cu) {
+      out.measured++
+      without = cu
+    } else {
+      out.estimated++
+      const s = empty()
+      for (const t of e.turns) addTurn(s, t)
+      without = { q1: s.withoutUsd, median: s.withoutUsd, q3: s.withoutUsd }
+    }
+    const firstGain = without.median - (actual - rework)
+    // A subagent or session on the same model is cheaper (a fresh context); on a stronger one it is an escalation.
+    const down = above(d.from.model, d.to.model) || (d.from.model === d.to.model && (d.where !== 'here' || above(d.from.effort, d.to.effort)))
+    if (down) out.parts.cheaper += firstGain
+    else out.parts.escalation += firstGain
+    out.parts.rework -= rework
+    usdLow += without.q1 - actual
+    usdHigh += without.q3 - actual
+    const ms = turnsMs(e.turns)
+    const cm = timed(e.turns) ? msSpread.get(k) : undefined
+    if (cm) {
+      out.timed++
+      msSaved += cm.median - ms
+      msLow += cm.q1 - ms
+      msHigh += cm.q3 - ms
+    }
+    const r = row(d.to.model)
+    r.tasks++
+    r.usd += actual + clsUsd
+    r.rework += f
+    if (timed(e.turns)) {
+      r.ms += ms + clsMs
+      r.timed++
+    }
+  }
+  const p = out.parts
+  out.usd.value = p.cheaper + p.escalation + p.rework + p.classifier
+  out.usd.low = usdLow + p.classifier
+  out.usd.high = usdHigh + p.classifier
+  out.minutes = { value: msSaved / 60_000, low: msLow / 60_000, high: msHigh / 60_000 }
+  if (out.routed) {
+    const w = wilson(out.routed - fails, out.routed)
+    out.accuracy = { pct: (1 - fails / out.routed) * 100, low: w.low * 100, high: w.high * 100 }
+  }
+  out.byModel = [...rows].map(([model, r]) => ({
+    model, tasks: r.tasks, control: r.control,
+    usdPerTask: r.tasks ? r.usd / r.tasks : 0,
+    reworkPct: r.tasks ? (r.rework / r.tasks) * 100 : 0,
+    minutesPerTask: r.timed ? r.ms / r.timed / 60_000 : null,
+  }))
+  return out
+}
+
+export type Balances = { today: Balance; week: Balance; total: Balance }
+
+// The balance of today (local calendar day), the last 7 days and everything, as summarize() splits them.
+export function balances(records: readonly Entry[], now: number): Balances {
+  return { today: balance(records, startOfDay(now)), week: balance(records, now - 7 * DAY), total: balance(records) }
+}
+
+function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>) {
   if (r.kind === 'turn') addTurn(s, r)
   else if (r.kind === 'decision') {
     addDecision(s, r, taken.has(takenKey(r.chat, r.ts)))
     s.classifierUsd += classifierUsd(r)
     if (routedDecision(r)) {
       s.routed++
-      if (reworked.has(takenKey(r.chat, r.ts))) s.rework++
+      s.rework += reworked.get(takenKey(r.chat, r.ts))?.weight ?? 0
     }
   }
 }
@@ -366,7 +644,7 @@ export function statsRows(r: Report): { label: string; cells: string[] }[] {
 }
 
 // A plain text table of the three periods (for /router stats and the Codex and OpenCode adapters).
-export function statsText(r: Report): string {
+export function statsText(r: Report, b?: Balance): string {
   const rows = statsRows(r)
   const w = Math.max(...rows.map(x => x.label.length)) + 2
   const line = (n: string, cells: readonly string[]) => `${n.padEnd(w)}${cells.map((t, i) => (i < 2 ? t.padEnd(16) : t)).join('')}`
@@ -375,6 +653,7 @@ export function statsText(r: Report): string {
     ...rows.map(x => line(x.label, x.cells)),
     '',
     NOTE,
+    ...(b ? ['', balanceText(b)] : []),
   ].join('\n')
 }
 
@@ -385,7 +664,7 @@ export function savingLabel(s: Summary): string {
 }
 
 // A self-contained page for /router stats: the three periods and the balance per day as bars.
-export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[]): string {
+export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[], b?: Balance): string {
   const W = 720
   const H = 200
   const pad = 24
@@ -413,6 +692,7 @@ export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[
 body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
 main { max-width: 760px; margin: 0 auto; }
 h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 28px 0 4px; }
 p { color: var(--muted); margin: 0 0 16px; }
 .big { font-size: 32px; font-weight: 600; margin: 8px 0 16px; }
 svg { width: 100%; height: auto; display: block; margin-bottom: 4px; }
@@ -432,9 +712,91 @@ thead th { color: var(--muted); font-weight: 500; }
 <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Balance per day"><line class="axis" x1="${pad}" x2="${W - pad}" y1="${zero}" y2="${zero}"/>${bars}</svg>
 <div class="days"><span>${first}</span><span>balance per day</span><span>${last}</span></div>
 <div class="wrap"><table><thead><tr><th></th><th>Today</th><th>7 days</th><th>Total</th></tr></thead><tbody>${table}</tbody></table></div>
+${b ? balanceHtml(b) : ''}
 </main></body></html>
 `
 }
 
 // A dollar amount with its sign always shown: +$0.42 saved, −$0.14 lost.
 export const signed = (n: number) => `${n < 0 ? '−' : '+'}$${Math.abs(n).toFixed(2)}`
+
+// Minutes as "45 min" or "2 h 10 min".
+export function minutes(m: number) {
+  const t = Math.round(Math.abs(m))
+  return t < 60 ? `${t} min` : `${Math.floor(t / 60)} h${t % 60 ? ` ${t % 60} min` : ''}`
+}
+
+// Time the router saved or lost, in words (a sign on time reads both ways).
+export const timeText = (m: number) => (Math.round(Math.abs(m)) === 0 ? 'no time' : `${minutes(m)} ${m > 0 ? 'saved' : 'lost'}`)
+
+// Below this many routed tasks the balance is a rough figure even when every task met its control.
+export const ROUGH_BELOW = 12
+
+// A rough balance: few tasks, or some priced by the token re-pricing instead of the control group.
+export const isRough = (b: Balance) => b.estimated > 0 || b.routed < ROUGH_BELOW
+
+// The short line for the band or footer: money, then time once it is measured; "~" marks a rough
+// figure. '' with nothing to show.
+export function balanceLabel(b: Balance): string {
+  if (!b.routed && Math.abs(b.usd.value) < 0.005) return ''
+  return `${isRough(b) ? '~' : ''}${signed(b.usd.value)}${b.timed ? ` · ${timeText(b.minutes.value)}` : ''}`
+}
+
+// How many tasks the balance stands on, for a tooltip or a dim line.
+export function sampleNote(b: Balance): string {
+  const how = b.routed ? ` (${b.measured} against the control group${b.estimated ? `, ${b.estimated} estimated from tokens` : ''})` : ''
+  return `${b.routed} routed tasks${how} · ${b.control} control tasks${isRough(b) ? ' · rough estimate' : ''}`
+}
+
+const range = (r: Range, f: (n: number) => string) => (r.low === r.high ? '' : ` (${f(r.low)} to ${f(r.high)})`)
+
+// The balance's parts with their labels, in the order they add up.
+export const balanceParts = (b: Balance) => [
+  ['cheaper', 'Cheaper picks', b.parts.cheaper],
+  ['escalation', 'Higher picks', b.parts.escalation],
+  ['rework', 'Re-work', b.parts.rework],
+  ['classifier', 'Classifier', b.parts.classifier],
+] as const
+
+export const accuracyText = (b: Balance) => (b.accuracy ? `${Math.round(b.accuracy.pct)} % (95 %: ${Math.round(b.accuracy.low)}–${Math.round(b.accuracy.high)} %)` : '–')
+
+// The per-model table as rows of cells, header first.
+export function modelTable(b: Balance): string[][] {
+  return [
+    ['Model', 'Tasks', 'Control', '$/task', 'Re-work', 'Min/task'],
+    ...b.byModel.map(r => [r.model, String(r.tasks), String(r.control), usd(r.usdPerTask), `${Math.round(r.reworkPct)} %`, r.minutesPerTask === null ? '–' : r.minutesPerTask.toFixed(1)]),
+  ]
+}
+
+const BALANCE_NOTE =
+  'Per task: a routed task (its prompt, the prompts that fixed or went on with it, the classifier) against the median control task of its class, a prompt the router would have moved the same way but left alone (option holdoutPct). The range comes from the control quartiles. With fewer than 5 control tasks in a class the task is priced by the token re-pricing above instead, and its time counts as unchanged. Re-work: the later prompts of a task whose answer failed, by the failure weight.'
+
+// /router stats: the balance per task, under the token table.
+export function balanceText(b: Balance): string {
+  const lines = [
+    'Per task, against the control group (total)',
+    `Money      ${signed(b.usd.value)}${range(b.usd, signed)}`,
+    `Time       ${b.timed ? `${timeText(b.minutes.value)}${range(b.minutes, timeText)}` : 'not measured yet'}`,
+    ...balanceParts(b).map(([, label, v]) => `  ${label.padEnd(15)}${signed(v)}`),
+    `Accuracy   ${accuracyText(b)}`,
+    sampleNote(b),
+  ]
+  const t = modelTable(b)
+  if (t.length > 1) {
+    const w = t[0]!.map((_, i) => Math.max(...t.map(r => r[i]!.length)) + 2)
+    lines.push('', ...t.map(r => r.map((c, i) => c.padEnd(w[i]!)).join('').trimEnd()))
+  }
+  return [...lines, '', BALANCE_NOTE].join('\n')
+}
+
+function balanceHtml(b: Balance): string {
+  const t = modelTable(b)
+  const table = t.length > 1 ? `<div class="wrap"><table><thead><tr>${t[0]!.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${t.slice(1).map(r => `<tr>${r.map((c, i) => (i ? `<td>${c}</td>` : `<th>${c}</th>`)).join('')}</tr>`).join('')}</tbody></table></div>` : ''
+  const parts = balanceParts(b).map(([, label, v]) => `<tr><th>${label}</th><td>${signed(v)}</td></tr>`).join('')
+  return `<h2>Per task, against the control group</h2>
+<div class="big">${isRough(b) ? '~' : ''}${signed(b.usd.value)} <span style="font-size:15px;font-weight:400;color:var(--muted)">${b.timed ? timeText(b.minutes.value) : 'time not measured yet'} · total</span></div>
+<p>${sampleNote(b)}${range(b.usd, signed) ? ` · range${range(b.usd, signed)}` : ''}</p>
+<div class="wrap"><table><tbody>${parts}<tr><th>Accuracy</th><td>${accuracyText(b)}</td></tr></tbody></table></div>
+${table}
+<p>${BALANCE_NOTE}</p>`
+}

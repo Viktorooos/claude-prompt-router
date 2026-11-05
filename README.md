@@ -207,6 +207,7 @@ The same keys on every platform. Each feature has its own switch. The defaults k
 | `notifications` | `on`, `off` | `on`: a toast after an automatic change, and a footer label in Claude Code (Codex: a system message). `off`: none of these; the changes still happen. |
 | `stats` | `on`, `off` | Claude Code. `on`: note each decision and each turn's token use in a local file for [savings stats](#savings-stats). `off`: nothing is noted. Default `on`. |
 | `openPane` | `off`, `on` | Claude Code. `on`: the Prompt Router pane opens by itself when a session starts (shown from 144 terminal columns, 110 once you have opened it with `/router panel`), or else on your first prompt. `off`: only `/router panel` opens it. |
+| `holdoutPct` | `10`, `0`, `5`, `20` | Claude Code. This share (%) of prompts the router would move to a cheaper model or lower effort keeps its setting, as a control group for the [savings stats](#savings-stats). Never a prompt that names a model or effort, never an xhigh or max pick. `0`: off. Default `10`. |
 
 Where to put them:
 
@@ -264,6 +265,23 @@ It is an **estimate**, kept honest:
 - A turn cut off before it finished has no token count and is counted as unknown; a model with no price claims no saving.
 
 The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl`, trimmed to 90 days and 5 MB. Turn it off with `"stats": "off"`.
+
+<a id="balance"></a>
+### How the balance is worked out
+
+The token estimate above assumes the work would have taken the same tokens without the router. It misses the cost of a cheap model that fails and has to be run again. So the panel, `/router stats` and the stats page also show a **balance per task, against a control group** (money and time):
+
+- **Task** = a routed prompt plus the prompts that continue or fix it (the classifier says which), ending at a new topic or after 30 min of quiet.
+- **Control group** (`holdoutPct`, default 10 %, `0` = off): for that share of prompts the router would have moved *down*, it changes nothing and logs what it wanted. It never holds back a step up, `xhigh`/`max`, or a prompt that names a model or effort.
+- **Balance of a routed task** = the median cost (and time) of control tasks of the same kind (where it ran and which model the router chose) − what the task cost. A negative number means the router cost you more.
+- **Too few control tasks** (fewer than 5 of that kind; always for escalations, subagents and new chats): the task falls back to the token estimate, marked as an estimate.
+- **Re-work**: when the task failed (you switched to a stronger model, repeated the prompt, corrected it or broke it off), its follow-up turns count as lost, weighted 1 / 1 / 0.7 / 0.4.
+- **Parts**: cheaper picks, higher picks, re-work and the classifier, which comes off every task.
+- **`~`** marks a rough number: any task estimated, or fewer than 12 tasks. The range comes from the control group's quartiles.
+- **Accuracy** = the share of tasks without a failure, with a 95 % (Wilson) interval.
+- **Time** is shown once control tasks have measured it; turns logged before this version have no duration and save no time.
+
+Records logged before this version have no control group or follow-up flags, so their balance shows as a rough estimate.
 
 ---
 
