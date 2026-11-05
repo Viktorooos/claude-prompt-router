@@ -10,7 +10,7 @@ const PANE = {
 
 const SESSION_PICK = '{"where": "session", "model": "sonnet", "effort": "medium", "work": "new", "why": "unrelated feature"}'
 
-type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[] }
+type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[]; redraws: number }
 
 // The mod's /config rows where the engine lists them (a terminal session); the desktop app lists none.
 const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions', 'newSessionAt', 'notifications', 'stats', 'openPane', 'holdoutPct', 'compareWith', 'classifier']
@@ -18,7 +18,7 @@ const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetectio
 
 // The engine beneath the plugin, as far as the pane needs it.
 function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string; rows?: any[]; settings?: string } = {}): Seen {
-  const seen: Seen = { writes: new Map(), sets: [], store: new Map(), opened: [], sent: [] }
+  const seen: Seen = { writes: new Map(), sets: [], store: new Map(), opened: [], sent: [], redraws: 0 }
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__prompt-router__${e.name}` } }))
@@ -38,7 +38,10 @@ function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens:
     return { value: e.value }
   })
   on('ui.status', () => ({ value: undefined }))
-  on('ui.invalidate', () => ({ value: undefined }))
+  on('ui.invalidate', () => {
+    seen.redraws++
+    return { value: undefined }
+  })
   on('ui.toast', () => ({ value: undefined }))
   on('ui.open', (_: unknown, e: any) => {
     seen.opened.push(e)
@@ -86,7 +89,10 @@ test('the pane draws on every surface: the context against the new-session share
     const ui = await $.ui.mount({ ...PANE, surface })
     const texts = await textsOf(ui)
     expect(texts).toMatch(/Opus · Medium\n94k of 200k tokens/)
-    expect(texts).toMatch(/47 % used(?: · |\n)asks for a new session at 50 % \(100k\)/)
+    // The terminal says the share in words; the app surfaces draw it as a big figure (its alt says it).
+    const all = `${texts}\n${JSON.stringify(await ui.findAll({ type: 'Svg' }))}`
+    expect(all).toMatch(/47 % used/)
+    expect(texts).toMatch(/asks for a new session at 50 % \(100k\)/i)
     // The terminal steps each setting with one button, the desktop and VS Code pick from a Select, mobile has buttons.
     const has = async (k: string, v: string) => (surface === 'terminal' ? ui.find({ type: 'Button', key: `toggle-${k}` })
       : surface === 'mobile' ? ui.find({ type: 'Button', key: `toggle-${k}-${v}` })
@@ -110,7 +116,7 @@ test('every setting says in one line what it does', async ($: any, on: any) => {
   engine(on)
   await start($)
   const texts = await textsOf(await $.ui.mount({ ...PANE, surface: 'desktop' }))
-  expect(texts).toMatch(/Router\nPicks the cheapest model/)
+  expect(texts).toMatch(/Router\nRouting every prompt\nPicks the cheapest model/)
   expect(texts).toMatch(/Model for a new chat\nOn your first prompt/)
   expect(texts).toMatch(/Model mid-chat\nWhen a later prompt/)
   expect(texts).toMatch(/Effort\nRaises or lowers/)
@@ -125,15 +131,25 @@ test('You saved comes first: the period\'s saving against compareWith, without a
   await start($)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const texts = await textsOf(ui)
-  expect(texts).toMatch(/YOU SAVED\ncompared with running every prompt on Opus medium\nWithout router\n\$\d+\.\d\d\nWith router\n\$\d+\.\d\d/)
-  expect(texts.indexOf('YOU SAVED')).toBeLessThan(texts.indexOf('THIS CHAT'))
-  expect(texts.indexOf('THIS CHAT')).toBeLessThan(texts.indexOf('SETTINGS'))
+  // Each card is headed by its name and a line under it; the saving as a big figure, how much less, then without and with.
+  expect(texts).toMatch(/You saved\ncompared with running every prompt on Opus medium\n\d+ % less\nWithout router\n\$\d+\.\d\d\nWith router\n\$\d+\.\d\d/)
+  expect(texts.indexOf('You saved')).toBeLessThan(texts.indexOf('This chat'))
+  expect(texts.indexOf('This chat')).toBeLessThan(texts.indexOf('Model & effort'))
   expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/You saved: \$\d+\.\d\d/)
   // As the preview: no header line, the periods inside You saved, a hairline above each section and between settings.
   expect(texts).not.toMatch(/PROMPT ROUTER/)
   expect(JSON.stringify(await ui.find({ key: 'saved' }))).toMatch(/period-week/)
-  // Cards part the sections; hairlines part the six settings; More settings is a card of its own inside Settings.
-  expect(JSON.stringify(await ui.findAll({ type: 'Svg' })).split('role=\\"presentation\\"').length - 1).toBe(6)
+  // Cards part the sections; Settings is three cards, each in a colour of its own with an icon heading.
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' })).split('role=\\"presentation\\"').length - 1).toBe(0)
+  const router = await ui.find({ key: 'group-router' })
+  expect(JSON.stringify(router)).toMatch(/router-head[\s\S]*toggle-enabled/)
+  const model = await ui.find({ key: 'group-model' })
+  expect(model.props.borderColor).toBe('#5b9cf6')
+  expect(JSON.stringify(model)).toMatch(/group-model-head[\s\S]*"Svg"[\s\S]*set-firstChatDetection[\s\S]*set-midChatModelDetection[\s\S]*set-effortDetection[\s\S]*set-subagentSuggestions/)
+  const session = await ui.find({ key: 'group-session' })
+  expect(session.props.borderColor).toBe('#36b3a8')
+  expect(JSON.stringify(session)).toMatch(/group-session-head[\s\S]*"Svg"[\s\S]*set-newSessionAt[\s\S]*set-notifications/)
+  expect(JSON.stringify(model)).not.toMatch(/set-newSessionAt/)
   // Each fold is headed by an icon, its name and what is inside; closed, its button says Show.
   expect(JSON.stringify(await ui.find({ key: 'more' }))).toMatch(/More settings, closed/)
   expect(JSON.stringify(await ui.find({ type: 'Button', key: 'fold-more' }))).toMatch(/Show/)
@@ -147,6 +163,86 @@ test('You saved comes first: the period\'s saving against compareWith, without a
   const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await textsOf(term)).toMatch(/You saved\n\$\d+\.\d\d\ncompared with/)
   await term.unmount()
+})
+
+test('each draw animates once only what changed: a period or baseline the saving, the session share the bar', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  engine(on, { now, log: TURN(now - HOUR) })
+  await start($)
+  const draw = async () => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    // Any animation inside the card, and the tiles' pop on any card.
+    const moves = async (key: string) => /animation:/.test(JSON.stringify(await ui.find({ key })))
+    const svgs = JSON.stringify(await ui.findAll({ type: 'Svg' }))
+    return { ui, saved: await moves('saved'), bar: await moves('chat'), heads: /animation:p/.test(svgs) }
+  }
+  let d = await draw()
+  expect([d.saved, d.bar, d.heads]).toEqual([false, false, false])
+  await d.ui.press({ key: 'period-today' })
+  await d.ui.unmount()
+  d = await draw()
+  expect([d.saved, d.bar, d.heads]).toEqual([true, false, false])
+  await d.ui.unmount()
+  d = await draw()
+  expect([d.saved, d.bar, d.heads]).toEqual([false, false, false])
+  // The period already shown changes nothing, so nothing moves.
+  await d.ui.press({ key: 'period-today' })
+  await d.ui.unmount()
+  d = await draw()
+  expect(d.saved).toBe(false)
+  await d.ui.select({ key: 'pick-newSessionAt', value: 'off' })
+  await d.ui.unmount()
+  d = await draw()
+  expect([d.saved, d.bar, d.heads]).toEqual([false, true, false])
+  await d.ui.unmount()
+})
+
+test('a reply animates the pane once, then a still redraw replaces it, so a host that redraws the image never replays it', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const seen = engine(on, { now, log: TURN(now - HOUR) })
+  const waits: { ms: number; release: () => void }[] = []
+  on('clock.after', (_: unknown, e: any) => new Promise<any>(r => waits.push({ ms: e.ms, release: () => r({ value: undefined }) })))
+  on('turn.complete', () => ({ text: '' }))
+  await start($)
+  const moving = async () => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const m = /animation:/.test(JSON.stringify(await ui.findAll({ type: 'Svg' })))
+    await ui.unmount()
+    return m
+  }
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(await moving()).toBe(true)
+  // Once the animation has played, the pane draws itself again, still.
+  expect(waits.length).toBe(1)
+  expect(waits[0].ms).toBeGreaterThanOrEqual(2000)
+  const before = seen.redraws
+  waits[0].release()
+  await new Promise(r => setTimeout(r, 0))
+  expect(seen.redraws).toBe(before + 1)
+  expect(await moving()).toBe(false)
+  // A still draw asks for no further redraw, so nothing loops.
+  expect(waits.length).toBe(1)
+  // A subagent's turn does not animate the pane.
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer', agentId: 'a1' })
+  expect(await moving()).toBe(false)
+})
+
+test('a setting\'s line sits beside its control, not under it', async ($: any, on: any) => {
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const row = await ui.find({ key: 'set-firstChatDetection' })
+  expect(row.props.flexDirection).toBe('row')
+  expect(row.props.alignItems).toBe('center')
+  // Each setting is a tile of its own, tinted and outlined in its card's colour.
+  expect(row.props.borderStyle).toBe('round')
+  expect(row.props.borderColor).toBe('#5b9cf638')
+  expect(row.props.backgroundColor).toBe('#5b9cf60f')
+  expect((await ui.find({ key: 'set-notifications' })).props.backgroundColor).toBe('#36b3a80f')
+  const [left, right] = row.children
+  expect(JSON.stringify(left)).toMatch(/On your first prompt, suggests a better model/)
+  expect(JSON.stringify(right)).toMatch(/pick-firstChatDetection/)
+  await ui.unmount()
 })
 
 // Five control tasks ($1…$5, 1…5 min: median $3, 3 min) and one routed task ($1, 1 min), all today.
@@ -170,9 +266,28 @@ test('Details, folded: the strict balance, how often it was right, where the tas
     await shut.unmount()
     const ui = await $.ui.mount({ ...PANE, surface })
     const texts = await textsOf(ui)
-    expect(texts).toMatch(/Router balance \(rough\)\n\+\$2\.00/)
-    expect(texts).toMatch(/Decisions right\n100 % \(95 %: 21–100 %\)/)
-    expect(texts).toMatch(/Tasks\nhaiku 1/)
+    if (surface === 'terminal') {
+      // The terminal puts the figure beside the name.
+      expect(texts).toMatch(/Router balance \(rough\)\n\+\$2\.00/)
+      expect(texts).toMatch(/Decisions right\n100 % \(95 %: 21–100 %\)/)
+      expect(texts).toMatch(/Tasks\nhaiku 1/)
+    } else {
+      // The app surfaces: one tinted tile, the balance as a big figure in the colour of its sign beside a
+      // ring of how often it was right; then one bar parted by model over a legend of tasks, cost and share.
+      const hero = await ui.find({ key: 'details-hero' })
+      expect(hero.props.backgroundColor).toBe('#8b7cf60f')
+      expect(hero.props.borderColor).toBe('#8b7cf638')
+      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nDecisions right · 95 %: 21–100 %\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
+      const balance = JSON.stringify(await ui.find({ key: 'balance' }))
+      expect(balance).toMatch(/Router balance \(rough\) \+\$2\.00/)
+      expect(balance).toMatch(/fill=\\"#1fa37a\\"[^<]*>\+\$2\.00</)
+      const ring = JSON.stringify(await ui.find({ key: 'accuracy' }))
+      expect(ring).toMatch(/Decisions right: 100 %/)
+      expect(ring).toMatch(/>100%<[\s\S]*>right</)
+      expect(ring).toMatch(/95 %: 21–100 %/)
+      expect(JSON.stringify(await ui.find({ key: 'tasks' }))).toMatch(/Where tasks went[\s\S]*Tasks: haiku 100 %[\s\S]*tasks-haiku/)
+      expect(JSON.stringify(await ui.find({ key: 'tasks-haiku' }))).toMatch(/haiku: 1 of 1 tasks[\s\S]*#6d5ce8|#6d5ce8[\s\S]*haiku: 1 of 1 tasks/)
+    }
     await ui.press({ key: 'fold-details' })
     await ui.unmount()
   }
@@ -193,7 +308,7 @@ test('a press on a value saves the option the way /config does, and the pane sho
   await ui.unmount()
   const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(JSON.stringify(await again.find({ type: 'Select', key: 'pick-effortDetection' }))).toMatch(/"value":"auto"/)
-    expect(await textsOf(again)).toMatch(/asks for a new session at 60 %/)
+    expect(await textsOf(again)).toMatch(/asks for a new session at 60 %/i)
   await again.unmount()
   expect(String((await $.command.run({ command: 'router', args: '' })).text)).toMatch(/effortDetection: auto \(set\)/)
 })
@@ -216,7 +331,7 @@ test('new session at off turns the suggestion off; a share turns it back on', as
   await ui.select({ key: 'pick-newSessionAt', value: 'off' })
   await ui.unmount()
   const off = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await textsOf(off)).toMatch(/never asks for a new session/)
+  expect(await textsOf(off)).toMatch(/never asks for a new session/i)
   await off.unmount()
   seen.sets.length = 0
   const ui2 = await $.ui.mount({ ...PANE, surface: 'desktop' })

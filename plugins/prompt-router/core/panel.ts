@@ -63,7 +63,8 @@ ${STILL}
 
 // The net saving per day: a line that draws itself in, a soft area under it, the last day's dot,
 // and a tooltip per day (labels, one per value).
-export function sparkSvg(values: readonly number[], labels: readonly string[], width = 280, height = 64, color: string = ACCENT): string {
+// animate false: drawn in its final state at once (the pane's still redraws).
+export function sparkSvg(values: readonly number[], labels: readonly string[], width = 280, height = 64, color: string = ACCENT, animate = true): string {
   const px = 6
   const py = 9
   const lo = Math.min(0, ...values)
@@ -87,16 +88,18 @@ export function sparkSvg(values: readonly number[], labels: readonly string[], w
     .join('')
   const empty = values.every(v => Math.abs(v) < 0.005)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img"><title>Net saving per day</title><style>
-.l{fill:none;stroke:${empty ? '#8a8f98' : color};stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:0;animation:draw 1.5s cubic-bezier(.65,0,.35,1) both}
-.f{fill:url(#f);animation:fade 1s .7s ease-out both}
+.l{fill:none;stroke:${empty ? '#8a8f98' : color};stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:0}
+.f{fill:url(#f)}
 .o{stroke:#8a8f98;stroke-opacity:.35;stroke-width:1;stroke-dasharray:3 3}
-.e{fill:${color};transform-box:fill-box;transform-origin:center;animation:pop .5s 1.35s cubic-bezier(.34,1.56,.64,1) both}
-.r{fill:${color};opacity:.22;transform-box:fill-box;transform-origin:center;animation:pop .5s 1.4s cubic-bezier(.34,1.56,.64,1) both}
+.e{fill:${color};transform-box:fill-box;transform-origin:center}
+.r{fill:${color};opacity:.22;transform-box:fill-box;transform-origin:center}
 .d{fill:${color};opacity:0;transition:opacity .15s}.z{fill:transparent}.h:hover .d{opacity:1}
+${animate ? `.l{animation:draw 1.5s cubic-bezier(.65,0,.35,1) both}.f{animation:fade 1s .7s ease-out both}
+.e{animation:pop .5s 1.35s cubic-bezier(.34,1.56,.64,1) both}.r{animation:pop .5s 1.4s cubic-bezier(.34,1.56,.64,1) both}
 @keyframes draw{from{stroke-dashoffset:1}}
 @keyframes fade{from{opacity:0}}
 @keyframes pop{from{transform:scale(0)}}
-${STILL}
+${STILL}` : ''}
 </style><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="${empty ? 0 : 0.3}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
 ${lo < 0 || empty ? `<line class="o" x1="${px}" y1="${zero}" x2="${width - px}" y2="${zero}"/>` : ''}${area ? `<path class="f" d="${area}"/>` : ''}${line ? `<path class="l" pathLength="1" d="${line}"/>` : ''}${last && !empty ? `<circle class="r" cx="${last[0]}" cy="${last[1]}" r="6"/><circle class="e" cx="${last[0]}" cy="${last[1]}" r="3.2"/>` : ''}${hits}</svg>`
 }
@@ -172,25 +175,115 @@ export function ruleSvg(_width = 280, strong = true): string {
 </style><rect class="l" width="100%" height="1"/></svg>`
 }
 
-// Icons for the fold headings, drawn on a 24×24 grid.
+// The card icons, drawn on a 24×24 grid.
 const ICONS = {
   sliders: '<path d="M5 8h9M18 8h1M5 16h3M12 16h7"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
   chart: '<path d="M5 19V11M10 19V6M15 19v-5M20 19V9"/>',
+  coin: '<circle cx="12" cy="12" r="8"/><path d="M14.5 9.2c-.5-.8-1.4-1.2-2.5-1.2-1.5 0-2.6.8-2.6 2s1.1 1.7 2.6 2 2.6.8 2.6 2-1.1 2-2.6 2c-1.1 0-2-.4-2.5-1.2M12 6.5V8M12 16v1.5"/>',
+  gauge: '<path d="M4.5 16a8 8 0 1 1 15 0"/><path d="M12 13l3.5-4"/><circle cx="12" cy="13.5" r="1.2"/>',
+  toggle: '<rect x="3" y="7" width="18" height="10" rx="5"/><circle cx="16" cy="12" r="2.6"/>',
+  // The settings' and the details' own icons.
+  route: '<circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h5a3 3 0 0 0 0-6h-2a3 3 0 0 1 0-6h5"/>',
+  spark: '<path d="M11 4l1.8 4.6 4.7 1.4-4.7 1.6L11 16l-1.8-4.4L4.5 10l4.7-1.4z"/><path d="M18 15v5M15.5 17.5h5"/>',
+  swap: '<path d="M5 9h14l-3.5-3.5M19 15H5l3.5 3.5"/>',
+  branch: '<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8M18 10c0 4.5-6 3.5-10.5 6.8"/>',
+  window: '<rect x="4" y="5" width="16" height="14" rx="3"/><path d="M4 9.5h16M12 12.5v4M10 14.5h4"/>',
+  bell: '<path d="M6.5 16v-5a5.5 5.5 0 0 1 11 0v5l1.5 2h-14z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
+  cpu: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 4v3M14 4v3M10 17v3M14 17v3M4 10h3M4 14h3M17 10h3M17 14h3"/>',
+  scale: '<path d="M12 5v14M8.5 19h7M5.5 8h13"/><path d="M5.5 8L3 13.5a2.5 2.5 0 0 0 5 0zM18.5 8L16 13.5a2.5 2.5 0 0 0 5 0z"/>',
+  pane: '<rect x="4" y="5" width="16" height="14" rx="3"/><path d="M14.5 5v14"/>',
+  target: '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r=".9"/>',
 } as const
-export type FoldIcon = keyof typeof ICONS
+export type CardIcon = keyof typeof ICONS
 
-// A fold's heading: an icon on an accent tile, a bold name and a line that says what is inside, so a
-// closed section still reads as something to open. animate: the tile pops and the words slide in,
-// only on the one redraw after a turn ends.
-export function foldHeadSvg(name: string, sub: string, icon: FoldIcon, open: boolean, animate = false, color: string = ACCENT): string {
-  const font = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif"'
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="40" role="img"><title>${esc(name)}${open ? '' : ', closed'}</title><style>
-.n{fill:#1d1f23}.s{fill:#1d1f23;opacity:.55}.b{fill:${color};opacity:${open ? '.22' : '.14'}}
-@media (prefers-color-scheme: dark){.n{fill:#f2f3f5}.s{fill:#f2f3f5;opacity:.6}.b{opacity:${open ? '.3' : '.2'}}}
-.i{transform-origin:20px 20px}
-${animate ? `.i{animation:p .55s cubic-bezier(.3,1.6,.5,1) both}@keyframes p{from{transform:scale(.4);opacity:0}}
-.w{animation:w .5s .12s cubic-bezier(.2,.8,.2,1) both}@keyframes w{from{opacity:0;transform:translateX(-6px)}}
-${STILL}` : ''}
-</style><g class="i"><rect class="b" x="2" y="2" width="36" height="36" rx="10"/><g transform="translate(8 8)" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round">${ICONS[icon]}</g></g>
-<g class="w"><text class="n" x="50" y="17" ${font} font-size="14" font-weight="650">${esc(name)}</text><text class="s" x="50" y="34" ${font} font-size="12">${esc(sub)}</text></g></svg>`
+// A setting's or a detail's icon: the card's tile, smaller, so a row reads at a glance. off: grey, as
+// the setting does nothing then. Always still: a row redraws on every press.
+export function itemSvg(icon: CardIcon, color: string = ACCENT, on = true, size = 32): string {
+  const c = on ? color : TONES.idle[0]
+  const k = size / 28
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 28 28" aria-hidden="true"><style>
+.b{fill:${c};opacity:${on ? '.18' : '.1'}}.e{stroke:${c};opacity:${on ? '.35' : '.18'}}@media (prefers-color-scheme: dark){.b{opacity:${on ? '.26' : '.14'}}.e{opacity:${on ? '.45' : '.22'}}}
+</style><rect class="b" width="28" height="28" rx="8"/><rect class="e" x=".5" y=".5" width="27" height="27" rx="7.5" fill="none" stroke-width="${n(1 / k)}"/><g transform="translate(5 5) scale(.75)" fill="none" stroke="${c}" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">${ICONS[icon]}</g></svg>`
+}
+
+// A card's icon: the glyph in its colour on a soft tile of the same colour. The heading's words are
+// Text beside it, in the app's own type. animate: the tile pops in, once.
+export function tileSvg(icon: CardIcon, color: string = ACCENT, strong = false, animate = false): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><style>
+.b{fill:${color};opacity:${strong ? '.24' : '.15'}}@media (prefers-color-scheme: dark){.b{opacity:${strong ? '.32' : '.2'}}}
+.i{transform-origin:18px 18px}
+${animate ? `.i{animation:p .55s cubic-bezier(.3,1.6,.5,1) both}@keyframes p{from{transform:scale(.4);opacity:0}}${STILL}` : ''}
+</style><g class="i"><rect class="b" width="36" height="36" rx="10"/><g transform="translate(6 6)" fill="none" stroke="${color}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[icon]}</g></g></svg>`
+}
+
+// With against without the router: the track is the cost without it, the fill what was spent with
+// it, the rest (the saving) a light band of the same colour. Over 100 %, the fill turns warm.
+export function costBarSvg(withUsd: number, withoutUsd: number, animate = false, height = 10): string {
+  const p = withoutUsd > 0 ? Math.max(0, withUsd / withoutUsd) : 0
+  const over = p > 1
+  const w = n(Math.min(1, p) * 100)
+  const [a, b] = over ? TONES.over : TONES.calm
+  const r = n(height / 2)
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><title>Spent ${Math.round(p * 100)}% of the cost without the router</title><style>
+.t{fill:${TONES.calm[1]};opacity:.22}${over ? '.t{fill:#8a8f98;opacity:.14}' : ''}
+${animate ? `.f{animation:c .8s cubic-bezier(.2,.8,.2,1) both}@keyframes c{from{width:0}}${STILL}` : ''}
+</style><defs><linearGradient id="c" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
+<rect class="t" width="100%" height="${height}" rx="${r}"/>${w ? `<rect class="f" width="${w}%" height="${height}" rx="${r}" fill="url(#c)"/>` : ''}</svg>`
+}
+
+// Text inside a drawing, in the frame's own colours: dark on light, light on dark.
+const INK = '.k{fill:#1d1f23}.m{fill:#1d1f23;opacity:.55}@media (prefers-color-scheme: dark){.k{fill:#f2f3f5}.m{fill:#f2f3f5;opacity:.6}}'
+const FONT = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif"'
+
+// How often the router was right (0…100) as a ring: a soft track, the share filled in the colour from
+// the top, and outside it a thin arc over the 95 % range, so the figure carries its own uncertainty.
+// null: the track only and a dash. Always still: Details redraws on every press.
+export function ringSvg(pct: number | null, low: number | null, high: number | null, color: string, size = 88): string {
+  const c = size / 2
+  const r = size * 0.36
+  const w = size * 0.09
+  const ro = size * 0.465
+  const arc = (rad: number, a: number, b: number) => {
+    const at = (p: number) => {
+      const t = (Math.max(0, Math.min(100, p)) / 100) * 2 * Math.PI - Math.PI / 2
+      return `${n(c + rad * Math.cos(t))} ${n(c + rad * Math.sin(t))}`
+    }
+    if (b - a >= 99.95) return `M${n(c)} ${n(c - rad)}a${n(rad)} ${n(rad)} 0 1 1 0 ${n(2 * rad)}a${n(rad)} ${n(rad)} 0 1 1 0 ${n(-2 * rad)}`
+    return `M${at(a)}A${n(rad)} ${n(rad)} 0 ${b - a > 50 ? 1 : 0} 1 ${at(b)}`
+  }
+  const label = pct == null ? '–' : `${Math.round(pct)}%`
+  const title = pct == null ? 'Not enough tasks yet' : `${Math.round(pct)} % right${low != null && high != null ? `, 95 %: ${Math.round(low)}–${Math.round(high)} %` : ''}`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img"><title>${esc(title)}</title><style>
+.t{stroke:${color};opacity:.16}.ci{stroke:${color};opacity:.5}@media (prefers-color-scheme: dark){.t{opacity:.24}.ci{opacity:.6}}${INK}
+</style><g fill="none" stroke-linecap="round"><circle class="t" cx="${n(c)}" cy="${n(c)}" r="${n(r)}" stroke-width="${n(w)}"/>
+${pct != null && pct > 0 ? `<path d="${arc(r, 0, pct)}" stroke="${color}" stroke-width="${n(w)}"/>` : ''}
+${low != null && high != null && high > low ? `<path class="ci" d="${arc(ro, low, high)}" stroke-width="${n(size * 0.03)}"/>` : ''}</g>
+<text class="k" x="${n(c)}" y="${n(c + size * 0.035)}" text-anchor="middle" ${FONT} font-size="${n(size * 0.22)}" font-weight="700" letter-spacing="-.02em">${esc(label)}</text>
+<text class="m" x="${n(c)}" y="${n(c + size * 0.19)}" text-anchor="middle" ${FONT} font-size="${n(size * 0.115)}" font-weight="500">right</text></svg>`
+}
+
+// The colours of the parts of a whole in one card's colour: the biggest part strongest. Mid tones that
+// read on light and dark.
+export const VIOLETS = ['#6d5ce8', '#8b7cf6', '#a99cf9', '#c4bafb', '#ddd7fd'] as const
+
+// Parts of a whole (each share 0…1) as one rounded bar, a part per colour, parted by thin gaps cut out
+// with a mask, so the gaps show whatever is behind them in either theme. Always still.
+export function stackSvg(parts: readonly { share: number; color: string }[], height = 12, title = ''): string {
+  const total = parts.reduce((a, p) => a + Math.max(0, p.share), 0) || 1
+  let x = 0
+  const segs: string[] = []
+  const cuts: string[] = []
+  for (const [i, p] of parts.entries()) {
+    const w = (Math.max(0, p.share) / total) * 100
+    if (w <= 0) continue
+    segs.push(`<rect x="${n(x)}%" width="${n(w)}%" height="${height}" fill="${p.color}"/>`)
+    if (i && x > 0) cuts.push(`<rect x="${n(x)}%" width="2" height="${height}" transform="translate(-1 0)" fill="#000"/>`)
+    x += w
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><title>${esc(title || 'Share of tasks')}</title><defs><mask id="g"><rect width="100%" height="${height}" rx="${n(height / 2)}" fill="#fff"/>${cuts.join('')}</mask></defs><g mask="url(#g)">${segs.join('')}</g></svg>`
+}
+
+// A legend's swatch: a small rounded square in the part's colour.
+export function dotSvg(color: string, size = 10): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 10 10" role="img"><rect width="10" height="10" rx="3" fill="${color}"/></svg>`
 }

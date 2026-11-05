@@ -7,8 +7,8 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { REFERENCE, accuracyText, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
-import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, foldHeadSvg, kTokens, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
-import type { FoldIcon } from '../core/panel.ts'
+import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import type { CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Decision, Entry, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
@@ -18,6 +18,13 @@ const TEST_TOOL = `mcp__${NAME}__test`
 const SWITCH_TOOL = `mcp__${NAME}__switch`
 const SHORT: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
 const ACCENT = '#d97757'
+// The pane's other card colours: the saving's green and the Details violet, both mid tones that read
+// on light and dark.
+const GREEN = '#2fb67c'
+const VIOLET = '#8b7cf6'
+// The settings' groups: models and effort, the session.
+const BLUE = '#5b9cf6'
+const TEAL = '#36b3a8'
 const PANE = 'prompt-router'
 const PANE_TITLE = 'Prompt Router'
 // Change the tag when LastDecision's fields change: a value an older copy stored then reads as none.
@@ -97,8 +104,17 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
   }
 }
 
-// The one redraw after Claude's reply ends animates the saving and the bar; every other draw is still.
-let paneAnimate = false
+// What the next draw animates, once: after Claude's reply ends everything (the stats changed);
+// a new period or savings baseline only the saving; a new session threshold only the context bar.
+// Every other draw is still.
+type PaneAnimate = '' | 'all' | 'saved' | 'bar'
+let paneAnimate: PaneAnimate = ''
+const ANIMATES_ON_SAVE: Partial<Record<string, PaneAnimate>> = { compareWith: 'saved', newSessionAt: 'bar', sessionSuggestions: 'bar' }
+// An animated drawing stays the pane's drawing until the next one, and the app replays its animation
+// whenever it puts the image back (a hover, a scroll, a focus). So once the longest animation has
+// played (the sparkline's, under 2 s) the pane draws itself once more, still.
+const SETTLE_MS = 2_500
+let settle: { cancel: () => void } | undefined
 
 function redraw($: EngineInterface) {
   try {
@@ -668,6 +684,7 @@ async function saveOption($: EngineInterface, k: Option, value: string) {
   }
   opts = { ...opts, [k]: value }
   cfg = toConfig(opts)
+  paneAnimate = ANIMATES_ON_SAVE[k] ?? paneAnimate
   redraw($)
 }
 
@@ -910,7 +927,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (!e.agentId) {
-      paneAnimate = true
+      paneAnimate = 'all'
       redraw($)
     }
     if (!enabled || cfg.stats !== 'on') return r
@@ -1036,8 +1053,17 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
-    const animate = paneAnimate
-    paneAnimate = false
+    const animate = paneAnimate === 'all'
+    const animateSaved = animate || paneAnimate === 'saved'
+    const animateBar = animate || paneAnimate === 'bar'
+    paneAnimate = ''
+    if (animateSaved || animateBar) {
+      settle?.cancel()
+      settle = $.clock.after(SETTLE_MS, () => {
+        settle = undefined
+        redraw($)
+      })
+    }
     const { Box, Text, Button, Svg, Select } = $.ui.resolve(e) as any
     const cols = e.props.bodyColumns ?? 40
     const px = Math.max(220, Math.min(460, cols * 7))
@@ -1049,7 +1075,9 @@ export const register: Register = (on, options) => {
       redraw($)
     }
     const pickPeriod = (k: typeof panePeriod) => async () => {
+      if (panePeriod === k) return
       panePeriod = k
+      paneAnimate = 'saved'
       redraw($)
     }
     const s = d.savings?.report[panePeriod] ?? null
@@ -1077,21 +1105,45 @@ export const register: Register = (on, options) => {
     const rule = (key: string, strong = true) => (term ? null : <Svg key={key} source={ruleSvg(px, strong)} alt="" height={1} />)
     // A fold: on the app surfaces its own card with an icon heading that says what is inside, so it reads
     // as something to open; open, the card takes the accent outline. Inline, it is a card within a card.
-    const fold = (id: string, label: string, sub: string, icon: FoldIcon, body: () => unknown, inline = false) => {
+    // A card's heading on the app surfaces: the icon on its tile, the name in the app's heading type, a
+    // footnote under it, and anything given on the right (a button), centred on both lines.
+    const head = (key: string, icon: CardIcon | null, color: string, name: string, sub: string, o: { right?: unknown; strong?: boolean; alt?: string } = {}) => (
+      <Box key={key} flexDirection="row" alignItems="center" gap={2}>
+        {icon ? <Box flexShrink={0}><Svg source={tileSvg(icon, color, o.strong, animate)} alt={o.alt ?? name} width={36} height={36} /></Box> : null}
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text bold>{name}</Text>
+          {sub ? <Text dimColor wrap={narrow ? 'wrap' : 'truncate-end'}>{sub}</Text> : null}
+        </Box>
+        {o.right ? <Box flexShrink={0}>{o.right}</Box> : null}
+      </Box>
+    )
+    // A row's left side on the app surfaces: its icon on an outlined tile, the name in bold over one dim line.
+    const item = (key: string, icon: CardIcon, color: string, live: boolean, name: string, what: string, nameColor?: string) => (
+      <Box key={key} flexDirection="row" alignItems="center" gap={2} flexGrow={1} flexShrink={1} minWidth={0}>
+        <Box flexShrink={0}><Svg source={itemSvg(icon, color, live)} alt={name} width={32} height={32} /></Box>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text bold color={nameColor} dimColor={!live}>{name}</Text>
+          {what ? <Text dimColor>{what}</Text> : null}
+        </Box>
+      </Box>
+    )
+    // A card: one soft outline, the same inset everywhere, air between its parts.
+    const card = (key: string, children: unknown[], o: { borderColor?: string; tint?: string } = {}) => (
+      <Box key={key} flexDirection="column" gap={2} borderStyle="round" borderColor={o.borderColor} borderDimColor={!o.borderColor} backgroundColor={o.tint} paddingX={narrow ? 1 : 2} paddingY={1}>
+        {children}
+      </Box>
+    )
+    const fold = (id: string, label: string, sub: string, icon: CardIcon, color: string, body: () => unknown, inline = false) => {
       const open = paneOpen.has(id)
       if (term) {
         const wrap = inline ? (key: string, ...c: unknown[]) => <Box key={key} flexDirection="column" gap={0}>{c}</Box> : section
         return wrap(id, <Button key={`fold-${id}`} plain label={`${open ? '▾' : '▸'} ${label}`} onPress={flip(id)} />, open ? body() : null)
       }
-      return (
-        <Box key={id} flexDirection="column" gap={1} borderStyle="round" borderColor={open ? ACCENT : undefined} borderDimColor={!open} paddingX={narrow ? 1 : inline ? 1 : 2} paddingY={1}>
-          <Box key={`fold-row-${id}`} flexDirection={narrow ? 'column' : 'row'} justifyContent="space-between" alignItems={narrow ? 'flex-start' : 'center'} gap={1}>
-            <Box flexGrow={1}><Svg source={foldHeadSvg(label, sub, icon, open, animate)} alt={`${label}: ${sub}`} height={40} /></Box>
-            <Button key={`fold-${id}`} label={open ? 'Hide ▴' : 'Show ▾'} variant={open ? 'secondary' : 'primary'} onPress={flip(id)} />
-          </Box>
-          {open ? body() : null}
-        </Box>
-      )
+      const button = <Button key={`fold-${id}`} label={open ? 'Hide' : 'Show'} variant={open ? 'secondary' : 'primary'} onPress={flip(id)} />
+      return card(id, [
+        head(`fold-row-${id}`, icon, color, label, sub, { right: button, strong: open, alt: `${label}${open ? '' : ', closed'}` }),
+        open ? body() : null,
+      ], { borderColor: open ? color : undefined })
     }
 
     const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
@@ -1108,16 +1160,24 @@ export const register: Register = (on, options) => {
     const withUsd = s ? s.actualUsd + s.classifierUsd : 0
     const savedWord = s && money(s.balanceUsd) === 'down' ? 'Cost extra' : 'You saved'
     const savedText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : usd(Math.abs(s.balanceUsd))) : ''
-    const saved = s ? section('saved',
+    const savedColor = money(s?.balanceUsd ?? 0) === 'up' ? GREEN : MONEY_COLOR[money(s?.balanceUsd ?? 0)] ?? TONES.idle[0]
+    const savedPct = s && s.withoutUsd > 0 ? Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100) : 0
+    const days = d.savings?.days.slice(panePeriod === 'week' ? -7 : -14) ?? []
+    const trend = days.some(x => Math.abs(x.balanceUsd) >= 0.005) && panePeriod !== 'today'
+    const stat = (key: string, label: string, value: string, color?: string) => (
+      <Box key={key} flexDirection="column" flexGrow={1}>
+        <Text dimColor>{label}</Text>
+        <Text bold color={color}>{value}</Text>
+      </Box>
+    )
+    const saved = !s ? null : term ? section('saved',
       tabs,
       title('saved-title', savedWord),
       s.withoutUsd <= 0
         ? <Text key="saved-none" dimColor>No priced work in this period yet.</Text>
         : (
           <Box key="saved-v" flexDirection="column">
-            {term
-              ? <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
-              : <Svg source={bigNumberSvg(savedText, money(s.balanceUsd) === 'up' ? '#2fb67c' : MONEY_COLOR[money(s.balanceUsd)] ?? TONES.idle[0], px, 40, animate)} alt={`${savedWord}: ${savedText}`} height={50} />}
+            <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
             <Text dimColor>{`compared with ${against}`}</Text>
           </Box>
         ),
@@ -1127,42 +1187,81 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column"><Text dimColor>With router</Text><Text>{usd(withUsd)}</Text></Box>
         </Box>
       ) : null,
-    ) : null
+    ) : card('saved', [
+      head('saved-head', 'coin', savedColor, savedWord, `compared with ${against}`, { strong: true }),
+      tabs,
+      s.withoutUsd <= 0
+        ? <Text key="saved-none" dimColor>No priced work in this period yet.</Text>
+        : (
+          <Box key="saved-v" flexDirection="column" gap={1}>
+            <Box flexDirection="row" alignItems="center" gap={2}>
+              <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                <Svg source={bigNumberSvg(savedText, savedColor, px, 44, animateSaved)} alt={`${savedWord}: ${savedText}`} height={56} />
+              </Box>
+              {savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
+            </Box>
+            <Svg source={costBarSvg(withUsd, s.withoutUsd, animateSaved)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
+          </Box>
+        ),
+      s.withoutUsd > 0 ? (
+        <Box key="saved-vs" flexDirection="row" gap={3}>
+          {stat('saved-without', 'Without router', usd(s.withoutUsd))}
+          {stat('saved-with', 'With router', usd(withUsd), savedColor)}
+        </Box>
+      ) : null,
+      trend ? (
+        <Box key="saved-trend" flexDirection="column" gap={0}>
+          <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
+          <Svg source={sparkSvg(days.map(x => x.balanceUsd), days.map(x => `${x.day}: ${usd(x.balanceUsd)}`), px, 48, savedColor, animateSaved)} alt="Saved per day" height={48} />
+        </Box>
+      ) : null,
+    ], { tint: `${savedColor}0d` })
 
     // This chat: its context against the share where the router asks for a new session.
     const ctxRight = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'context not known yet'
     const used = d.share == null ? '' : `${Math.round(d.share)} % used`
     const asks = d.at ? `asks for a new session at ${d.at} % (${kTokens((d.window * d.at) / 100)})` : 'never asks for a new session'
-    const chat = section('chat',
+    const chat = term ? section('chat',
       title('chat-title', 'This chat'),
       <Box key="ctx" flexDirection="column">
         {row('ctx-head', d.header, ctxRight, { dim: false })}
-        {term
-          ? <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
-          : <Svg source={contextBarSvg(d.share, d.at, px, 8, animate)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={14} />}
-        {term ? <Text dimColor>{[used, asks].filter(Boolean).join(' · ')}</Text> : row('ctx-foot', used, asks, { dim: true })}
+        <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
+        <Text dimColor>{[used, asks].filter(Boolean).join(' · ')}</Text>
       </Box>,
-    )
+    ) : card('chat', [
+      head('chat-head', 'gauge', TONES[d.tone][0], 'This chat', d.header),
+      <Box key="ctx" flexDirection="column" gap={1}>
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Svg source={bigNumberSvg(d.share == null ? '–' : `${Math.round(d.share)} %`, TONES[d.tone][0], px, 30, animateBar)} alt={used || 'Context unknown'} height={38} />
+          </Box>
+          <Box flexShrink={0}><Text dimColor>{ctxRight}</Text></Box>
+        </Box>
+        <Svg source={contextBarSvg(d.share, d.at, px, 10, animateBar)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={16} />
+        <Text dimColor>{`${asks[0]!.toUpperCase()}${asks.slice(1)}. ${d.at ? 'The tick on the bar marks it.' : ''}`.trim()}</Text>
+      </Box>,
+    ])
 
     // Settings: a name, its values as buttons (the chosen one highlighted) and one line on what it does.
     // The terminal gets one button per setting that steps to the next value.
-    type Setting = { key: string; name: string; what: string; values: readonly (readonly [string, string])[]; now: () => string; pick: (v: string) => Promise<void> }
+    type Setting = { key: string; icon: CardIcon; name: string; what: string; values: readonly (readonly [string, string])[]; now: () => string; pick: (v: string) => Promise<void> }
     const same = (vals: readonly string[]) => vals.map(v => [v, v] as const)
-    const opt = (k: Option, name: string, what: string, values = same(CHOICES.find(x => x.key === k)?.values ?? [])): Setting =>
-      ({ key: k, name, what, values, now: () => String(cfg[k]), pick: v => saveOption($, k, v) })
+    const opt = (k: Option, icon: CardIcon, name: string, what: string, values = same(CHOICES.find(x => x.key === k)?.values ?? [])): Setting =>
+      ({ key: k, icon, name, what, values, now: () => String(cfg[k]), pick: v => saveOption($, k, v) })
     const cm = cfg.compareWith.split('-')[0] ?? 'first'
     const compareValue = (m: string, l: string) => {
       const v = m === 'first' ? 'first' : `${m}-${l || 'medium'}`
       return (SWITCHES.compareWith as readonly string[]).includes(v) ? v : SWITCHES.compareWith.find(x => x.startsWith(`${m}-`)) ?? SWITCHES.compareWith[0]
     }
     const main: Setting[] = [
-      { key: 'enabled', name: 'Router', what: 'Picks the cheapest model and effort that can handle each prompt.', values: same(['on', 'off']), now: () => (enabled ? 'on' : 'off'), pick: v => setEnabled($, v === 'on') },
-      opt('firstChatDetection', 'Model for a new chat', 'On your first prompt, suggests a better model. Ask: you confirm. Auto: it just switches.'),
-      opt('midChatModelDetection', 'Model mid-chat', 'When a later prompt needs a different model, offers to switch or to hand it to a subagent.'),
-      opt('effortDetection', 'Effort', 'Raises or lowers the thinking effort to fit the prompt.'),
-      opt('subagentSuggestions', 'Subagents', 'Sends a side task to a cheaper subagent instead of switching this chat.'),
+      { key: 'enabled', icon: 'route', name: 'Router', what: 'Picks the cheapest model and effort that can handle each prompt.', values: same(['on', 'off']), now: () => (enabled ? 'on' : 'off'), pick: v => setEnabled($, v === 'on') },
+      opt('firstChatDetection', 'spark', 'Model for a new chat', 'On your first prompt, suggests a better model. Ask: you confirm. Auto: it just switches.'),
+      opt('midChatModelDetection', 'swap', 'Model mid-chat', 'When a later prompt needs a different model, offers to switch or to hand it to a subagent.'),
+      opt('effortDetection', 'gauge', 'Effort', 'Raises or lowers the thinking effort to fit the prompt.'),
+      opt('subagentSuggestions', 'branch', 'Subagents', 'Sends a side task to a cheaper subagent instead of switching this chat.'),
       {
         key: 'newSessionAt',
+        icon: 'window',
         name: 'Start a new session at',
         what: 'Once the chat fills this much of its context, new work is offered as a fresh session. Long chats get expensive.',
         values: same(CHOICES.find(x => x.key === 'newSessionAt')?.values ?? []),
@@ -1172,17 +1271,17 @@ export const register: Register = (on, options) => {
           await saveOption($, 'newSessionAt', v)
         },
       },
-      opt('notifications', 'Notifications', 'Shows a short note when the router changes something.'),
+      opt('notifications', 'bell', 'Notifications', 'Shows a short note when the router changes something.'),
     ]
     const more: Setting[] = [
-      opt('classifier', 'Decided by', 'The model that reads your prompt and decides. Haiku is cheaper, Sonnet more accurate.',
+      opt('classifier', 'cpu', 'Decided by', 'The model that reads your prompt and decides. Haiku is cheaper, Sonnet more accurate.',
         same(CLASSIFIERS.filter(x => x !== 'opus' || cfg.classifier === 'opus'))),
-      { key: 'compareModel', name: 'Savings compared with', what: 'What "You saved" is measured against.', values: COMPARE_MODELS.map(m => [m, m === 'first' ? 'first model' : m] as const), now: () => cfg.compareWith.split('-')[0] ?? 'first', pick: m => saveOption($, 'compareWith', compareValue(m, cfg.compareWith.split('-')[1] ?? '')) },
-      ...(cm === 'first' ? [] : [{ key: 'compareEffort', name: 'at effort', what: '', values: same(COMPARE_EFFORTS), now: () => cfg.compareWith.split('-')[1] ?? '', pick: (l: string) => saveOption($, 'compareWith', compareValue(cfg.compareWith.split('-')[0] ?? 'first', l)) }]),
-      opt('openPane', 'Open this pane on start', 'Opens this pane by itself when a session starts.'),
+      { key: 'compareModel', icon: 'scale', name: 'Savings compared with', what: 'What "You saved" is measured against.', values: COMPARE_MODELS.map(m => [m, m === 'first' ? 'first model' : m] as const), now: () => cfg.compareWith.split('-')[0] ?? 'first', pick: m => saveOption($, 'compareWith', compareValue(m, cfg.compareWith.split('-')[1] ?? '')) },
+      ...(cm === 'first' ? [] : [{ key: 'compareEffort', icon: 'gauge', name: 'at effort', what: '', values: same(COMPARE_EFFORTS), now: () => cfg.compareWith.split('-')[1] ?? '', pick: (l: string) => saveOption($, 'compareWith', compareValue(cfg.compareWith.split('-')[0] ?? 'first', l)) }]),
+      opt('openPane', 'pane', 'Open this pane on start', 'Opens this pane by itself when a session starts.'),
     ]
     const isSwitch = (x: Setting) => x.values.length === 2 && x.values.every(([v]) => v === 'on' || v === 'off')
-    const setting = (x: Setting, i: number) => {
+    const setting = (x: Setting, i: number, color = ACCENT, bare = false) => {
       const current = x.now()
       const label = x.values.find(([v]) => v === current)?.[1] ?? current
       // Read again on the press: the pane may not have redrawn since the last one.
@@ -1190,56 +1289,141 @@ export const register: Register = (on, options) => {
         const v = x.now()
         return x.pick(x.values[(x.values.findIndex(([y]) => y === v) + 1) % x.values.length]?.[0] ?? v)
       }
+      if (term) {
+        return (
+          <Box key={`set-${x.key}`} flexDirection="column">
+            <Button key={`toggle-${x.key}`} hotkey={i < 9 ? String(i + 1) : undefined} plain label={`${x.name}: ${label}`} onPress={step} />
+            {x.what ? <Text dimColor>{x.what}</Text> : null}
+          </Box>
+        )
+      }
+      const control = isSwitch(x)
+        // A switch: one press flips it; the key names the value it sets.
+        ? <Button key={`toggle-${x.key}-${current === 'on' ? 'off' : 'on'}`} label={current === 'on' ? 'On' : 'Off'} variant={current === 'on' ? 'primary' : 'secondary'} onPress={() => x.pick(current === 'on' ? 'off' : 'on')} />
+        : Select && (e.surface === 'desktop' || e.surface === 'vscode')
+          // One native picker per setting; a value it cannot name still shows as the current one.
+          ? <Select key={`pick-${x.key}`} value={current} options={[...x.values.map(([v, l]) => ({ value: v, label: l })), ...(x.values.some(([v]) => v === current) ? [] : [{ value: current, label }])]} onSelect={(v: string) => x.pick(v)} />
+          : (
+            <Box flexDirection="row" gap={0}>
+              {x.values.map(([v, l]) => <Button key={`toggle-${x.key}-${v}`} label={l} variant={v === current ? 'primary' : 'secondary'} dimColor={v !== current} onPress={() => x.pick(v)} />)}
+            </Box>
+          )
+      // Each setting is a tile of its own inside the card, tinted and outlined in the card's colour: the
+      // icon, the name and its line on the left, the control centred on both on the right, so the line
+      // never runs under the control. A narrow pane puts the control under the words. The icon greys
+      // when the setting is off, and every one but the switch itself while the router is off.
+      const live = current !== 'off' && (enabled || x.key === 'enabled')
+      if (bare) return control
+      const tint = live ? color : TONES.idle[0]
       return (
-        <Box key={`set-${x.key}`} flexDirection="column">
-          {term
-            ? <Button key={`toggle-${x.key}`} hotkey={i < 9 ? String(i + 1) : undefined} plain label={`${x.name}: ${label}`} onPress={step} />
-            : (
-              <Box flexDirection={narrow ? 'column' : 'row'} justifyContent="space-between" alignItems={narrow ? 'flex-start' : 'center'} gap={narrow ? 0 : 1}>
-                <Text>{x.name}</Text>
-                {isSwitch(x)
-                  // A switch: one press flips it; the key names the value it sets.
-                  ? <Button key={`toggle-${x.key}-${current === 'on' ? 'off' : 'on'}`} label={current === 'on' ? 'On' : 'Off'} variant={current === 'on' ? 'primary' : 'secondary'} onPress={() => x.pick(current === 'on' ? 'off' : 'on')} />
-                  : Select && (e.surface === 'desktop' || e.surface === 'vscode')
-                    // One native picker per setting; a value it cannot name still shows as the current one.
-                    ? <Select key={`pick-${x.key}`} value={current} options={[...x.values.map(([v, l]) => ({ value: v, label: l })), ...(x.values.some(([v]) => v === current) ? [] : [{ value: current, label }])]} onSelect={(v: string) => x.pick(v)} />
-                    : (
-                      <Box flexDirection="row" gap={0}>
-                        {x.values.map(([v, l]) => <Button key={`toggle-${x.key}-${v}`} label={l} variant={v === current ? 'primary' : 'secondary'} dimColor={v !== current} onPress={() => x.pick(v)} />)}
-                      </Box>
-                    )}
-              </Box>
-            )}
-          {x.what ? <Text dimColor>{x.what}</Text> : null}
+        <Box key={`set-${x.key}`} flexDirection={narrow ? 'column' : 'row'} justifyContent="space-between" alignItems={narrow ? 'flex-start' : 'center'} gap={narrow ? 1 : 3} borderStyle="round" borderColor={`${tint}38`} backgroundColor={`${tint}0f`} paddingX={narrow ? 1 : 2} paddingY={1}>
+          {item(`set-${x.key}-what`, x.icon, color, live, x.name, x.what)}
+          <Box flexShrink={0}>{control}</Box>
         </Box>
       )
     }
-    const settings = section('settings',
+    // More settings: in the terminal folded inside Settings; on the app surfaces a card of its own beside
+    // Settings and Details, so every card has the same inset and the rows line up.
+    const moreFold = fold('more', 'More settings', `Classifier, savings baseline, auto-open`, 'sliders', ACCENT, () => (
+      <Box key="more-body" flexDirection="column" gap={term ? 0 : 1}>
+        {more.map((x, i) => setting(x, main.length + i))}
+        {d.savings ? null : <Button key="stats-on" label="Turn the savings stats on" onPress={() => saveOption($, 'stats', 'on')} />}
+      </Box>
+    ), term)
+    // On the app surfaces Settings is three cards, each in a colour of its own: the router's switch, the
+    // model and effort choices, the session ones. Each has an icon heading with a line of its current values.
+    const SETTING_GROUPS = [
+      { key: 'model', name: 'Model & effort', icon: 'sliders' as CardIcon, color: BLUE, keys: ['firstChatDetection', 'midChatModelDetection', 'effortDetection', 'subagentSuggestions'] },
+      { key: 'session', name: 'Session', icon: 'window' as CardIcon, color: TEAL, keys: ['newSessionAt', 'notifications'] },
+    ]
+    const settingRows = main.flatMap((x, i) => [i ? rule(`rule-${x.key}`, false) : null, setting(x, i)])
+    const valueOf = (x: Setting) => x.values.find(([v]) => v === x.now())?.[1] ?? x.now()
+    const routerTile = () => {
+      const sw = main[0]!
+      return card('group-router', [
+        head('router-head', 'route', ACCENT, 'Router', enabled ? 'Routing every prompt' : 'Off: nothing changes', { right: setting(sw, 0, ACCENT, true), strong: enabled }),
+        <Text key="router-what" dimColor>{sw.what}</Text>,
+      ], { borderColor: enabled ? ACCENT : undefined })
+    }
+    const groupTile = (g: (typeof SETTING_GROUPS)[number]) => {
+      const rows = main.flatMap((x, i) => (g.keys.includes(x.key) ? [{ x, i }] : []))
+      const sub = enabled ? rows.map(r => valueOf(r.x)).join(' · ') : 'Router off: nothing changes'
+      return card(`group-${g.key}`, [
+        head(`group-${g.key}-head`, g.icon, enabled ? g.color : TONES.idle[0], g.name, sub, { strong: enabled }),
+        <Box key={`group-${g.key}-rows`} flexDirection="column" gap={1}>{rows.map(({ x, i }) => setting(x, i, g.color))}</Box>,
+      ], { borderColor: enabled ? g.color : undefined })
+    }
+    const settings = term ? section('settings',
       title('settings-title', 'Settings'),
-      ...main.flatMap((x, i) => [i ? rule(`rule-${x.key}`, false) : null, setting(x, i)]),
-      term ? rule('rule-more', false) : null,
-      fold('more', 'More settings', `${more.length} more: ${more.map(x => x.name.toLowerCase()).slice(0, 2).join(', ')}…`, 'sliders', () => (
-        <Box key="more-body" flexDirection="column" gap={term ? 0 : 1}>
-          {more.flatMap((x, i) => [i || term ? rule(`rule-${x.key}`, false) : null, setting(x, main.length + i)])}
-          {d.savings ? null : <Button key="stats-on" label="Turn the savings stats on" onPress={() => saveOption($, 'stats', 'on')} />}
-        </Box>
-      ), true),
+      ...settingRows,
+      rule('rule-more', false),
+      moreFold,
       cfgNote ? <Text key="cfg-note" dimColor>{cfgNote}</Text> : null,
-    )
+    ) : [
+      routerTile(),
+      ...SETTING_GROUPS.map(groupTile),
+      cfgNote ? <Text key="cfg-note" dimColor>{cfgNote}</Text> : null,
+    ]
 
     // Details: the strict balance against your own setting, how often it was right, where tasks went.
     const t = b ? modelTable(b) : []
-    const details = b ? fold('details', 'Details', `Balance ${signed(b.usd.value)} · decisions right ${accuracyText(b)}`, 'chart', () => (
-      <Box key="details-body" flexDirection="column" gap={term ? 0 : 1}>
-        <Box flexDirection="column">
-          {row('balance', `Router balance${isRough(b) ? ' (rough)' : ''}`, signed(b.usd.value), { bold: true, color: MONEY_COLOR[money(b.usd.value)] })}
-          <Text dimColor>What the router added or saved on top of what you'd have picked yourself, the classifier included.</Text>
+    const balanceWhat = "What the router added or saved on top of what you'd have picked yourself, the classifier included."
+    const balanceName = `Router balance${isRough(b) ? ' (rough)' : ''}`
+    const tasksText = t.slice(1).map(r => `${r[0]!.toLowerCase()} ${r[1]}`).join(' · ')
+    // On the app surfaces Details opens on one tinted tile: the balance as a big figure in the colour of
+    // its sign beside a ring of how often the router was right, with its 95 % range as a thin outer arc.
+    // Under it where the tasks went: one bar parted by model, and a legend that reads as a small table.
+    const allTasks = b ? b.byModel.reduce((a, r) => a + r.tasks, 0) : 0
+    const byTasks = b ? [...b.byModel].sort((x, y) => y.tasks - x.tasks) : []
+    const shade = (i: number) => VIOLETS[Math.min(i, VIOLETS.length - 1)]!
+    const pctOf = (k: number) => `${allTasks ? Math.round((k / allTasks) * 100) : 0} %`
+    const details = b ? fold('details', 'Details', `Balance ${signed(b.usd.value)} · ${accuracyText(b).split(' (')[0]} right`, 'chart', VIOLET, () => (term
+      ? (
+        <Box key="details-body" flexDirection="column" gap={0}>
+          <Box flexDirection="column">
+            {row('balance', balanceName, signed(b.usd.value), { bold: true, color: MONEY_COLOR[money(b.usd.value)] })}
+            <Text dimColor>{balanceWhat}</Text>
+          </Box>
+          {row('accuracy', 'Decisions right', accuracyText(b))}
+          {t.length > 1 ? row('tasks', 'Tasks', tasksText) : null}
+          <Text dimColor>Full table: /router stats.</Text>
         </Box>
-        {row('accuracy', 'Decisions right', accuracyText(b))}
-        {t.length > 1 ? row('tasks', 'Tasks', t.slice(1).map(r => `${r[0]!.toLowerCase()} ${r[1]}`).join(' · ')) : null}
-        <Text dimColor>Full table: /router stats.</Text>
-      </Box>
-    )) : null
+      )
+      : (
+        <Box key="details-body" flexDirection="column" gap={2}>
+          <Box key="details-hero" flexDirection="column" gap={1} borderStyle="round" borderColor={`${VIOLET}38`} backgroundColor={`${VIOLET}0f`} paddingX={narrow ? 1 : 2} paddingY={1}>
+            <Box flexDirection="row" alignItems="center" gap={2}>
+              <Box key="balance" flexDirection="column" gap={0} flexGrow={1} flexShrink={1} minWidth={0}>
+                <Text dimColor>{balanceName}</Text>
+                <Svg source={bigNumberSvg(signed(b.usd.value), MONEY_COLOR[money(b.usd.value)] ?? TONES.idle[0], px, 30)} alt={`${balanceName} ${signed(b.usd.value)}`} height={38} />
+                <Text dimColor>vs. your own picks, classifier included</Text>
+              </Box>
+              <Box key="accuracy" flexShrink={0}>
+                <Svg source={ringSvg(b.accuracy?.pct ?? null, b.accuracy?.low ?? null, b.accuracy?.high ?? null, VIOLET)} alt={b.accuracy ? `Decisions right: ${Math.round(b.accuracy.pct)} %` : 'Decisions right: not enough tasks yet'} width={88} height={88} />
+              </Box>
+            </Box>
+            <Text dimColor>{b.accuracy ? `Decisions right · 95 %: ${Math.round(b.accuracy.low)}–${Math.round(b.accuracy.high)} %` : 'Decisions right · not enough tasks yet'}</Text>
+          </Box>
+          {byTasks.length ? (
+            <Box key="tasks" flexDirection="column" gap={1}>
+              <Box flexDirection="row" justifyContent="space-between" gap={2}>
+                <Text>Where tasks went</Text>
+                <Text dimColor>{`${allTasks} ${allTasks === 1 ? 'task' : 'tasks'}`}</Text>
+              </Box>
+              <Svg key="tasks-bar" source={stackSvg(byTasks.map((r, i) => ({ share: r.tasks, color: shade(i) })), 12, byTasks.map(r => `${r.model} ${pctOf(r.tasks)}`).join(', '))} alt={`Tasks: ${byTasks.map(r => `${r.model} ${pctOf(r.tasks)}`).join(', ')}`} height={12} />
+              {byTasks.map((r, i) => (
+                <Box key={`tasks-${r.model}`} flexDirection="row" alignItems="center" gap={1}>
+                  <Box flexShrink={0}><Svg source={dotSvg(shade(i))} alt={`${r.model}: ${r.tasks} of ${allTasks} tasks`} width={10} height={10} /></Box>
+                  <Box flexGrow={1} flexShrink={1} minWidth={0}><Text>{r.model}</Text></Box>
+                  <Text dimColor>{`${r.tasks} ${r.tasks === 1 ? 'task' : 'tasks'} · ${usd(r.usdPerTask)}/task`}</Text>
+                  <Box flexShrink={0} marginLeft={1}><Text bold>{pctOf(r.tasks)}</Text></Box>
+                </Box>
+              ))}
+            </Box>
+          ) : null}
+          <Text dimColor>Full table: /router stats.</Text>
+        </Box>
+      ))) : null
 
     return (
       <Box flexDirection="column" gap={term ? 1 : narrow ? 1 : 2} padding={term ? 0 : 1}>
@@ -1250,6 +1434,7 @@ export const register: Register = (on, options) => {
         {d.savings ? null : <Text dimColor>Savings stats are off.</Text>}
         {term ? rule('rule-settings') : null}
         {settings}
+        {term ? null : moreFold}
         {term && details ? rule('rule-details') : null}
         {details}
       </Box>

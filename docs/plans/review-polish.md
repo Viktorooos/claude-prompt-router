@@ -24,7 +24,7 @@ Větev `integrate/all` (přímo, bez nové větve). UI panelu dělá jiná sessi
 - OpenCode: patička tabulky statistik neříká, s čím se srovnává (`compareWith`).
 - Adaptéry nezapisují `follows`, `key` ani `accept` → v Codexu/OpenCode se nepočítá přepracování ani přijaté nabídky.
 - Statistiky: kontrolní třída ignoruje výchozí model/effort (`here:<model>`); náklad kontrolní epizody zahrnuje i routované navazující prompty; bilance bere jen první rozhodnutí epizody.
-- Nainstalovaný mod je cache 0.9.0 a liší se od repa – po dokončení přeinstalovat.
+- Nainstalovaný mod je cache 0.9.0 a liší se od repa – přeinstalovat až po commitu panelové session (rozhodnutí uživatele 2026-11-05).
 
 ## Jak ověřit
 Z kořene repa: `claude plugin test plugins/prompt-router`, `node --test adapters/codex/test/`, `node --test adapters/shared/test/`, `node --test adapters/opencode/test/`.
