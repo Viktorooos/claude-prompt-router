@@ -7,7 +7,7 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { REFERENCE, accuracyText, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
-import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, kTokens, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, kTokens, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 import type { Balance, Balances, Decision, Entry, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
@@ -1053,6 +1053,8 @@ export const register: Register = (on, options) => {
         {children}
       </Box>
     )
+    // A hairline between sections (strong) and between settings (faint); the terminal leaves the gap.
+    const rule = (key: string, strong = true) => (term ? null : <Svg key={key} source={ruleSvg(px, strong)} alt="" width={px} height={1} />)
     const fold = (id: string, label: string, body: () => unknown) => section(id,
       <Button key={`fold-${id}`} plain label={`${paneOpen.has(id) ? '▾' : '▸'} ${term ? label : label.toUpperCase()}`} onPress={flip(id)} />,
       paneOpen.has(id) ? body() : null,
@@ -1073,6 +1075,7 @@ export const register: Register = (on, options) => {
     const savedWord = s && money(s.balanceUsd) === 'down' ? 'Cost extra' : 'You saved'
     const savedText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : usd(Math.abs(s.balanceUsd))) : ''
     const saved = s ? section('saved',
+      tabs,
       title('saved-title', savedWord),
       s.withoutUsd <= 0
         ? <Text key="saved-none" dimColor>No priced work in this period yet.</Text>
@@ -1176,10 +1179,11 @@ export const register: Register = (on, options) => {
     }
     const settings = section('settings',
       title('settings-title', 'Settings'),
-      ...main.map(setting),
+      ...main.flatMap((x, i) => [i ? rule(`rule-${x.key}`, false) : null, setting(x, i)]),
+      rule('rule-more', false),
       fold('more', 'More settings', () => (
         <Box key="more-body" flexDirection="column" gap={term ? 0 : 1}>
-          {more.map((x, i) => setting(x, main.length + i))}
+          {more.flatMap((x, i) => [i ? rule(`rule-${x.key}`, false) : null, setting(x, main.length + i)])}
           {d.savings ? null : <Button key="stats-on" label="Turn the savings stats on" onPress={() => saveOption($, 'stats', 'on')} />}
         </Box>
       )),
@@ -1192,7 +1196,7 @@ export const register: Register = (on, options) => {
       <Box key="details-body" flexDirection="column" gap={term ? 0 : 1}>
         <Box flexDirection="column">
           {row('balance', `Router balance${isRough(b) ? ' (rough)' : ''}`, signed(b.usd.value), { bold: true, color: MONEY_COLOR[money(b.usd.value)] })}
-          <Text dimColor>What the router added or saved on top of the model you had picked yourself, the classifier included.</Text>
+          <Text dimColor>What the router added or saved on top of what you'd have picked yourself, the classifier included.</Text>
         </Box>
         {row('accuracy', 'Decisions right', accuracyText(b))}
         {t.length > 1 ? row('tasks', 'Tasks', t.slice(1).map(r => `${r[0]!.toLowerCase()} ${r[1]}`).join(' · ')) : null}
@@ -1202,12 +1206,14 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column" gap={term ? 1 : 2} padding={term ? 0 : 1}>
-        <Text dimColor>{`${term ? 'Prompt Router' : 'PROMPT ROUTER'} · ${enabled ? 'on' : 'off'}`}</Text>
-        {tabs}
-        {saved}
+        {term ? <Text dimColor>{`Prompt Router · ${enabled ? 'on' : 'off'}`}</Text> : null}
+        {saved ?? tabs}
+        {saved || tabs ? rule('rule-chat') : null}
         {chat}
         {d.savings ? null : <Text dimColor>Savings stats are off.</Text>}
+        {rule('rule-settings')}
         {settings}
+        {details ? rule('rule-details') : null}
         {details}
       </Box>
     )

@@ -125,6 +125,11 @@ test('You saved comes first: the period\'s saving against compareWith, without a
   expect(texts.indexOf('YOU SAVED')).toBeLessThan(texts.indexOf('THIS CHAT'))
   expect(texts.indexOf('THIS CHAT')).toBeLessThan(texts.indexOf('SETTINGS'))
   expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/You saved: \$\d+\.\d\d/)
+  // As the preview: no header line, the periods inside You saved, a hairline above each section and between settings.
+  expect(texts).not.toMatch(/PROMPT ROUTER/)
+  expect(JSON.stringify(await ui.find({ key: 'saved' }))).toMatch(/period-week/)
+  // Above This chat and Settings, between the 7 settings and above More settings, above Details.
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' })).split('role=\\"presentation\\"').length - 1).toBe(10)
   // 7 days by default; the picked period is the primary button.
   expect(JSON.stringify(await ui.find({ type: 'Button', key: 'period-week' }))).toMatch(/"variant":"primary"/)
   await ui.press({ key: 'period-today' })

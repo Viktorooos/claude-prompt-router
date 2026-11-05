@@ -161,3 +161,10 @@ export function bigNumberSvg(text: string, color: string, width = 280, size = 36
   const safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}"><text x="0" y="${Math.round(size)}" font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="${size}" font-weight="700" fill="${color}">${safe}</text></svg>`
 }
+
+// A hairline across the pane: what separates its sections and settings, as the preview's border-top.
+export function ruleSvg(width = 280, strong = true): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="1" viewBox="0 0 ${width} 1" role="presentation"><style>
+.l{fill:#1d1f23;opacity:${strong ? '.12' : '.07'}}@media (prefers-color-scheme: dark){.l{fill:#f2f3f5;opacity:${strong ? '.12' : '.07'}}}
+</style><rect class="l" width="${width}" height="1"/></svg>`
+}
