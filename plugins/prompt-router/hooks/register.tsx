@@ -1023,10 +1023,12 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
-    const { Box, Text, Button, Svg } = $.ui.resolve(e) as any
+    const { Box, Text, Button, Svg, Select } = $.ui.resolve(e) as any
     const cols = e.props.bodyColumns ?? 40
     const px = Math.max(220, Math.min(460, cols * 7))
     const cells = Math.max(8, Math.min(24, cols - 8))
+    // A narrow pane puts each setting's control under its name instead of beside it.
+    const narrow = cols < 34
     const flip = (id: string) => async () => {
       if (!paneOpen.delete(id)) paneOpen.add(id)
       redraw($)
@@ -1041,7 +1043,7 @@ export const register: Register = (on, options) => {
     const money = (v: number) => (Math.abs(v) < 0.005 ? 'none' : v > 0 ? 'up' : 'down')
     const MONEY_COLOR = { up: TONES.calm[0], down: TONES.over[0], none: undefined }
 
-    const title = (key: string, t: string) => <Text key={key} dimColor bold>{term ? t : t.toUpperCase()}</Text>
+    const title = (key: string, t: string) => <Text key={key} dimColor>{term ? t : t.toUpperCase()}</Text>
     const row = (key: string, label: string, value: string, o: { dim?: boolean; bold?: boolean; color?: string } = {}) => (
       <Box key={key} flexDirection="row" justifyContent="space-between">
         <Text dimColor={o.dim}>{label}</Text>
@@ -1088,9 +1090,9 @@ export const register: Register = (on, options) => {
           </Box>
         ),
       s.withoutUsd > 0 ? (
-        <Box key="saved-vs" flexDirection="row" gap={3}>
-          <Box flexDirection="column"><Text dimColor>Without router</Text><Text bold>{usd(s.withoutUsd)}</Text></Box>
-          <Box flexDirection="column"><Text dimColor>With router</Text><Text bold>{usd(withUsd)}</Text></Box>
+        <Box key="saved-vs" flexDirection={narrow ? 'column' : 'row'} gap={narrow ? 0 : 3}>
+          <Box flexDirection="column"><Text dimColor>Without router</Text><Text>{usd(s.withoutUsd)}</Text></Box>
+          <Box flexDirection="column"><Text dimColor>With router</Text><Text>{usd(withUsd)}</Text></Box>
         </Box>
       ) : null,
     ) : null
@@ -1161,16 +1163,19 @@ export const register: Register = (on, options) => {
           {term
             ? <Button key={`toggle-${x.key}`} hotkey={i < 9 ? String(i + 1) : undefined} plain label={`${x.name}: ${label}`} onPress={step} />
             : (
-              <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
-                <Text bold>{x.name}</Text>
+              <Box flexDirection={narrow ? 'column' : 'row'} justifyContent="space-between" alignItems={narrow ? 'flex-start' : 'center'} gap={narrow ? 0 : 1}>
+                <Text>{x.name}</Text>
                 {isSwitch(x)
                   // A switch: one press flips it; the key names the value it sets.
-                  ? <Button key={`toggle-${x.key}-${current === 'on' ? 'off' : 'on'}`} label={current === 'on' ? '● On' : '○ Off'} variant={current === 'on' ? 'primary' : 'secondary'} dimColor={current !== 'on'} onPress={() => x.pick(current === 'on' ? 'off' : 'on')} />
-                  : (
-                    <Box flexDirection="row" gap={0}>
-                      {x.values.map(([v, l]) => <Button key={`toggle-${x.key}-${v}`} label={l} variant={v === current ? 'primary' : 'secondary'} dimColor={v !== current} onPress={() => x.pick(v)} />)}
-                    </Box>
-                  )}
+                  ? <Button key={`toggle-${x.key}-${current === 'on' ? 'off' : 'on'}`} label={current === 'on' ? 'On' : 'Off'} variant={current === 'on' ? 'primary' : 'secondary'} onPress={() => x.pick(current === 'on' ? 'off' : 'on')} />
+                  : Select && (e.surface === 'desktop' || e.surface === 'vscode')
+                    // One native picker per setting; a value it cannot name still shows as the current one.
+                    ? <Select key={`pick-${x.key}`} value={current} options={[...x.values.map(([v, l]) => ({ value: v, label: l })), ...(x.values.some(([v]) => v === current) ? [] : [{ value: current, label }])]} onSelect={(v: string) => x.pick(v)} />
+                    : (
+                      <Box flexDirection="row" gap={0}>
+                        {x.values.map(([v, l]) => <Button key={`toggle-${x.key}-${v}`} label={l} variant={v === current ? 'primary' : 'secondary'} dimColor={v !== current} onPress={() => x.pick(v)} />)}
+                      </Box>
+                    )}
               </Box>
             )}
           {x.what ? <Text dimColor>{x.what}</Text> : null}
@@ -1205,7 +1210,7 @@ export const register: Register = (on, options) => {
     )) : null
 
     return (
-      <Box flexDirection="column" gap={term ? 1 : 2} padding={term ? 0 : 1}>
+      <Box flexDirection="column" gap={term ? 1 : narrow ? 1 : 2} padding={term ? 0 : 1}>
         {term ? <Text dimColor>{`Prompt Router · ${enabled ? 'on' : 'off'}`}</Text> : null}
         {saved ?? tabs}
         {saved || tabs ? rule('rule-chat') : null}
