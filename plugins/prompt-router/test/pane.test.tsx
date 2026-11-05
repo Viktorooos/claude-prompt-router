@@ -292,8 +292,10 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(ring).toMatch(/prefers-color-scheme: ?dark/)
   expect(ring).not.toMatch(/<script|on\w+=/)
   expect(ring).toMatch(/<title>Context 47%, new session at 50%<\/title>/)
-  // Still: nothing replays on a redraw.
-  expect(ring).not.toMatch(/@keyframes/)
+  // The fill grows in once; a redraw with the same share draws the same image, so nothing replays.
+  expect(ring).toMatch(/@keyframes/)
+  expect(contextBarSvg(47, 50)).toBe(ring)
+  expect(ring).toMatch(/width="100%"/)
   const left = splitBarSvg(-0.5, '#e0483f', 100, 8)
   expect(left).toMatch(/<rect x="25" width="25" [^>]*fill="#e0483f"/)
   expect(left).not.toMatch(/@keyframes|<script|on\w+=/)

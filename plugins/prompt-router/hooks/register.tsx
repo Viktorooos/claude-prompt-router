@@ -1056,9 +1056,17 @@ export const register: Register = (on, options) => {
       </Box>
     )
     // A hairline between sections (strong) and between settings (faint); the terminal leaves the gap.
-    const rule = (key: string, strong = true) => (term ? null : <Svg key={key} source={ruleSvg(px, strong)} alt="" width={px} height={1} />)
+    const rule = (key: string, strong = true) => (term ? null : <Svg key={key} source={ruleSvg(px, strong)} alt="" height={1} />)
     const fold = (id: string, label: string, body: () => unknown) => section(id,
-      <Button key={`fold-${id}`} plain label={`${paneOpen.has(id) ? '▾' : '▸'} ${term ? label : label.toUpperCase()}`} onPress={flip(id)} />,
+      term
+        ? <Button key={`fold-${id}`} plain label={`${paneOpen.has(id) ? '▾' : '▸'} ${label}`} onPress={flip(id)} />
+        // Desktop: the heading lines up with the others, the native button sits on the right like a setting's.
+        : (
+          <Box key={`fold-row-${id}`} flexDirection="row" justifyContent="space-between" alignItems="center">
+            <Text dimColor>{label.toUpperCase()}</Text>
+            <Button key={`fold-${id}`} label={paneOpen.has(id) ? 'Hide' : 'Show'} variant="secondary" onPress={flip(id)} />
+          </Box>
+        ),
       paneOpen.has(id) ? body() : null,
     )
 
@@ -1085,7 +1093,7 @@ export const register: Register = (on, options) => {
           <Box key="saved-v" flexDirection="column">
             {term
               ? <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
-              : <Svg source={bigNumberSvg(savedText, money(s.balanceUsd) === 'up' ? '#2fb67c' : MONEY_COLOR[money(s.balanceUsd)] ?? TONES.idle[0], px, 38)} alt={`${savedWord}: ${savedText}`} width={px} height={48} />}
+              : <Svg source={bigNumberSvg(savedText, money(s.balanceUsd) === 'up' ? '#2fb67c' : MONEY_COLOR[money(s.balanceUsd)] ?? TONES.idle[0], px, 40)} alt={`${savedWord}: ${savedText}`} height={50} />}
             <Text dimColor>{`compared with ${against}`}</Text>
           </Box>
         ),
@@ -1107,7 +1115,7 @@ export const register: Register = (on, options) => {
         {row('ctx-head', d.header, ctxRight, { dim: false })}
         {term
           ? <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
-          : <Svg source={contextBarSvg(d.share, d.at, px, 8)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} width={px} height={14} />}
+          : <Svg source={contextBarSvg(d.share, d.at, px, 8)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={14} />}
         {term ? <Text dimColor>{[used, asks].filter(Boolean).join(' · ')}</Text> : row('ctx-foot', used, asks, { dim: true })}
       </Box>,
     )
