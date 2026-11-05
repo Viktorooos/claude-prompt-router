@@ -2,12 +2,12 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, inHoldout, namesSetting, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
-import type { Chat, Config, Follows, Model, Pick, Switch, Where } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, inHoldout, namesSetting, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { REFERENCE, accuracyText, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
-import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, kTokens, partBarSvg, pulseSvg, ringSvg, sparkSvg, sparkText, tone } from '../core/panel.ts'
+import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, contextBarSvg, kTokens, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 import type { Balance, Balances, Decision, Entry, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
@@ -68,6 +68,8 @@ let manualUp = false
 let paneOpened = false
 // The period the pane's savings show (a pane button picks it).
 let panePeriod: 'today' | 'week' | 'total' = 'week'
+// The pane's open parts: a section's "?" (help-<id>) and the old token re-pricing (legacy).
+const paneOpen = new Set<string>()
 
 async function log($: EngineInterface, what: string, err: unknown) {
   try {
@@ -407,7 +409,7 @@ async function noteDecision($: EngineInterface, where: Decision['where'], to: De
   }
   lastClassifier = null
   lastFollows = undefined
-  const last: LastDecision = { where: p?.other ? 'other' : where, outcome: outcome === 'asked' ? 'asked' : 'applied', model: to.model, effort: to.effort, why: p?.why ?? '', ts, ...lastCtx }
+  const last: LastDecision = { where: p?.other ? 'other' : where, outcome: outcome === 'asked' ? 'asked' : 'applied', model: to.model, effort: to.effort, why: p?.why ?? '', from: { model: pickedFrom, effort: now }, ts, ...lastCtx }
   try {
     // Readers of the atom (the pane) draw again.
     await update($, LAST, () => last)
@@ -574,16 +576,57 @@ async function setEnabled($: EngineInterface, on: boolean) {
   redraw($)
 }
 
-// The switches the pane offers, in the order a press steps through them (newSessionAt from low to off).
-const PANE_SWITCHES = [
-  { key: 'effortDetection', label: 'Effort detection', values: SWITCHES.effortDetection },
-  { key: 'midChatModelDetection', label: 'Mid-chat model', values: SWITCHES.midChatModelDetection },
-  { key: 'sessionSuggestions', label: 'Session suggestions', values: SWITCHES.sessionSuggestions },
-  { key: 'newSessionAt', label: 'New session at', values: ['40%', '50%', '60%', '70%', 'off'] },
-] as const satisfies readonly { key: Switch; label: string; values: readonly string[] }[]
+// The pane's settings: every option with a fixed set of values (SWITCHES and the classifier) as a
+// button that steps to the next value, compareWith as two buttons (model, effort) read from its values,
+// and the free-text options as fields. New options show up by themselves; LABELS only names them.
+const LABELS: Record<Option, string> = {
+  project: 'Project',
+  rules: 'Extra rules',
+  language: 'Language',
+  classifier: 'Classifier model',
+  effortDetection: 'Effort detection',
+  firstChatDetection: 'First-chat model',
+  midChatModelDetection: 'Mid-chat model',
+  subagentSuggestions: 'Subagent suggestions',
+  sessionSuggestions: 'Session suggestions',
+  newSessionAt: 'New session at',
+  notifications: 'Notifications',
+  stats: 'Savings stats',
+  openPane: 'Open pane by itself',
+  holdoutPct: 'Control group',
+  compareWith: 'Compare with',
+}
+
+// The order a press steps through: numbers from low to high with off last (40%, 50% … off; 0, 5, 10,
+// 20), any other list as it stands (its default first).
+function stepOrder(values: readonly string[]): readonly string[] {
+  const at = (v: string) => (v === 'off' ? Infinity : Number.parseFloat(v))
+  return values.every(v => !Number.isNaN(at(v))) ? [...values].sort((a, b) => at(a) - at(b)) : values
+}
+
+const CHOICES = [
+  ...(Object.keys(SWITCHES) as Switch[]).filter(k => k !== 'compareWith').map(k => ({ key: k as Option, values: stepOrder(SWITCHES[k]) })),
+  { key: 'classifier' as Option, values: CLASSIFIERS as readonly string[] },
+]
+const TEXT_OPTIONS = OPTIONS.filter(k => !(k in SWITCHES) && k !== 'classifier')
+
+// compareWith split in two: its models (with `first`) and its efforts, in LEVELS order.
+const COMPARE_MODELS = [...new Set(SWITCHES.compareWith.map(v => v.split('-')[0]!))]
+const COMPARE_EFFORTS = LEVELS.filter(l => SWITCHES.compareWith.some(v => v.endsWith(`-${l}`)))
+
+function nextCompare(part: 'model' | 'effort'): string {
+  const [m = 'first', l = ''] = cfg.compareWith.split('-')
+  const step = <T,>(list: readonly T[], v: T) => list[(list.indexOf(v) + 1) % list.length]!
+  const model = part === 'model' ? step(COMPARE_MODELS, m) : m
+  const effort = part === 'effort' ? step(COMPARE_EFFORTS, l as Level) : l || COMPARE_EFFORTS.find(x => x === 'medium') || COMPARE_EFFORTS[0]!
+  const v = model === 'first' ? 'first' : `${model}-${effort}`
+  return (SWITCHES.compareWith as readonly string[]).includes(v) ? v : SWITCHES.compareWith.find(x => x.startsWith(`${model}-`)) ?? SWITCHES.compareWith[0]
+}
+
+const shown = (k: Option, v: string) => (k === 'holdoutPct' ? (v === '0' ? 'off' : `${v} %`) : v)
 
 // Saves one option as /config does (settings.json pluginConfigs, through the engine), and goes by it now.
-async function saveOption($: EngineInterface, k: Switch, value: string) {
+async function saveOption($: EngineInterface, k: Option, value: string) {
   try {
     const row = (await $.config.list()).find(r => r.key === `${NAME}.${k}` || (r.provider?.plugin === NAME && r.key.endsWith(`.${k}`)))
     const r = await $.config.set({ key: row?.key ?? `${NAME}.${k}`, value })
@@ -955,61 +998,202 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // The pane beside the chat: context, the last decision, the savings and the main switches.
+  // The pane beside the chat, one statement down a narrow column: the period, the balance per task
+  // and its parts, how sure it is, the models, the reference, this chat, the settings, and the old
+  // token re-pricing folded away. A "?" by a section opens its explanation.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await paneData($)
-    const press = (k: 'enabled' | Switch) => async () => {
-      if (k === 'enabled') return setEnabled($, !enabled)
-      const sw = PANE_SWITCHES.find(x => x.key === k)
-      if (!sw) return
-      const vals: readonly string[] = sw.values
-      await saveOption($, k, vals[(vals.indexOf(cfg[k]) + 1) % vals.length] ?? vals[0]!)
+    const term = e.surface === 'terminal'
+    const { Box, Text, Button, Input, Svg } = $.ui.resolve(e) as any
+    const cols = e.props.bodyColumns ?? 40
+    const px = Math.max(220, Math.min(460, cols * 7))
+    const cells = Math.max(8, Math.min(24, cols - 8))
+    const flip = (id: string) => async () => {
+      if (!paneOpen.delete(id)) paneOpen.add(id)
+      redraw($)
     }
-    const switches = [{ key: 'enabled' as const, label: 'Router', value: enabled ? 'on' : 'off' }, ...PANE_SWITCHES.map(x => ({ key: x.key, label: x.label, value: String(cfg[x.key]) }))]
-    const where = d.last ? WHERE_LABEL[d.last.where] : null
-    const lm = d.last ? knownModel(d.last.model) : ''
-    const lastModel = d.last ? `${lm ? MODEL_NAMES[lm] : d.last.model || '?'} · ${d.last.effort ? NAMES[d.last.effort] : '?'}` : ''
-    const age = d.last ? d.now - d.last.ts : Infinity
-    const ctxLine = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'Context not known yet'
-    const atLine = d.at ? `New session at ${d.at}%` : 'New-session rule off'
-
-    const s = d.savings?.report[panePeriod] ?? null
-    const b: Balance | null = d.savings?.balance[panePeriod] ?? null
     const pickPeriod = (k: typeof panePeriod) => async () => {
       panePeriod = k
       redraw($)
     }
+    const s = d.savings?.report[panePeriod] ?? null
+    const b: Balance | null = d.savings?.balance[panePeriod] ?? null
+    const c = compareTarget(cfg.compareWith)
     const money = (v: number) => (Math.abs(v) < 0.005 ? 'none' : v > 0 ? 'up' : 'down')
     const MONEY_COLOR = { up: TONES.calm[0], down: TONES.over[0], none: undefined }
-    const balanceColor = s ? MONEY_COLOR[money(s.balanceUsd)] : undefined
-    const c = compareTarget(cfg.compareWith)
-    const showReference = !isReference(c)
-    const verdict = !s || s.withoutUsd <= 0
-      ? 'No priced work in this period yet.'
-      : `${s.balanceUsd >= 0.005 ? 'saved' : s.balanceUsd <= -0.005 ? 'lost' : 'even'} · ${Math.round(Math.abs(s.balancePct))} % of ${usd(s.withoutUsd)}, what the work would have cost ${c ? `on ${compareLabel(c)}` : 'without the router'}`
-    const perPrompt = s && s.prompts ? `$${(s.classifierUsd / s.prompts).toFixed(3)}` : '$0'
-    const activity = s ? `${s.prompts} prompts · ${s.modelChanges} model changes · effort ↓${s.effortDown} ↑${s.effortUp} · ${s.subagents} subagents · ${s.sessions} new sessions` : ''
-    const NOTE = 'An estimate from list prices. Effort is a guess (output tokens weighted per level). Full table: /router stats.'
+    const signedOr0 = (v: number) => (money(v) === 'none' ? '$0.00' : signed(v))
 
-    // The terminal's bill for the picked period (fixed columns, so label left and value right lines
-    // up): what it would have cost, what it cost, and where the difference came from (the parts add
-    // up to the balance). The desktop pane stacks the same figures instead.
-    const billView = (Box: any, Text: any) => {
-      if (!s) return null
-      const row = (key: string, label: string, text: string, o: { dim?: boolean; bold?: boolean; color?: string } = {}) => (
-        <Box key={key} flexDirection="row" justifyContent="space-between">
-          <Text dimColor={o.dim} bold={o.bold}>{label}</Text>
-          <Text dimColor={o.dim} bold={o.bold} color={o.color}>{text}</Text>
+    // A section title in small capitals (plain on the terminal), and its "?" with the text it opens.
+    const head = (id: string, title: string, help?: string) => (
+      <Box key={`head-${id}`} flexDirection="column">
+        <Box flexDirection="row" gap={1} alignItems="center">
+          <Text dimColor bold>{term ? title : title.toUpperCase()}</Text>
+          {help ? <Button key={`help-${id}`} plain label={paneOpen.has(`help-${id}`) ? '×' : '?'} onPress={flip(`help-${id}`)} /> : null}
         </Box>
-      )
-      const parts = [
-        ['cheaper', 'Cheaper model', s.savedUsd],
-        ['stronger', 'Stronger model', -s.extraUsd],
-        ['effort', 'Effort (estimate)', s.effortUsd],
-        ['classifier', 'Classifier', -s.classifierUsd],
-      ] as const
-      return (
-        <Box flexDirection="column" gap={1}>
+        {help && paneOpen.has(`help-${id}`) ? <Text dimColor>{help}</Text> : null}
+      </Box>
+    )
+    // Label left, value right.
+    const row = (key: string, label: string, value: string, o: { dim?: boolean; bold?: boolean; color?: string } = {}) => (
+      <Box key={key} flexDirection="row" justifyContent="space-between">
+        <Text dimColor={o.dim}>{label}</Text>
+        <Text dimColor={o.dim} bold={o.bold} color={o.color}>{value}</Text>
+      </Box>
+    )
+    const section = (key: string, ...children: unknown[]) => (
+      <Box key={key} flexDirection="column" gap={term ? 0 : 1}>
+        {children}
+      </Box>
+    )
+
+    const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
+    const tabs = d.savings ? (
+      <Box key="tabs" flexDirection="row" gap={1}>
+        {PERIODS.map(([k, label]) => (term
+          ? <Button key={`period-${k}`} plain label={k === panePeriod ? `[${label}]` : label} onPress={pickPeriod(k)} />
+          : <Button key={`period-${k}`} label={label} variant={k === panePeriod ? 'primary' : 'secondary'} onPress={pickPeriod(k)} />))}
+      </Box>
+    ) : null
+
+    const hero = b ? section('hero',
+      head('balance', 'Router balance', `What the router saved (+, green) or cost extra (−, red) per task against your own setting, the classifier included. The range is where the true figure most likely lies; it stays empty until there are control tasks. "~" marks a rough figure.`),
+      <Box key="hero-v" flexDirection="column">
+        <Text bold color={MONEY_COLOR[money(b.usd.value)]}>{`${isRough(b) ? '~' : ''}${signed(b.usd.value)}`}</Text>
+        <Text>{`${money(b.usd.value) === 'up' ? 'saved' : money(b.usd.value) === 'down' ? 'cost extra' : 'even'}${b.timed ? ` · ${timeText(b.minutes.value)}` : ''}`}</Text>
+        <Text dimColor>{`${b.usd.low === b.usd.high ? 'no range yet' : `range ${signed(b.usd.low)} to ${signed(b.usd.high)}`} · ${b.routed} tasks`}</Text>
+      </Box>,
+    ) : null
+
+    const top = b ? Math.max(0.005, ...balanceParts(b).map(p => Math.abs(p[2]))) : 1
+    const parts = b ? section('parts',
+      head('parts', 'What it is made of', 'Cheaper picks: tasks sent to a smaller model or a lower effort. Higher picks: hard tasks the router raised; they cost more and keep the quality. Re-work: the cost of trying again after a failed answer. Classifier: the small model that sorts every prompt. A bar right of the middle saves, left of it costs.'),
+      ...balanceParts(b).map(([k, label, v]) => (
+        <Box key={`part-${k}`} flexDirection="column">
+          {row(`part-row-${k}`, label, signedOr0(v), { dim: money(v) === 'none', color: MONEY_COLOR[money(v)] })}
+          {term
+            ? <Text dimColor={money(v) === 'none'} color={MONEY_COLOR[money(v)]}>{splitBarText(v / top, cells)}</Text>
+            : <Svg source={splitBarSvg(v / top, MONEY_COLOR[money(v)] ?? TONES.idle[0], px, 8)} alt={`${label}: ${signedOr0(v)}`} width={px} height={8} />}
+        </Box>
+      )),
+    ) : null
+
+    const sure = b ? section('sure',
+      head('sure', 'How sure it is', `Measured: compared with a control task. Estimated: re-priced from the tokens, less exact. Control: tasks the router left alone (${shown('holdoutPct', cfg.holdoutPct)} of the prompts it would move, option holdoutPct), so there is something to compare with. Accuracy: the share of tasks that did not fail, with its 95 % range.`),
+      <Box key="sure-rows" flexDirection="column">
+        {row('measured', 'Measured', String(b.measured))}
+        {row('estimated', 'Estimated', String(b.estimated))}
+        {row('control', 'Control (holdout)', String(b.control))}
+        {row('accuracy', 'Accuracy', accuracyText(b), { bold: true })}
+      </Box>,
+      <Text key="sample" dimColor>{sampleNote(b)}</Text>,
+    ) : null
+
+    // The table column by column, so each column lines up on every surface.
+    const t = b ? modelTable(b) : []
+    const table = t.length > 1 ? section('models',
+      head('models', 'By model', 'Where the router sent the tasks, what one cost and how many had to be redone. Full table with the control tasks and the minutes: /router stats.'),
+      <Box key="model-table" flexDirection="row" gap={2}>
+        {[0, 1, 3, 4].map(i => (
+          <Box key={`col-${i}`} flexDirection="column" alignItems={i ? 'flex-end' : 'flex-start'}>
+            {t.map((r, j) => <Text key={`cell-${i}-${j}`} dimColor={j === 0}>{j === 0 ? r[i]!.toLowerCase() : r[i]!}</Text>)}
+          </Box>
+        ))}
+      </Box>,
+    ) : null
+
+    const reference = s && !isReference(c) ? section('reference',
+      head('reference', `Vs. always ${REFERENCE.model} ${REFERENCE.effort}`, `What the work would have cost with every prompt on ${REFERENCE.model} ${REFERENCE.effort}, less what it cost. Plus: the router is cheaper than that fixed choice.`),
+      <Text key="ref-v" bold color={MONEY_COLOR[money(s.vsReferenceUsd)]}>{signed(s.vsReferenceUsd)}</Text>,
+    ) : null
+
+    // This chat: its context against the new-session rule, the last call and the days.
+    const where = d.last ? WHERE_LABEL[d.last.where] : null
+    const name = (m: string, l: Level | '') => `${knownModel(m) ? MODEL_NAMES[knownModel(m) as Model] : m || '?'} · ${l ? NAMES[l] : '?'}`
+    const age = d.last ? d.now - d.last.ts : Infinity
+    const from = d.last?.from?.model ? name(d.last.from.model, d.last.from.effort) : ''
+    const to = d.last ? name(d.last.model, d.last.effort) : ''
+    const ctxLine = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'Context not known yet'
+    const atLine = d.at ? `New session at ${d.at}%` : 'New-session rule off'
+    const chat = section('chat',
+      head('chat', 'This chat'),
+      <Box key="ctx" flexDirection="column">
+        <Text bold>{d.header}</Text>
+        {term
+          ? <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
+          : <Svg source={contextBarSvg(d.share, d.at, px, 10)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} width={px} height={16} />}
+        <Text dimColor>{`${ctxLine} · ${atLine}`}</Text>
+      </Box>,
+      <Box key="last" flexDirection="column">
+        <Text dimColor>{d.last ? `${age < 60_000 ? '● ' : ''}Last decision · ${ago(age)}` : 'Last decision'}</Text>
+        {d.last && where ? (
+          <Box flexDirection="column">
+            <Text bold>{`${where.glyph} ${where.text}${d.last.outcome === 'asked' ? ' · asked you' : ''}`}</Text>
+            <Text>{from && from !== to ? `${from} → ${to}` : to}</Text>
+            {d.last.why ? <Text dimColor>{`“${d.last.why}”`}</Text> : null}
+          </Box>
+        ) : (
+          <Text dimColor>No decision yet. The router's call on your next prompt shows here.</Text>
+        )}
+      </Box>,
+      d.savings ? (
+        <Box key="days" flexDirection="column">
+          {term
+            ? <Text color="claude">{sparkText(d.savings.days.map(x => x.balanceUsd))}</Text>
+            : <Svg source={sparkSvg(d.savings.days.map(x => x.balanceUsd), d.savings.days.map(x => `${x.day}: ${signed(x.balanceUsd)}`), px, 48)} alt={`Balance per day, last 14 days: ${d.savings.days.map(x => signed(x.balanceUsd)).join(', ')}`} width={px} height={48} />}
+          <Text dimColor>{`balance per day, 14 days${s ? ` · ${s.prompts} prompts · ${s.modelChanges} model changes · ${s.subagents} subagents · ${s.sessions} new sessions` : ''}`}</Text>
+        </Box>
+      ) : null,
+    )
+
+    // Every option with a set of values steps on a press; the text ones are fields (Enter saves).
+    const press = (k: Option | 'enabled') => async () => {
+      if (k === 'enabled') return setEnabled($, !enabled)
+      const vals = CHOICES.find(x => x.key === k)?.values
+      if (vals) await saveOption($, k, vals[(vals.indexOf(cfg[k]) + 1) % vals.length] ?? vals[0]!)
+    }
+    const [cm = 'first', ce = ''] = cfg.compareWith.split('-')
+    const toggles: { key: string; label: string; value: string; onPress: () => Promise<void> }[] = [
+      { key: 'enabled', label: 'Router', value: enabled ? 'on' : 'off', onPress: press('enabled') },
+      ...CHOICES.map(x => ({ key: x.key, label: LABELS[x.key], value: shown(x.key, String(cfg[x.key])), onPress: press(x.key) })),
+      { key: 'compareModel', label: LABELS.compareWith, value: cm, onPress: async () => saveOption($, 'compareWith', nextCompare('model')) },
+      ...(cm === 'first' ? [] : [{ key: 'compareEffort', label: `${LABELS.compareWith}: effort`, value: ce, onPress: async () => saveOption($, 'compareWith', nextCompare('effort')) }]),
+    ]
+    const settings = section('settings',
+      head('settings', 'Settings', 'A button steps to the next value; a field saves on Enter. Saved as /config saves them, so they hold for the next sessions. Control group: the share of prompts the router would move that keep their setting, to compare with. New session at: how full the context is when new work is offered as a new session. Compare with: what the old token re-pricing measures against (first: the chat\'s first model).'),
+      <Box key="toggles" flexDirection="column" gap={term ? 0 : 1}>
+        {toggles.map((x, i) => (term
+          ? <Button key={`toggle-${x.key}`} hotkey={i < 9 ? String(i + 1) : undefined} plain label={`${x.label}: ${x.value}`} onPress={x.onPress} />
+          : (
+            <Box key={`row-${x.key}`} flexDirection="row" justifyContent="space-between" alignItems="center">
+              <Text>{x.label}</Text>
+              <Button key={`toggle-${x.key}`} label={x.value} variant={x.key === 'enabled' && !enabled ? 'primary' : 'secondary'} onPress={x.onPress} />
+            </Box>
+          )))}
+      </Box>,
+      <Box key="texts" flexDirection="column" gap={term ? 0 : 1}>
+        {TEXT_OPTIONS.map(k => (
+          <Box key={`text-${k}`} flexDirection="column">
+            {term ? null : <Text dimColor>{LABELS[k]}</Text>}
+            <Input key={`edit-${k}`} label={term ? `${LABELS[k]}:` : undefined} value={String(cfg[k])} placeholder={k === 'language' ? 'auto' : 'empty'} submitLabel="save" onSubmit={(v: string) => saveOption($, k, v.trim())} />
+          </Box>
+        ))}
+      </Box>,
+      cfgNote ? <Text key="cfg-note" dimColor>{cfgNote}</Text> : null,
+    )
+
+    // The old bill from the token re-pricing, folded away: without and with the router, and the parts.
+    const perPrompt = s && s.prompts ? `$${(s.classifierUsd / s.prompts).toFixed(3)}` : '$0'
+    const legacyOpen = paneOpen.has('legacy')
+    const legacy = s ? section('legacy',
+      <Button key="more-legacy" plain label={`${legacyOpen ? '▾' : '▸'} Old token re-pricing (secondary)`} onPress={flip('legacy')} />,
+      legacyOpen ? (
+        <Box key="legacy-body" flexDirection="column" gap={1}>
+          <Text dimColor>The old comparison of the same work without and with the router, re-priced from the tokens. A rough guide only.</Text>
+          <Box flexDirection="column">
+            <Text dimColor>Balance</Text>
+            <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{signed(s.balanceUsd)}</Text>
+            <Text dimColor>{s.withoutUsd <= 0 ? 'No priced work in this period yet.' : `${money(s.balanceUsd) === 'up' ? 'saved' : money(s.balanceUsd) === 'down' ? 'lost' : 'even'} · ${Math.round(Math.abs(s.balancePct))} % of ${usd(s.withoutUsd)}, what the work would have cost ${c ? `on ${compareLabel(c)}` : 'without the router'}`}</Text>
+          </Box>
           <Box flexDirection="column">
             {row('without', 'Without the router', usd(s.withoutUsd))}
             {row('with', 'With the router', usd(s.actualUsd + s.classifierUsd))}
@@ -1018,233 +1202,35 @@ export const register: Register = (on, options) => {
           </Box>
           <Box flexDirection="column">
             <Text dimColor>Where the difference came from</Text>
-            {parts.map(([k, label, v]) => row(`part-${k}`, `  ${label}`, money(v) === 'none' ? '$0.00' : signed(v), { dim: money(v) === 'none', color: MONEY_COLOR[money(v)] }))}
-            {row('balance', c ? `Balance vs. ${compareLabel(c)}` : 'Balance', signed(s.balanceUsd), { bold: true, color: balanceColor })}
+            {([
+              ['cheaper', 'Cheaper model', s.savedUsd],
+              ['stronger', 'Stronger model', -s.extraUsd],
+              ['effort', 'Effort (estimate)', s.effortUsd],
+              ['classifier', 'Classifier', -s.classifierUsd],
+            ] as const).map(([k, label, v]) => row(`old-${k}`, `  ${label}`, signedOr0(v), { dim: money(v) === 'none', color: MONEY_COLOR[money(v)] }))}
           </Box>
           <Box flexDirection="column">
-            {row('accuracy', s.routed ? `Accuracy (estimate) · ${s.rework} re-work of ${s.routed} routed` : 'Accuracy (estimate)', s.accuracyPct === null ? '–' : `${Math.round(s.accuracyPct)} %`, { bold: true })}
-            {showReference ? row('reference', `Vs. always ${REFERENCE.model} ${REFERENCE.effort}`, signed(s.vsReferenceUsd), { color: MONEY_COLOR[money(s.vsReferenceUsd)] }) : null}
+            {row('old-accuracy', s.routed ? `Accuracy (estimate) · ${s.rework} re-work of ${s.routed} routed` : 'Accuracy (estimate)', s.accuracyPct === null ? '–' : `${Math.round(s.accuracyPct)} %`)}
             {row('perturn', s.pricedTurns ? `Cost per turn · ${s.pricedTurns} turns` : 'Cost per turn', usd(s.perTurnUsd), { dim: true })}
           </Box>
+          <Text dimColor>An estimate from list prices. Effort is a guess (output tokens weighted per level). Full table: /router stats.</Text>
         </Box>
-      )
-    }
-    // The balance per task against the control group: money and time first, then the parts, the
-    // accuracy and the models (both surfaces, stacked rows that fit a narrow pane).
-    const taskView = (Box: any, Text: any) => {
-      if (!b) return null
-      const t = modelTable(b)
-      return (
-        <Box flexDirection="column" gap={1}>
-          <Box flexDirection="column">
-            <Text dimColor>Per task, against the control group</Text>
-            <Text bold color={MONEY_COLOR[money(b.usd.value)]}>{`${isRough(b) ? '~' : ''}${signed(b.usd.value)} · ${b.timed ? timeText(b.minutes.value) : 'time not measured yet'}`}</Text>
-            <Text dimColor>{sampleNote(b)}</Text>
-          </Box>
-          <Box flexDirection="column">
-            {balanceParts(b).map(([k, label, v]) => (
-              <Box key={`task-${k}`} flexDirection="row" justifyContent="space-between">
-                <Text dimColor={money(v) === 'none'}>{`  ${label}`}</Text>
-                <Text dimColor={money(v) === 'none'} color={MONEY_COLOR[money(v)]}>{money(v) === 'none' ? '$0.00' : signed(v)}</Text>
-              </Box>
-            ))}
-            <Box flexDirection="row" justifyContent="space-between">
-              <Text>Accuracy</Text>
-              <Text bold>{accuracyText(b)}</Text>
-            </Box>
-          </Box>
-          {t.length > 1 ? (
-            <Box flexDirection="column">
-              {t.slice(1).map(r => (
-                <Text key={`model-${r[0]}`} dimColor>{`${r[0]}: ${r[1]} tasks, ${r[2]} control · ${r[3]}/task · re-work ${r[4]} · ${r[5]} min/task`}</Text>
-              ))}
-            </Box>
-          ) : null}
-        </Box>
-      )
-    }
-    const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
+      ) : null,
+    ) : null
 
-    if (e.surface === 'terminal') {
-      const { Box, Text, Button } = $.ui.resolve(e)
-      const cells = Math.max(8, Math.min(24, (e.props.bodyColumns ?? 40) - 8))
-      return (
-        <Box flexDirection="column" gap={1}>
-          <Box flexDirection="column">
-            <Text bold>{`Prompt Router · ${enabled ? 'on' : 'off'}`}</Text>
-            <Text>{d.header}</Text>
-            <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
-            <Text dimColor>{`${ctxLine} · ${atLine}`}</Text>
-          </Box>
-          <Box flexDirection="column">
-            <Text dimColor>{d.last ? `${age < 60_000 ? '● ' : ''}Last decision · ${ago(age)}` : 'Last decision'}</Text>
-            {d.last && where ? (
-              <Box flexDirection="column">
-                <Text bold>{`${where.glyph} ${where.text}${d.last.outcome === 'asked' ? ' (asked)' : ''}`}</Text>
-                <Text>{lastModel}</Text>
-                {d.last.why ? <Text dimColor>{d.last.why}</Text> : null}
-              </Box>
-            ) : (
-              <Text dimColor>No decision yet. The router's call on your next prompt shows here.</Text>
-            )}
-          </Box>
-          {d.savings && s ? (
-            <Box flexDirection="column" gap={1}>
-              <Box flexDirection="row" gap={1}>
-                <Text dimColor>Savings</Text>
-                {PERIODS.map(([k, label]) => (
-                  <Button key={`period-${k}`} plain label={k === panePeriod ? `[${label}]` : label} onPress={pickPeriod(k)} />
-                ))}
-              </Box>
-              <Box flexDirection="column">
-                <Text bold color={balanceColor}>{signed(s.balanceUsd)}</Text>
-                <Text dimColor>{verdict}</Text>
-              </Box>
-              {billView(Box, Text)}
-              {taskView(Box, Text)}
-              <Box flexDirection="column">
-                <Text color="claude">{sparkText(d.savings.days.map(x => x.balanceUsd))}</Text>
-                <Text dimColor>balance per day, last 14 days</Text>
-              </Box>
-              <Text dimColor>{activity}</Text>
-              <Text dimColor>{NOTE}</Text>
-            </Box>
-          ) : (
-            <Text dimColor>Stats are off (option stats).</Text>
-          )}
-          <Box flexDirection="column">
-            <Text dimColor>Switches</Text>
-            {switches.map((x, i) => (
-              <Button key={`toggle-${x.key}`} hotkey={String(i + 1)} plain label={`${x.label}: ${x.value}`} onPress={press(x.key)} />
-            ))}
-          </Box>
-        </Box>
-      )
-    }
-
-    const { Box, Text, Button, Svg } = $.ui.resolve(e)
-    const px = Math.max(220, Math.min(460, (e.props.bodyColumns ?? 40) * 7))
-    const accent = TONES[d.tone][0]
     return (
-      <Box flexDirection="column" gap={2} padding={1}>
-        <Box flexDirection="row" gap={2} alignItems="center">
-          <Svg source={ringSvg(d.share, d.at)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} width={104} height={104} isInteractive />
-          <Box flexDirection="column" gap={1}>
-            <Text dimColor>{`PROMPT ROUTER · ${enabled ? 'ON' : 'OFF'}`}</Text>
-            <Text bold>{d.header}</Text>
-            <Text dimColor>{ctxLine}</Text>
-            <Text color={accent}>{atLine}</Text>
-          </Box>
-        </Box>
-        <Box flexDirection="column" gap={1} borderStyle="round" padding={1}>
-          <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-            <Box flexDirection="row" gap={1} alignItems="center">
-              {d.last ? <Svg source={pulseSvg(age)} alt={age < 60_000 ? 'Fresh decision' : 'Decision'} width={18} height={18} isInteractive /> : null}
-              <Text dimColor>LAST DECISION</Text>
-            </Box>
-            {d.last ? <Text dimColor>{ago(age)}</Text> : null}
-          </Box>
-          {d.last && where ? (
-            <Box flexDirection="column" gap={1}>
-              <Text bold>{`${where.glyph}  ${where.text}`}</Text>
-              <Text>{`${lastModel}${d.last.outcome === 'asked' ? ' · asked you' : ''}`}</Text>
-              {d.last.why ? <Text dimColor>{`“${d.last.why}”`}</Text> : null}
-            </Box>
-          ) : (
-            <Text dimColor>No decision yet. The router's call on your next prompt shows here.</Text>
-          )}
-        </Box>
-        {d.savings && s ? (
-          <Box flexDirection="column" gap={2} borderStyle="round" padding={1}>
-            {/* Title, then the period switch on its own row: three short buttons always fit. */}
-            <Box flexDirection="column" gap={1}>
-              <Text dimColor>SAVINGS</Text>
-              <Box flexDirection="row" gap={1}>
-                {PERIODS.map(([k, label]) => (
-                  <Button key={`period-${k}`} label={label} variant={k === panePeriod ? 'primary' : 'secondary'} onPress={pickPeriod(k)} />
-                ))}
-              </Box>
-            </Box>
-            {/* The one number to read first. */}
-            <Box flexDirection="column">
-              <Text dimColor>Balance</Text>
-              <Text bold color={balanceColor}>{signed(s.balanceUsd)}</Text>
-              <Text dimColor>{verdict}</Text>
-            </Box>
-            {/* Everything below is stacked, label above value, so nothing wraps into its neighbour. */}
-            <Box flexDirection="column" gap={1}>
-              <Box flexDirection="column">
-                <Text dimColor>Without the router</Text>
-                <Text bold>{usd(s.withoutUsd)}</Text>
-              </Box>
-              <Box flexDirection="column">
-                <Text dimColor>With the router</Text>
-                <Text bold>{usd(s.actualUsd + s.classifierUsd)}</Text>
-                <Text dimColor>{`the work ${usd(s.actualUsd)} + classifier ${usd(s.classifierUsd)}`}</Text>
-              </Box>
-            </Box>
-            {(() => {
-              // The parts add up to the balance: a bar scaled to the largest one, then its signed value.
-              const parts = [
-                ['cheaper', 'Cheaper model', s.savedUsd],
-                ['stronger', 'Stronger model', -s.extraUsd],
-                ['effort', 'Effort (estimate)', s.effortUsd],
-                ['classifier', 'Classifier', -s.classifierUsd],
-              ] as const
-              const top = Math.max(0.005, ...parts.map(p => Math.abs(p[2])))
-              const bar = Math.max(80, px - 110)
-              return (
-                <Box flexDirection="column" gap={1}>
-                  <Text dimColor>Where the difference came from</Text>
-                  {parts.map(([k, label, v]) => {
-                    const m = money(v)
-                    const text = m === 'none' ? '$0.00' : signed(v)
-                    return (
-                      <Box key={`part-${k}`} flexDirection="column">
-                        <Text>{label}</Text>
-                        <Box flexDirection="row" gap={1} alignItems="center">
-                          <Svg source={partBarSvg(Math.abs(v) / top, MONEY_COLOR[m] ?? TONES.idle[0], bar, 8)} alt={`${label}: ${text}`} width={bar} height={8} />
-                          <Text bold={m !== 'none'} dimColor={m === 'none'} color={MONEY_COLOR[m]}>{text}</Text>
-                        </Box>
-                        {k === 'classifier' ? <Text dimColor>{s.prompts ? `${s.prompts} prompts × ${perPrompt} per prompt` : 'No prompts classified yet'}</Text> : null}
-                      </Box>
-                    )
-                  })}
-                </Box>
-              )
-            })()}
-            {taskView(Box, Text)}
-            <Box flexDirection="column" gap={1}>
-              {showReference ? (
-                <Box flexDirection="column">
-                  <Text dimColor>{`Vs. always ${REFERENCE.model} ${REFERENCE.effort}`}</Text>
-                  <Text bold color={MONEY_COLOR[money(s.vsReferenceUsd)]}>{signed(s.vsReferenceUsd)}</Text>
-                </Box>
-              ) : null}
-              <Box flexDirection="column">
-                <Text dimColor>{s.pricedTurns ? `Cost per turn · ${s.pricedTurns} turns` : 'Cost per turn'}</Text>
-                <Text>{usd(s.perTurnUsd)}</Text>
-              </Box>
-            </Box>
-            <Box flexDirection="column" gap={1}>
-              <Svg source={sparkSvg(d.savings.days.map(x => x.balanceUsd), d.savings.days.map(x => `${x.day}: ${signed(x.balanceUsd)}`), px, 64)} alt={`Balance per day, last 14 days: ${d.savings.days.map(x => signed(x.balanceUsd)).join(', ')}`} width={px} height={64} isInteractive />
-              <Text dimColor>Balance per day, last 14 days</Text>
-            </Box>
-            <Text dimColor>{activity}</Text>
-            <Text dimColor>{NOTE}</Text>
-          </Box>
-        ) : (
-          <Text dimColor>Stats are off (option stats).</Text>
-        )}
-        <Box flexDirection="column" gap={1}>
-          <Text dimColor>SWITCHES</Text>
-          {switches.map(x => (
-            <Box flexDirection="row" justifyContent="space-between" alignItems="center">
-              <Text>{x.label}</Text>
-              <Button key={`toggle-${x.key}`} label={x.value} variant={x.key === 'enabled' && !enabled ? 'primary' : 'secondary'} onPress={press(x.key)} />
-            </Box>
-          ))}
-        </Box>
+      <Box flexDirection="column" gap={term ? 1 : 2} padding={term ? 0 : 1}>
+        <Text dimColor>{`${term ? 'Prompt Router' : 'PROMPT ROUTER'} · ${enabled ? 'on' : 'off'}`}</Text>
+        {tabs}
+        {hero}
+        {parts}
+        {sure}
+        {table}
+        {reference}
+        {chat}
+        {d.savings ? null : <Text dimColor>Stats are off (option Savings stats).</Text>}
+        {settings}
+        {legacy}
       </Box>
     )
   })

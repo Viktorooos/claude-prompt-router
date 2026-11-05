@@ -23,73 +23,40 @@ export function tone(share: number | null, at: number): Tone {
   return share >= limit * (at ? 0.8 : 0.66) ? 'near' : 'calm'
 }
 
-// A part of the savings bill as a bar: filled to its share (0–1) of the largest part, over a faint
-// track, growing in on each draw.
-export function partBarSvg(share: number, color: string, width = 160, height = 8): string {
-  const w = n(Math.max(share > 0 ? 2 : 0, Math.min(1, share) * width))
-  const r = n(height / 2)
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img"><style>
-.t{fill:#8a8f98;opacity:.18}.b{fill:${color};transform-origin:0 0;animation:grow .8s cubic-bezier(.65,0,.35,1) both}
-@keyframes grow{from{transform:scaleX(0)}}
-${STILL}
-</style><rect class="t" width="${width}" height="${height}" rx="${r}"/>${w ? `<rect class="b" width="${w}" height="${height}" rx="${r}"/>` : ''}</svg>`
-}
-
 // The terminal's colour for a tone.
 export const TONE_THEME: Record<Tone, 'success' | 'warning' | 'error' | 'inactive'> = { calm: 'success', near: 'warning', over: 'error', idle: 'inactive' }
 
-const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif"
 const STILL = '@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}'
 const n = (v: number) => Number(v.toFixed(2))
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-// The context ring: fills to the chat's share on every draw, a tick at the threshold, the colour
-// warming as it nears it, and a glow once past it that settles on its own (no endless loop).
-export function ringSvg(share: number | null, at: number, size = 104): string {
-  const c = 52
-  const r = 40
-  const len = 2 * Math.PI * r
+// The chat's context as a flat bar: filled to its share in the tone's colour, a tick at the threshold.
+// Still (no animation), so a redraw does not replay anything.
+export function contextBarSvg(share: number | null, at: number, width = 280, height = 10): string {
   const p = share == null ? 0 : Math.min(1, Math.max(0, share / 100))
-  const t = tone(share, at)
-  const [a, b] = TONES[t]
-  const off = n(len * (1 - p))
-  const angle = (at / 100) * 2 * Math.PI - Math.PI / 2
-  const tick = at
-    ? `<line class="k" x1="${n(c + Math.cos(angle) * 30)}" y1="${n(c + Math.sin(angle) * 30)}" x2="${n(c + Math.cos(angle) * 50)}" y2="${n(c + Math.sin(angle) * 50)}"/>`
-    : ''
+  const [a, b] = TONES[tone(share, at)]
+  const r = n(height / 2)
+  const w = n(Math.max(p > 0 ? height : 0, p * width))
+  const x = n((at / 100) * width)
   const label = share == null ? '–' : `${Math.round(share)}%`
-  const glow = t === 'over' ? `<circle class="a g" cx="${c}" cy="${c}" r="${r}" transform="rotate(-90 ${c} ${c})" filter="url(#b)"/>` : ''
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 104 104" role="img"><title>Context ${label}${at ? `, new session at ${at}%` : ''}</title><style>
-.t{fill:none;stroke:#8a8f98;stroke-opacity:.18;stroke-width:10}
-.a{fill:none;stroke:url(#s);stroke-width:10;stroke-linecap:round;stroke-dasharray:${n(len)};stroke-dashoffset:${off};animation:fill 1.3s cubic-bezier(.22,1,.36,1) both}
-.g{stroke-width:14;opacity:.35;animation:fill 1.3s cubic-bezier(.22,1,.36,1) both,glow 1.2s 1.3s ease-out both}
-.k{stroke:#8a8f98;stroke-width:3;stroke-linecap:round;opacity:.9;animation:rise .5s .9s ease-out both}
-.v{font:650 22px ${FONT};fill:#1d1f23;text-anchor:middle;letter-spacing:-.02em;animation:rise .6s .25s ease-out both}
-.u{font:600 7.5px ${FONT};fill:#8a8f98;text-anchor:middle;letter-spacing:.14em;animation:rise .6s .4s ease-out both}
-@media (prefers-color-scheme: dark){.v{fill:#f2f3f5}.t{stroke-opacity:.26}}
-@keyframes fill{from{stroke-dashoffset:${n(len)}}}
-@keyframes glow{from{opacity:.12}to{opacity:.45}}
-@keyframes rise{from{opacity:0;transform:translateY(3px)}}
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height + 6}" viewBox="0 0 ${width} ${height + 6}" role="img"><title>Context ${label}${at ? `, new session at ${at}%` : ''}</title><style>
+.t{fill:#8a8f98;opacity:.18}.k{stroke:#1d1f23;stroke-width:2;stroke-linecap:round;opacity:.55}
+@media (prefers-color-scheme: dark){.t{opacity:.26}.k{stroke:#f2f3f5}}
 ${STILL}
-</style><defs><linearGradient id="s" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient><filter id="b" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3"/></filter></defs>
-<circle class="t" cx="${c}" cy="${c}" r="${r}"/>${glow}${p > 0 ? `<circle class="a" cx="${c}" cy="${c}" r="${r}" transform="rotate(-90 ${c} ${c})"/>` : ''}${tick}
-<text class="v" x="${c}" y="${c + 4}">${label}</text><text class="u" x="${c}" y="${c + 18}">CONTEXT</text></svg>`
+</style><defs><linearGradient id="s" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
+<rect class="t" y="3" width="${width}" height="${height}" rx="${r}"/>${w ? `<rect y="3" width="${w}" height="${height}" rx="${r}" fill="url(#s)"/>` : ''}${at ? `<line class="k" x1="${x}" y1="1" x2="${x}" y2="${height + 5}"/>` : ''}</svg>`
 }
 
-// A dot beside the last decision: a soft ping while it is fresh (under a minute), still after.
-export function pulseSvg(ageMs: number, color: string = ACCENT, size = 18): string {
-  const fresh = ageMs >= 0 && ageMs < 60_000
-  // A fixed count, not one that shrinks with the age: the drawing then stays the same between draws,
-  // so the ping does not restart on every redraw. It stops after its two pulses; the dot stays.
-  const times = 2
-  const dot = fresh ? color : '#8a8f98'
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 18 18" role="img"><title>${fresh ? 'Fresh decision' : 'Decision'}</title><style>
-.w{fill:${dot};transform-origin:9px 9px;opacity:0;animation:ping 1.8s cubic-bezier(0,.55,.45,1) ${times}}
-.c{fill:${dot};animation:pop .45s cubic-bezier(.34,1.56,.64,1) both;transform-origin:9px 9px}
-@keyframes ping{from{opacity:.55;transform:scale(1)}to{opacity:0;transform:scale(2.2)}}
-@keyframes pop{from{transform:scale(0)}}
+// A part of the balance as a bar from the middle: right for a saving, left for a cost, its length
+// the part's share (−1…1) of the largest part. Still.
+export function splitBarSvg(share: number, color: string, width = 160, height = 8): string {
+  const mid = n(width / 2)
+  const len = n(Math.min(1, Math.abs(share)) * mid)
+  const x = share < 0 ? n(mid - len) : mid
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img"><style>
+.t{fill:#8a8f98;opacity:.14}.m{stroke:#8a8f98;stroke-width:1;opacity:.6}
 ${STILL}
-</style>${fresh ? '<circle class="w" cx="9" cy="9" r="4"/>' : ''}<circle class="c" cx="9" cy="9" r="4"/></svg>`
+</style><rect class="t" width="${width}" height="${height}" rx="${n(height / 2)}"/>${len >= 0.5 ? `<rect x="${x}" width="${len}" height="${height}" rx="2" fill="${color}"/>` : ''}<line class="m" x1="${mid}" y1="0" x2="${mid}" y2="${height}"/></svg>`
 }
 
 // The net saving per day: a line that draws itself in, a soft area under it, the last day's dot,
@@ -142,6 +109,15 @@ export function barText(share: number | null, at: number, cells = 20): string {
     out += i < filled ? '▰' : '▱'
   }
   return out
+}
+
+// The terminal's split bar: cells left of │ for a cost, right of it for a saving.
+export function splitBarText(share: number, cells = 16): string {
+  const half = Math.max(1, Math.floor(cells / 2))
+  const k = Math.round(Math.min(1, Math.abs(share)) * half)
+  const left = share < 0 ? '·'.repeat(half - k) + '█'.repeat(k) : '·'.repeat(half)
+  const right = share > 0 ? '█'.repeat(k) + '·'.repeat(half - k) : '·'.repeat(half)
+  return `${left}│${right}`
 }
 
 const BLOCKS = '▁▂▃▄▅▆▇█'

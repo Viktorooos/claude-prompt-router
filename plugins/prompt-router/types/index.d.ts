@@ -7,6 +7,8 @@ export type LastDecision = {
   model: string
   effort: Level | ''
   why: string
+  /** The model and effort the prompt had before the call; absent on calls noted by older versions. */
+  from?: { model: string; effort: Level | '' }
   ts: number
   /** The chat's context when the call was made; null when the engine did not say. */
   tokens: number | null

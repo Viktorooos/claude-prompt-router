@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, ringSvg, sparkSvg, sparkText, tone } from '../core/panel.ts'
+import { ago, barText, contextBarSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { OPTIONS, SWITCHES } from '../core/router.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -75,19 +76,20 @@ test('the pane draws on every surface: the context, the model and effort, the sw
     expect(await ui.find({ type: 'Button', key: 'toggle-effortDetection' })).toBeDefined()
     expect(await ui.find({ type: 'Button', key: 'toggle-newSessionAt' })).toBeDefined()
     if (surface === 'terminal') {
-      // No Svg on the terminal: the ring is a bar with the threshold marked.
+      // No Svg on the terminal: the context is a bar with the threshold marked.
       expect(await ui.find({ type: 'Svg' })).toBeUndefined()
       expect((await ui.find({ type: 'Text', text: /▰/ }))?.text).toMatch(/▰+▱*│▱+ 47%/)
     } else {
-      const ring = await ui.find({ type: 'Svg' })
-      expect(ring).toBeDefined()
-      expect(JSON.stringify(ring)).toMatch(/47%/)
+      // The context bar (no ring any more), its share in the title.
+      const bar = (await ui.findAll({ type: 'Svg' })).find((x: any) => /Context 47%/.test(JSON.stringify(x)))
+      expect(bar).toBeDefined()
+      expect(JSON.stringify(bar)).toMatch(/new session at 50%/)
     }
     await ui.unmount()
   }
 })
 
-test('the last decision shows where, model, effort and why, and pulses while fresh', async ($: any, on: any) => {
+test('the last decision shows where, model, effort and why, and a dot while fresh', async ($: any, on: any) => {
   engine(on, { now: 10 * HOUR })
   await start($)
   await $.prompt.submit({ text: 'add a settings screen to the admin app', wait: false, origin: { kind: 'composer' } })
@@ -97,29 +99,35 @@ test('the last decision shows where, model, effort and why, and pulses while fre
     expect(await ui.find({ type: 'Text', text: /Sonnet · Medium/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /unrelated feature/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /just now/ })).toBeDefined()
-    if (surface === 'desktop') {
-      const svgs = JSON.stringify(await ui.findAll({ type: 'Svg' }))
-      expect(svgs).toMatch(/@keyframes ping/)
-    }
+    // Fresh: a dot before the title (the pulse is gone, the design draws nothing that moves on its own).
+    expect(await ui.find({ type: 'Text', text: /^● Last decision · just now/ })).toBeDefined()
+    // What it had before → what the router picked.
+    expect(await ui.find({ type: 'Text', text: / → Sonnet · Medium$/ })).toBeDefined()
     await ui.unmount()
   }
 })
 
-test('savings: the bill for the picked period (without, with, where the difference came from) and a 14-day sparkline', async ($: any, on: any) => {
+test('savings: the old bill for the picked period, folded away (without, with, where the difference came from), and a 14-day sparkline', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   engine(on, { now, log: [TURN(now - HOUR), TURN(now - 3 * 86_400_000)].join('\n') })
   await start($)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
+  // Folded by default; its button opens it.
+  expect(await ui.find({ type: 'Text', text: /Without the router/ })).toBeUndefined()
+  await ui.press({ key: 'more-legacy' })
+  await ui.unmount()
+  const open = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const texts = (await open.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
   expect(texts).toMatch(/Without the router\n\$\d+\.\d\d/)
   expect(texts).toMatch(/With the router\n\$\d+\.\d\d/)
   expect(texts).toMatch(/Where the difference came from/)
   expect(texts).toMatch(/Balance\n\+\$\d+\.\d\d/)
   // 7 days by default; Today, 7 days and Total are buttons, the picked one primary.
-  expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/pathLength/)
-  expect(JSON.stringify(await ui.find({ type: 'Button', key: 'period-week' }))).toMatch(/"variant":"primary"/)
-  await ui.press({ key: 'period-today' })
-  await ui.unmount()
+  expect(JSON.stringify(await open.findAll({ type: 'Svg' }))).toMatch(/pathLength/)
+  expect(JSON.stringify(await open.find({ type: 'Button', key: 'period-week' }))).toMatch(/"variant":"primary"/)
+  await open.press({ key: 'period-today' })
+  await open.press({ key: 'more-legacy' })
+  await open.unmount()
   const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(JSON.stringify(await again.find({ type: 'Button', key: 'period-today' }))).toMatch(/"variant":"primary"/)
   expect(JSON.stringify(await again.find({ type: 'Button', key: 'period-week' }))).not.toMatch(/"variant":"primary"/)
@@ -146,11 +154,15 @@ test('savings: the balance per task against the control group, with its parts, a
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
-    expect(texts).toMatch(/Per task, against the control group\n~\+\$2\.00 · 2 min saved/)
+    expect(texts).toMatch(/Router balance\n~\+\$2\.00\nsaved · 2 min saved\n(no range yet|range [^\n]+) · 1 tasks/i)
     expect(texts).toMatch(/1 routed tasks \(1 against the control group\) · 5 control tasks · rough estimate/)
     expect(texts).toMatch(/Cheaper picks\n\+\$2\.00/)
     expect(texts).toMatch(/Accuracy\n100 % \(95 %: 21–100 %\)/)
-    expect(texts).toMatch(/haiku: 1 tasks, 5 control · \$1\.00\/task · re-work 0 % · 1\.0 min\/task/)
+    expect(texts).toMatch(/Measured\n1\nEstimated\n0\nControl \(holdout\)\n5/)
+    // The table column by column: model, tasks, $/task, re-work.
+    expect(texts).toMatch(/model\nhaiku\ntasks\n1\n\$\/task\n\$1\.00\nre-work\n0 %/)
+    if (surface === 'terminal') expect(texts).toMatch(/Cheaper picks\n\+\$2\.00\n·+│█+/)
+    else expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/Cheaper picks: \+\$2\.00/)
     await ui.unmount()
   }
 })
@@ -171,6 +183,100 @@ test('a switch press saves the option the way /config does, and the pane shows i
   // /router reads the same options.
   const status = await $.command.run({ command: 'router', args: '' })
   expect(String(status.text)).toMatch(/effortDetection: auto \(set\)/)
+})
+
+test('settings: every option can be changed in the pane', async ($: any, on: any) => {
+  engine(on)
+  await start($)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    for (const key of OPTIONS) {
+      const o = { options: key in SWITCHES || key === 'classifier' }
+      if (key === 'compareWith') {
+        expect(await ui.find({ type: 'Button', key: 'toggle-compareModel' })).toBeDefined()
+        expect(await ui.find({ type: 'Button', key: 'toggle-compareEffort' })).toBeDefined()
+      } else if (o.options) expect(await ui.find({ type: 'Button', key: `toggle-${key}` })).toBeDefined()
+      else expect(await ui.find({ type: 'Input', key: `edit-${key}` })).toBeDefined()
+    }
+    await ui.unmount()
+  }
+})
+
+test('settings: a press steps through the values, numbers from low to high', async ($: any, on: any) => {
+  const seen = engine(on)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Button', key: 'toggle-holdoutPct' }))?.text).toMatch(/10 %/)
+  await ui.press({ key: 'toggle-holdoutPct' })
+  await ui.press({ key: 'toggle-holdoutPct' })
+  await ui.press({ key: 'toggle-classifier' })
+  await ui.press({ key: 'toggle-subagentSuggestions' })
+  expect(seen.sets).toEqual([
+    { key: 'prompt-router.holdoutPct', value: '20' },
+    { key: 'prompt-router.holdoutPct', value: '0' },
+    { key: 'prompt-router.classifier', value: 'haiku' },
+    { key: 'prompt-router.subagentSuggestions', value: 'auto' },
+  ])
+  await ui.unmount()
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await again.find({ type: 'Button', key: 'toggle-holdoutPct' }))?.text).toMatch(/off/)
+  expect((await again.find({ type: 'Button', key: 'toggle-classifier' }))?.text).toMatch(/haiku/)
+  await again.unmount()
+})
+
+test('settings: compareWith is a model and an effort; first has no effort', async ($: any, on: any) => {
+  const seen = engine(on)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Button', key: 'toggle-compareModel' }))?.text).toMatch(/opus/)
+  await ui.press({ key: 'toggle-compareModel' })
+  await ui.press({ key: 'toggle-compareEffort' })
+  expect(seen.sets).toEqual([{ key: 'prompt-router.compareWith', value: 'haiku-medium' }, { key: 'prompt-router.compareWith', value: 'haiku-high' }])
+  for (let i = 0; i < 3; i++) await ui.press({ key: 'toggle-compareModel' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'first' })
+  await ui.unmount()
+  const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await again.find({ type: 'Button', key: 'toggle-compareModel' }))?.text).toMatch(/first/)
+  expect(await again.find({ type: 'Button', key: 'toggle-compareEffort' })).toBeUndefined()
+  // From first, the next model comes back at medium.
+  await again.press({ key: 'toggle-compareModel' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'opus-medium' })
+  await again.unmount()
+})
+
+test('settings: a text option is a field that saves on Enter', async ($: any, on: any) => {
+  const seen = engine(on)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.input({ key: 'edit-project', text: '  a React web app ' })
+  expect(seen.sets).toEqual([{ key: 'prompt-router.project', value: 'a React web app' }])
+  await ui.unmount()
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(JSON.stringify(await again.find({ type: 'Input', key: 'edit-project' }))).toMatch(/a React web app/)
+  await again.unmount()
+  expect(String((await $.command.run({ command: 'router', args: '' })).text)).toMatch(/project: "a React web app" \(set\)/)
+})
+
+test('a section\'s "?" opens its explanation and closes it again', async ($: any, on: any) => {
+  engine(on)
+  await start($)
+  const HELP = { type: 'Text', text: /^Measured: compared with a control task/ }
+  const mount = () => $.ui.mount({ ...PANE, surface: 'desktop' })
+  const shut = await mount()
+  expect(await shut.find(HELP)).toBeUndefined()
+  await shut.press({ key: 'help-sure' })
+  await shut.unmount()
+  const opened = await mount()
+  expect(await opened.find(HELP)).toBeDefined()
+  expect((await opened.find({ type: 'Button', key: 'help-sure' }))?.text).toBe('×')
+  await opened.press({ key: 'help-sure' })
+  await opened.unmount()
+  const ui = await mount()
+  expect(await ui.find(HELP)).toBeUndefined()
+  // The period tabs come first, above the balance.
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text)
+  expect(texts.indexOf('ROUTER BALANCE')).toBeLessThan(texts.indexOf('THIS CHAT'))
+  await ui.unmount()
 })
 
 test('the router switch turns the router off and on as /router off and /router on do', async ($: any, on: any) => {
@@ -201,14 +307,23 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(sparkText([0, 1, 2, 4])).toBe('▁▃▅█')
   expect(sparkText([0, 0])).toBe('▁▁')
   expect([ago(3_000), ago(45_000), ago(5 * 60_000), ago(3 * HOUR), ago(50 * HOUR)]).toEqual(['just now', '45 s ago', '5 min ago', '3 h ago', '2 d ago'])
-  const ring = ringSvg(47, 50)
+  expect(splitBarText(0.5, 8)).toBe('····│██··')
+  expect(splitBarText(-1, 8)).toBe('████│····')
+  expect(splitBarText(0, 4)).toBe('··│··')
+  const ring = contextBarSvg(47, 50)
   expect(ring).toMatch(/^<svg [^>]*xmlns="http:\/\/www.w3.org\/2000\/svg"/)
   expect(ring).toMatch(/prefers-reduced-motion/)
   expect(ring).toMatch(/prefers-color-scheme: ?dark/)
   expect(ring).not.toMatch(/<script|on\w+=/)
+  expect(ring).toMatch(/<title>Context 47%, new session at 50%<\/title>/)
+  // Still: nothing replays on a redraw.
+  expect(ring).not.toMatch(/@keyframes/)
+  const left = splitBarSvg(-0.5, '#e0483f', 100, 8)
+  expect(left).toMatch(/<rect x="25" width="25" [^>]*fill="#e0483f"/)
+  expect(left).not.toMatch(/@keyframes|<script|on\w+=/)
   const spark = sparkSvg([0, 0.1, -0.05, 0.3], ['a', 'b', 'c', 'd'])
   expect(spark).toMatch(/pathLength="1"/)
   expect(spark).toMatch(/<title>d<\/title>/)
-  for (const s of [ring, spark]) expect(s.length).toBeLessThan(20_000)
+  for (const s of [ring, left, spark]) expect(s.length).toBeLessThan(20_000)
 })
 

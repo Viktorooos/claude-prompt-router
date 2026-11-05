@@ -56,9 +56,12 @@ export const SWITCHES = {
 
 export type Switch = keyof typeof SWITCHES
 
+// The classifier models; the first is the default.
+export const CLASSIFIERS = ['sonnet', 'haiku', 'opus'] as const
+
 type Switches = { [K in Switch]: (typeof SWITCHES)[K][number] }
 
-export type Config = { project: string; rules: string; language: string; classifier: 'sonnet' | 'haiku' | 'opus' } & Switches
+export type Config = { project: string; rules: string; language: string; classifier: (typeof CLASSIFIERS)[number] } & Switches
 
 export type Model = keyof typeof MODELS
 
@@ -302,7 +305,7 @@ export function toConfig(options: Record<string, unknown>): Config {
     project: str(options.project, ''),
     rules: str(options.rules, ''),
     language: str(options.language, 'auto').trim() || 'auto',
-    classifier: options.classifier === 'haiku' || options.classifier === 'opus' ? options.classifier : 'sonnet',
+    classifier: CLASSIFIERS.find(c => c === options.classifier) ?? CLASSIFIERS[0],
     ...sw,
   }
 }
