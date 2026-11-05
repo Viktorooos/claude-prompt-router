@@ -154,3 +154,10 @@ export const WHERE_LABEL = {
 export function kTokens(t: number): string {
   return t >= 1_000_000 ? `${n(t / 1_000_000)}M` : `${Math.round(t / 1000)}k`
 }
+
+// A big bold figure (the pane's "You saved"), since Text has no font size.
+export function bigNumberSvg(text: string, color: string, width = 280, size = 36): string {
+  const h = Math.round(size * 1.25)
+  const safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}"><text x="0" y="${Math.round(size)}" font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="${size}" font-weight="700" fill="${color}">${safe}</text></svg>`
+}

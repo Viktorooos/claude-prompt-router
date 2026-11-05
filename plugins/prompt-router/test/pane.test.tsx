@@ -1,6 +1,5 @@
 import { expect, test } from 'claude-code/testing'
 import { ago, barText, contextBarSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
-import { OPTIONS, SWITCHES } from '../core/router.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -66,21 +65,23 @@ const HOUR = 3_600_000
 // A day with a saving: one Opus turn the router moved to Haiku.
 const TURN = (ts: number) => JSON.stringify({ kind: 'turn', ts, platform: 'claude-code', chat: 'c', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 100_000, output: 2_000, cacheRead: 0, cacheWrite: 0 } })
 
-test('the pane draws on every surface: the context, the model and effort, the switches', async ($: any, on: any) => {
+const textsOf = async (ui: any) => (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
+
+test('the pane draws on every surface: the context against the new-session share, the model and effort, the settings', async ($: any, on: any) => {
   engine(on)
   await start($)
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ type: 'Text', text: /Opus · Medium/ }))?.text).toMatch(/Opus · Medium/)
-    expect(await ui.find({ type: 'Text', text: /No decision yet/ })).toBeDefined()
-    expect(await ui.find({ type: 'Button', key: 'toggle-effortDetection' })).toBeDefined()
-    expect(await ui.find({ type: 'Button', key: 'toggle-newSessionAt' })).toBeDefined()
+    const texts = await textsOf(ui)
+    expect(texts).toMatch(/Opus · Medium\n94k of 200k tokens/)
+    expect(texts).toMatch(/47 % used · asks for a new session at 50 % \(100k\)/)
+    const key = (k: string, v: string) => (surface === 'terminal' ? `toggle-${k}` : `toggle-${k}-${v}`)
+    expect(await ui.find({ type: 'Button', key: key('effortDetection', 'ask') })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: key('newSessionAt', '50%') })).toBeDefined()
     if (surface === 'terminal') {
-      // No Svg on the terminal: the context is a bar with the threshold marked.
       expect(await ui.find({ type: 'Svg' })).toBeUndefined()
       expect((await ui.find({ type: 'Text', text: /▰/ }))?.text).toMatch(/▰+▱*│▱+ 47%/)
     } else {
-      // The context bar (no ring any more), its share in the title.
       const bar = (await ui.findAll({ type: 'Svg' })).find((x: any) => /Context 47%/.test(JSON.stringify(x)))
       expect(bar).toBeDefined()
       expect(JSON.stringify(bar)).toMatch(/new session at 50%/)
@@ -89,51 +90,38 @@ test('the pane draws on every surface: the context, the model and effort, the sw
   }
 })
 
-test('the last decision shows where, model, effort and why, and a dot while fresh', async ($: any, on: any) => {
-  engine(on, { now: 10 * HOUR })
+test('every setting says in one line what it does', async ($: any, on: any) => {
+  engine(on)
   await start($)
-  await $.prompt.submit({ text: 'add a settings screen to the admin app', wait: false, origin: { kind: 'composer' } })
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ type: 'Text', text: /New session/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Sonnet · Medium/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /unrelated feature/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /just now/ })).toBeDefined()
-    // Fresh: a dot before the title (the pulse is gone, the design draws nothing that moves on its own).
-    expect(await ui.find({ type: 'Text', text: /^● Last decision · just now/ })).toBeDefined()
-    // What it had before → what the router picked.
-    expect(await ui.find({ type: 'Text', text: / → Sonnet · Medium$/ })).toBeDefined()
-    await ui.unmount()
-  }
+  const texts = await textsOf(await $.ui.mount({ ...PANE, surface: 'desktop' }))
+  expect(texts).toMatch(/Router\nPicks the cheapest model/)
+  expect(texts).toMatch(/Model for a new chat\nOn your first prompt/)
+  expect(texts).toMatch(/Model mid-chat\nWhen a later prompt/)
+  expect(texts).toMatch(/Effort\nRaises or lowers/)
+  expect(texts).toMatch(/Subagents\nSends a side task/)
+  expect(texts).toMatch(/Start a new session at\nOnce the chat fills/)
+  expect(texts).toMatch(/Notifications\nShows a short note/)
 })
 
-test('savings: the old bill for the picked period, folded away (without, with, where the difference came from), and a 14-day sparkline', async ($: any, on: any) => {
+test('You saved comes first: the period\'s saving against compareWith, without and with the router', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   engine(on, { now, log: [TURN(now - HOUR), TURN(now - 3 * 86_400_000)].join('\n') })
   await start($)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  // Folded by default; its button opens it.
-  expect(await ui.find({ type: 'Text', text: /Without the router/ })).toBeUndefined()
-  await ui.press({ key: 'more-legacy' })
+  const texts = await textsOf(ui)
+  expect(texts).toMatch(/YOU SAVED\ncompared with running every prompt on Opus medium\nWithout router\n\$\d+\.\d\d\nWith router\n\$\d+\.\d\d/)
+  expect(texts.indexOf('YOU SAVED')).toBeLessThan(texts.indexOf('THIS CHAT'))
+  expect(texts.indexOf('THIS CHAT')).toBeLessThan(texts.indexOf('SETTINGS'))
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/You saved: \$\d+\.\d\d/)
+  // 7 days by default; the picked period is the primary button.
+  expect(JSON.stringify(await ui.find({ type: 'Button', key: 'period-week' }))).toMatch(/"variant":"primary"/)
+  await ui.press({ key: 'period-today' })
   await ui.unmount()
-  const open = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const texts = (await open.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
-  expect(texts).toMatch(/Without the router\n\$\d+\.\d\d/)
-  expect(texts).toMatch(/With the router\n\$\d+\.\d\d/)
-  expect(texts).toMatch(/Where the difference came from/)
-  expect(texts).toMatch(/Balance\n\+\$\d+\.\d\d/)
-  // 7 days by default; Today, 7 days and Total are buttons, the picked one primary.
-  expect(JSON.stringify(await open.findAll({ type: 'Svg' }))).toMatch(/pathLength/)
-  expect(JSON.stringify(await open.find({ type: 'Button', key: 'period-week' }))).toMatch(/"variant":"primary"/)
-  await open.press({ key: 'period-today' })
-  await open.press({ key: 'more-legacy' })
-  await open.unmount()
   const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(JSON.stringify(await again.find({ type: 'Button', key: 'period-today' }))).toMatch(/"variant":"primary"/)
-  expect(JSON.stringify(await again.find({ type: 'Button', key: 'period-week' }))).not.toMatch(/"variant":"primary"/)
   await again.unmount()
   const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await term.find({ type: 'Text', text: /[▁▂▃▄▅▆▇█]{14}/ })).toBeDefined()
+  expect(await textsOf(term)).toMatch(/You saved\n\$\d+\.\d\d\ncompared with/)
   await term.unmount()
 })
 
@@ -147,136 +135,100 @@ function controlLog(now: number) {
   return lines.join('\n')
 }
 
-test('savings: the balance per task against the control group, with its parts, accuracy and models', async ($: any, on: any) => {
+test('Details, folded: the strict balance, how often it was right, where the tasks went', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   engine(on, { now, log: controlLog(now) })
   await start($)
   for (const surface of ['desktop', 'terminal'] as const) {
+    const shut = await $.ui.mount({ ...PANE, surface })
+    expect(await textsOf(shut)).not.toMatch(/Router balance/)
+    await shut.press({ key: 'fold-details' })
+    await shut.unmount()
     const ui = await $.ui.mount({ ...PANE, surface })
-    const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
-    expect(texts).toMatch(/Router balance\n~\+\$2\.00\nsaved · 2 min saved\n(no range yet|range [^\n]+) · 1 tasks/i)
-    expect(texts).toMatch(/1 routed tasks \(1 against the control group\) · 5 control tasks · rough estimate/)
-    expect(texts).toMatch(/Cheaper picks\n\+\$2\.00/)
-    expect(texts).toMatch(/Accuracy\n100 % \(95 %: 21–100 %\)/)
-    expect(texts).toMatch(/Measured\n1\nEstimated\n0\nControl \(holdout\)\n5/)
-    // The table column by column: model, tasks, $/task, re-work.
-    expect(texts).toMatch(/model\nhaiku\ntasks\n1\n\$\/task\n\$1\.00\nre-work\n0 %/)
-    if (surface === 'terminal') expect(texts).toMatch(/Cheaper picks\n\+\$2\.00\n·+│█+/)
-    else expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/Cheaper picks: \+\$2\.00/)
+    const texts = await textsOf(ui)
+    expect(texts).toMatch(/Router balance \(rough\)\n\+\$2\.00/)
+    expect(texts).toMatch(/Decisions right\n100 % \(95 %: 21–100 %\)/)
+    expect(texts).toMatch(/Tasks\nhaiku 1/)
+    await ui.press({ key: 'fold-details' })
     await ui.unmount()
   }
 })
 
-test('a switch press saves the option the way /config does, and the pane shows it', async ($: any, on: any) => {
+test('a press on a value saves the option the way /config does, and the pane shows it chosen', async ($: any, on: any) => {
   const seen = engine(on)
   await start($)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.press({ key: 'toggle-effortDetection' })
-  expect(seen.sets).toEqual([{ key: 'prompt-router.effortDetection', value: 'auto' }])
-  await ui.press({ key: 'toggle-newSessionAt' })
-  expect(seen.sets[1]).toEqual({ key: 'prompt-router.newSessionAt', value: '60%' })
-  await ui.unmount()
-  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await again.find({ type: 'Button', key: 'toggle-effortDetection' }))?.text).toMatch(/auto/)
-  expect((await again.find({ type: 'Button', key: 'toggle-newSessionAt' }))?.text).toMatch(/60%/)
-  await again.unmount()
-  // /router reads the same options.
-  const status = await $.command.run({ command: 'router', args: '' })
-  expect(String(status.text)).toMatch(/effortDetection: auto \(set\)/)
-})
-
-test('settings: every option can be changed in the pane', async ($: any, on: any) => {
-  engine(on)
-  await start($)
-  for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    for (const key of OPTIONS) {
-      const o = { options: key in SWITCHES || key === 'classifier' }
-      if (key === 'compareWith') {
-        expect(await ui.find({ type: 'Button', key: 'toggle-compareModel' })).toBeDefined()
-        expect(await ui.find({ type: 'Button', key: 'toggle-compareEffort' })).toBeDefined()
-      } else if (o.options) expect(await ui.find({ type: 'Button', key: `toggle-${key}` })).toBeDefined()
-      else expect(await ui.find({ type: 'Input', key: `edit-${key}` })).toBeDefined()
-    }
-    await ui.unmount()
-  }
-})
-
-test('settings: a press steps through the values, numbers from low to high', async ($: any, on: any) => {
-  const seen = engine(on)
-  await start($)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Button', key: 'toggle-holdoutPct' }))?.text).toMatch(/10 %/)
-  await ui.press({ key: 'toggle-holdoutPct' })
-  await ui.press({ key: 'toggle-holdoutPct' })
-  await ui.press({ key: 'toggle-classifier' })
-  await ui.press({ key: 'toggle-subagentSuggestions' })
+  await ui.press({ key: 'toggle-effortDetection-auto' })
+  await ui.press({ key: 'toggle-newSessionAt-60%' })
+  await ui.press({ key: 'toggle-subagentSuggestions-off' })
   expect(seen.sets).toEqual([
-    { key: 'prompt-router.holdoutPct', value: '20' },
-    { key: 'prompt-router.holdoutPct', value: '0' },
-    { key: 'prompt-router.classifier', value: 'haiku' },
-    { key: 'prompt-router.subagentSuggestions', value: 'auto' },
+    { key: 'prompt-router.effortDetection', value: 'auto' },
+    { key: 'prompt-router.newSessionAt', value: '60%' },
+    { key: 'prompt-router.subagentSuggestions', value: 'off' },
   ])
   await ui.unmount()
   const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await again.find({ type: 'Button', key: 'toggle-holdoutPct' }))?.text).toMatch(/off/)
-  expect((await again.find({ type: 'Button', key: 'toggle-classifier' }))?.text).toMatch(/haiku/)
+  expect(JSON.stringify(await again.find({ type: 'Button', key: 'toggle-effortDetection-auto' }))).toMatch(/"variant":"primary"/)
+  expect(JSON.stringify(await again.find({ type: 'Button', key: 'toggle-effortDetection-ask' }))).not.toMatch(/"variant":"primary"/)
+  expect(await textsOf(again)).toMatch(/asks for a new session at 60 %/)
   await again.unmount()
+  expect(String((await $.command.run({ command: 'router', args: '' })).text)).toMatch(/effortDetection: auto \(set\)/)
 })
 
-test('settings: compareWith is a model and an effort; first has no effort', async ($: any, on: any) => {
+test('the terminal steps a setting to its next value, numbers from low to high', async ($: any, on: any) => {
   const seen = engine(on)
   await start($)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Button', key: 'toggle-compareModel' }))?.text).toMatch(/opus/)
-  await ui.press({ key: 'toggle-compareModel' })
-  await ui.press({ key: 'toggle-compareEffort' })
-  expect(seen.sets).toEqual([{ key: 'prompt-router.compareWith', value: 'haiku-medium' }, { key: 'prompt-router.compareWith', value: 'haiku-high' }])
-  for (let i = 0; i < 3; i++) await ui.press({ key: 'toggle-compareModel' })
-  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'first' })
+  expect((await ui.find({ type: 'Button', key: 'toggle-newSessionAt' }))?.text).toMatch(/Start a new session at: 50%/)
+  await ui.press({ key: 'toggle-newSessionAt' })
+  await ui.press({ key: 'toggle-newSessionAt' })
+  expect(seen.sets).toEqual([{ key: 'prompt-router.newSessionAt', value: '60%' }, { key: 'prompt-router.newSessionAt', value: '70%' }])
   await ui.unmount()
-  const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await again.find({ type: 'Button', key: 'toggle-compareModel' }))?.text).toMatch(/first/)
-  expect(await again.find({ type: 'Button', key: 'toggle-compareEffort' })).toBeUndefined()
-  // From first, the next model comes back at medium.
-  await again.press({ key: 'toggle-compareModel' })
-  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'opus-medium' })
-  await again.unmount()
 })
 
-test('settings: a text option is a field that saves on Enter', async ($: any, on: any) => {
+test('new session at off turns the suggestion off; a share turns it back on', async ($: any, on: any) => {
   const seen = engine(on)
   await start($)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await ui.input({ key: 'edit-project', text: '  a React web app ' })
-  expect(seen.sets).toEqual([{ key: 'prompt-router.project', value: 'a React web app' }])
+  await ui.press({ key: 'toggle-newSessionAt-off' })
   await ui.unmount()
-  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(JSON.stringify(await again.find({ type: 'Input', key: 'edit-project' }))).toMatch(/a React web app/)
-  await again.unmount()
-  expect(String((await $.command.run({ command: 'router', args: '' })).text)).toMatch(/project: "a React web app" \(set\)/)
+  const off = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await textsOf(off)).toMatch(/never asks for a new session/)
+  await off.unmount()
+  seen.sets.length = 0
+  const ui2 = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui2.press({ key: 'toggle-newSessionAt-40%' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.newSessionAt', value: '40%' })
+  await ui2.unmount()
 })
 
-test('a section\'s "?" opens its explanation and closes it again', async ($: any, on: any) => {
-  engine(on)
+test('More settings, folded: the classifier, what the saving is compared with, the pane on start', async ($: any, on: any) => {
+  const seen = engine(on)
   await start($)
-  const HELP = { type: 'Text', text: /^Measured: compared with a control task/ }
-  const mount = () => $.ui.mount({ ...PANE, surface: 'desktop' })
-  const shut = await mount()
-  expect(await shut.find(HELP)).toBeUndefined()
-  await shut.press({ key: 'help-sure' })
+  const shut = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await shut.find({ type: 'Button', key: 'toggle-classifier-haiku' })).toBeUndefined()
+  await shut.press({ key: 'fold-more' })
   await shut.unmount()
-  const opened = await mount()
-  expect(await opened.find(HELP)).toBeDefined()
-  expect((await opened.find({ type: 'Button', key: 'help-sure' }))?.text).toBe('×')
-  await opened.press({ key: 'help-sure' })
-  await opened.unmount()
-  const ui = await mount()
-  expect(await ui.find(HELP)).toBeUndefined()
-  // The period tabs come first, above the balance.
-  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text)
-  expect(texts.indexOf('ROUTER BALANCE')).toBeLessThan(texts.indexOf('THIS CHAT'))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Button', key: 'toggle-classifier-opus' })).toBeUndefined()
+  await ui.press({ key: 'toggle-classifier-haiku' })
+  await ui.press({ key: 'toggle-compareModel-haiku' })
+  await ui.press({ key: 'toggle-openPane-on' })
+  expect(seen.sets).toEqual([
+    { key: 'prompt-router.classifier', value: 'haiku' },
+    { key: 'prompt-router.compareWith', value: 'haiku-medium' },
+    { key: 'prompt-router.openPane', value: 'on' },
+  ])
+  await ui.press({ key: 'toggle-compareEffort-high' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'haiku-high' })
+  await ui.press({ key: 'toggle-compareModel-first' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'first' })
   await ui.unmount()
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await again.find({ type: 'Button', key: 'toggle-compareEffort-medium' })).toBeUndefined()
+  await again.press({ key: 'toggle-compareModel-opus' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'opus-medium' })
+  await again.unmount()
 })
 
 test('the router switch turns the router off and on as /router off and /router on do', async ($: any, on: any) => {
@@ -289,6 +241,10 @@ test('the router switch turns the router off and on as /router off and /router o
   await ui.press({ key: 'toggle-enabled' })
   expect(seen.store.get('enabled')).toBe(true)
   await ui.unmount()
+  const desk = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await desk.press({ key: 'toggle-enabled-off' })
+  expect(seen.store.get('enabled')).toBe(false)
+  await desk.unmount()
 })
 
 test('/router panel opens the pane', async ($: any, on: any) => {

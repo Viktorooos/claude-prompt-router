@@ -7,7 +7,7 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { REFERENCE, accuracyText, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
-import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, contextBarSvg, kTokens, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, kTokens, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 import type { Balance, Balances, Decision, Entry, Report } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
@@ -998,13 +998,13 @@ export const register: Register = (on, options) => {
     }
   })
 
-  // The pane beside the chat, one statement down a narrow column: the period, the balance per task
-  // and its parts, how sure it is, the models, the reference, this chat, the settings, and the old
-  // token re-pricing folded away. A "?" by a section opens its explanation.
+  // The pane beside the chat, kept to what people look for: how much the router saved, this chat's
+  // context and when it asks for a new session, and the settings, each with one line on what it does.
+  // The rest (the strict balance, accuracy, the models) is folded under Details.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
-    const { Box, Text, Button, Input, Svg } = $.ui.resolve(e) as any
+    const { Box, Text, Button, Svg } = $.ui.resolve(e) as any
     const cols = e.props.bodyColumns ?? 40
     const px = Math.max(220, Math.min(460, cols * 7))
     const cells = Math.max(8, Math.min(24, cols - 8))
@@ -1021,19 +1021,8 @@ export const register: Register = (on, options) => {
     const c = compareTarget(cfg.compareWith)
     const money = (v: number) => (Math.abs(v) < 0.005 ? 'none' : v > 0 ? 'up' : 'down')
     const MONEY_COLOR = { up: TONES.calm[0], down: TONES.over[0], none: undefined }
-    const signedOr0 = (v: number) => (money(v) === 'none' ? '$0.00' : signed(v))
 
-    // A section title in small capitals (plain on the terminal), and its "?" with the text it opens.
-    const head = (id: string, title: string, help?: string) => (
-      <Box key={`head-${id}`} flexDirection="column">
-        <Box flexDirection="row" gap={1} alignItems="center">
-          <Text dimColor bold>{term ? title : title.toUpperCase()}</Text>
-          {help ? <Button key={`help-${id}`} plain label={paneOpen.has(`help-${id}`) ? '×' : '?'} onPress={flip(`help-${id}`)} /> : null}
-        </Box>
-        {help && paneOpen.has(`help-${id}`) ? <Text dimColor>{help}</Text> : null}
-      </Box>
-    )
-    // Label left, value right.
+    const title = (key: string, t: string) => <Text key={key} dimColor bold>{term ? t : t.toUpperCase()}</Text>
     const row = (key: string, label: string, value: string, o: { dim?: boolean; bold?: boolean; color?: string } = {}) => (
       <Box key={key} flexDirection="row" justifyContent="space-between">
         <Text dimColor={o.dim}>{label}</Text>
@@ -1045,6 +1034,10 @@ export const register: Register = (on, options) => {
         {children}
       </Box>
     )
+    const fold = (id: string, label: string, body: () => unknown) => section(id,
+      <Button key={`fold-${id}`} plain label={`${paneOpen.has(id) ? '▾' : '▸'} ${term ? label : label.toUpperCase()}`} onPress={flip(id)} />,
+      paneOpen.has(id) ? body() : null,
+    )
 
     const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
     const tabs = d.savings ? (
@@ -1055,182 +1048,142 @@ export const register: Register = (on, options) => {
       </Box>
     ) : null
 
-    const hero = b ? section('hero',
-      head('balance', 'Router balance', `What the router saved (+, green) or cost extra (−, red) per task against your own setting, the classifier included. The range is where the true figure most likely lies; it stays empty until there are control tasks. "~" marks a rough figure.`),
-      <Box key="hero-v" flexDirection="column">
-        <Text bold color={MONEY_COLOR[money(b.usd.value)]}>{`${isRough(b) ? '~' : ''}${signed(b.usd.value)}`}</Text>
-        <Text>{`${money(b.usd.value) === 'up' ? 'saved' : money(b.usd.value) === 'down' ? 'cost extra' : 'even'}${b.timed ? ` · ${timeText(b.minutes.value)}` : ''}`}</Text>
-        <Text dimColor>{`${b.usd.low === b.usd.high ? 'no range yet' : `range ${signed(b.usd.low)} to ${signed(b.usd.high)}`} · ${b.routed} tasks`}</Text>
-      </Box>,
-    ) : null
-
-    const top = b ? Math.max(0.005, ...balanceParts(b).map(p => Math.abs(p[2]))) : 1
-    const parts = b ? section('parts',
-      head('parts', 'What it is made of', 'Cheaper picks: tasks sent to a smaller model or a lower effort. Higher picks: hard tasks the router raised; they cost more and keep the quality. Re-work: the cost of trying again after a failed answer. Classifier: the small model that sorts every prompt. A bar right of the middle saves, left of it costs.'),
-      ...balanceParts(b).map(([k, label, v]) => (
-        <Box key={`part-${k}`} flexDirection="column">
-          {row(`part-row-${k}`, label, signedOr0(v), { dim: money(v) === 'none', color: MONEY_COLOR[money(v)] })}
-          {term
-            ? <Text dimColor={money(v) === 'none'} color={MONEY_COLOR[money(v)]}>{splitBarText(v / top, cells)}</Text>
-            : <Svg source={splitBarSvg(v / top, MONEY_COLOR[money(v)] ?? TONES.idle[0], px, 8)} alt={`${label}: ${signedOr0(v)}`} width={px} height={8} />}
-        </Box>
-      )),
-    ) : null
-
-    const sure = b ? section('sure',
-      head('sure', 'How sure it is', `Measured: compared with a control task. Estimated: re-priced from the tokens, less exact. Control: tasks the router left alone (${shown('holdoutPct', cfg.holdoutPct)} of the prompts it would move, option holdoutPct), so there is something to compare with. Accuracy: the share of tasks that did not fail, with its 95 % range.`),
-      <Box key="sure-rows" flexDirection="column">
-        {row('measured', 'Measured', String(b.measured))}
-        {row('estimated', 'Estimated', String(b.estimated))}
-        {row('control', 'Control (holdout)', String(b.control))}
-        {row('accuracy', 'Accuracy', accuracyText(b), { bold: true })}
-      </Box>,
-      <Text key="sample" dimColor>{sampleNote(b)}</Text>,
-    ) : null
-
-    // The table column by column, so each column lines up on every surface.
-    const t = b ? modelTable(b) : []
-    const table = t.length > 1 ? section('models',
-      head('models', 'By model', 'Where the router sent the tasks, what one cost and how many had to be redone. Full table with the control tasks and the minutes: /router stats.'),
-      <Box key="model-table" flexDirection="row" gap={2}>
-        {[0, 1, 3, 4].map(i => (
-          <Box key={`col-${i}`} flexDirection="column" alignItems={i ? 'flex-end' : 'flex-start'}>
-            {t.map((r, j) => <Text key={`cell-${i}-${j}`} dimColor={j === 0}>{j === 0 ? r[i]!.toLowerCase() : r[i]!}</Text>)}
+    // You saved: the work's cost without the router (everything on the compareWith model) less its cost with it.
+    const against = c ? `running every prompt on ${compareLabel(c)}` : "keeping each chat's first model"
+    const withUsd = s ? s.actualUsd + s.classifierUsd : 0
+    const savedWord = s && money(s.balanceUsd) === 'down' ? 'Cost extra' : 'You saved'
+    const savedText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : usd(Math.abs(s.balanceUsd))) : ''
+    const saved = s ? section('saved',
+      title('saved-title', savedWord),
+      s.withoutUsd <= 0
+        ? <Text key="saved-none" dimColor>No priced work in this period yet.</Text>
+        : (
+          <Box key="saved-v" flexDirection="column">
+            {term
+              ? <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
+              : <Svg source={bigNumberSvg(savedText, MONEY_COLOR[money(s.balanceUsd)] ?? TONES.idle[0], px)} alt={`${savedWord}: ${savedText}`} width={px} height={45} />}
+            <Text dimColor>{`compared with ${against}`}</Text>
           </Box>
-        ))}
-      </Box>,
+        ),
+      s.withoutUsd > 0 ? (
+        <Box key="saved-vs" flexDirection="row" gap={3}>
+          <Box flexDirection="column"><Text dimColor>Without router</Text><Text bold>{usd(s.withoutUsd)}</Text></Box>
+          <Box flexDirection="column"><Text dimColor>With router</Text><Text bold>{usd(withUsd)}</Text></Box>
+        </Box>
+      ) : null,
     ) : null
 
-    const reference = s && !isReference(c) ? section('reference',
-      head('reference', `Vs. always ${REFERENCE.model} ${REFERENCE.effort}`, `What the work would have cost with every prompt on ${REFERENCE.model} ${REFERENCE.effort}, less what it cost. Plus: the router is cheaper than that fixed choice.`),
-      <Text key="ref-v" bold color={MONEY_COLOR[money(s.vsReferenceUsd)]}>{signed(s.vsReferenceUsd)}</Text>,
-    ) : null
-
-    // This chat: its context against the new-session rule, the last call and the days.
-    const where = d.last ? WHERE_LABEL[d.last.where] : null
-    const name = (m: string, l: Level | '') => `${knownModel(m) ? MODEL_NAMES[knownModel(m) as Model] : m || '?'} · ${l ? NAMES[l] : '?'}`
-    const age = d.last ? d.now - d.last.ts : Infinity
-    const from = d.last?.from?.model ? name(d.last.from.model, d.last.from.effort) : ''
-    const to = d.last ? name(d.last.model, d.last.effort) : ''
-    const ctxLine = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'Context not known yet'
-    const atLine = d.at ? `New session at ${d.at}%` : 'New-session rule off'
+    // This chat: its context against the share where the router asks for a new session.
+    const ctxRight = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'context not known yet'
+    const used = d.share == null ? '' : `${Math.round(d.share)} % used`
+    const asks = d.at ? `asks for a new session at ${d.at} % (${kTokens((d.window * d.at) / 100)})` : 'never asks for a new session'
     const chat = section('chat',
-      head('chat', 'This chat'),
+      title('chat-title', 'This chat'),
       <Box key="ctx" flexDirection="column">
-        <Text bold>{d.header}</Text>
+        {row('ctx-head', d.header, ctxRight, { dim: false })}
         {term
           ? <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
           : <Svg source={contextBarSvg(d.share, d.at, px, 10)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} width={px} height={16} />}
-        <Text dimColor>{`${ctxLine} · ${atLine}`}</Text>
+        <Text dimColor>{[used, asks].filter(Boolean).join(' · ')}</Text>
       </Box>,
-      <Box key="last" flexDirection="column">
-        <Text dimColor>{d.last ? `${age < 60_000 ? '● ' : ''}Last decision · ${ago(age)}` : 'Last decision'}</Text>
-        {d.last && where ? (
-          <Box flexDirection="column">
-            <Text bold>{`${where.glyph} ${where.text}${d.last.outcome === 'asked' ? ' · asked you' : ''}`}</Text>
-            <Text>{from && from !== to ? `${from} → ${to}` : to}</Text>
-            {d.last.why ? <Text dimColor>{`“${d.last.why}”`}</Text> : null}
-          </Box>
-        ) : (
-          <Text dimColor>No decision yet. The router's call on your next prompt shows here.</Text>
-        )}
-      </Box>,
-      d.savings ? (
-        <Box key="days" flexDirection="column">
-          {term
-            ? <Text color="claude">{sparkText(d.savings.days.map(x => x.balanceUsd))}</Text>
-            : <Svg source={sparkSvg(d.savings.days.map(x => x.balanceUsd), d.savings.days.map(x => `${x.day}: ${signed(x.balanceUsd)}`), px, 48)} alt={`Balance per day, last 14 days: ${d.savings.days.map(x => signed(x.balanceUsd)).join(', ')}`} width={px} height={48} />}
-          <Text dimColor>{`balance per day, 14 days${s ? ` · ${s.prompts} prompts · ${s.modelChanges} model changes · ${s.subagents} subagents · ${s.sessions} new sessions` : ''}`}</Text>
-        </Box>
-      ) : null,
     )
 
-    // Every option with a set of values steps on a press; the text ones are fields (Enter saves).
-    const press = (k: Option | 'enabled') => async () => {
-      if (k === 'enabled') return setEnabled($, !enabled)
-      const vals = CHOICES.find(x => x.key === k)?.values
-      if (vals) await saveOption($, k, vals[(vals.indexOf(cfg[k]) + 1) % vals.length] ?? vals[0]!)
+    // Settings: a name, its values as buttons (the chosen one highlighted) and one line on what it does.
+    // The terminal gets one button per setting that steps to the next value.
+    type Setting = { key: string; name: string; what: string; values: readonly (readonly [string, string])[]; now: () => string; pick: (v: string) => Promise<void> }
+    const same = (vals: readonly string[]) => vals.map(v => [v, v] as const)
+    const opt = (k: Option, name: string, what: string, values = same(CHOICES.find(x => x.key === k)?.values ?? [])): Setting =>
+      ({ key: k, name, what, values, now: () => String(cfg[k]), pick: v => saveOption($, k, v) })
+    const cm = cfg.compareWith.split('-')[0] ?? 'first'
+    const compareValue = (m: string, l: string) => {
+      const v = m === 'first' ? 'first' : `${m}-${l || 'medium'}`
+      return (SWITCHES.compareWith as readonly string[]).includes(v) ? v : SWITCHES.compareWith.find(x => x.startsWith(`${m}-`)) ?? SWITCHES.compareWith[0]
     }
-    const [cm = 'first', ce = ''] = cfg.compareWith.split('-')
-    const toggles: { key: string; label: string; value: string; onPress: () => Promise<void> }[] = [
-      { key: 'enabled', label: 'Router', value: enabled ? 'on' : 'off', onPress: press('enabled') },
-      ...CHOICES.map(x => ({ key: x.key, label: LABELS[x.key], value: shown(x.key, String(cfg[x.key])), onPress: press(x.key) })),
-      { key: 'compareModel', label: LABELS.compareWith, value: cm, onPress: async () => saveOption($, 'compareWith', nextCompare('model')) },
-      ...(cm === 'first' ? [] : [{ key: 'compareEffort', label: `${LABELS.compareWith}: effort`, value: ce, onPress: async () => saveOption($, 'compareWith', nextCompare('effort')) }]),
+    const main: Setting[] = [
+      { key: 'enabled', name: 'Router', what: 'Picks the cheapest model and effort that can handle each prompt.', values: same(['on', 'off']), now: () => (enabled ? 'on' : 'off'), pick: v => setEnabled($, v === 'on') },
+      opt('firstChatDetection', 'Model for a new chat', 'On your first prompt, suggests a better model. Ask: you confirm. Auto: it just switches.'),
+      opt('midChatModelDetection', 'Model mid-chat', 'When a later prompt needs a different model, offers to switch or to hand it to a subagent.'),
+      opt('effortDetection', 'Effort', 'Raises or lowers the thinking effort to fit the prompt.'),
+      opt('subagentSuggestions', 'Subagents', 'Sends a side task to a cheaper subagent instead of switching this chat.'),
+      {
+        key: 'newSessionAt',
+        name: 'Start a new session at',
+        what: 'Once the chat fills this much of its context, new work is offered as a fresh session. Long chats get expensive.',
+        values: same(CHOICES.find(x => x.key === 'newSessionAt')?.values ?? []),
+        now: () => (cfg.sessionSuggestions === 'off' ? 'off' : cfg.newSessionAt),
+        pick: async v => {
+          if (v !== 'off' && cfg.sessionSuggestions === 'off') await saveOption($, 'sessionSuggestions', 'ask')
+          await saveOption($, 'newSessionAt', v)
+        },
+      },
+      opt('notifications', 'Notifications', 'Shows a short note when the router changes something.'),
     ]
+    const more: Setting[] = [
+      opt('classifier', 'Decided by', 'The model that reads your prompt and decides. Haiku is cheaper, Sonnet more accurate.',
+        same(CLASSIFIERS.filter(x => x !== 'opus' || cfg.classifier === 'opus'))),
+      { key: 'compareModel', name: 'Savings compared with', what: 'What "You saved" is measured against.', values: COMPARE_MODELS.map(m => [m, m === 'first' ? 'first model' : m] as const), now: () => cfg.compareWith.split('-')[0] ?? 'first', pick: m => saveOption($, 'compareWith', compareValue(m, cfg.compareWith.split('-')[1] ?? '')) },
+      ...(cm === 'first' ? [] : [{ key: 'compareEffort', name: 'at effort', what: '', values: same(COMPARE_EFFORTS), now: () => cfg.compareWith.split('-')[1] ?? '', pick: (l: string) => saveOption($, 'compareWith', compareValue(cfg.compareWith.split('-')[0] ?? 'first', l)) }]),
+      opt('openPane', 'Open this pane on start', 'Opens this pane by itself when a session starts.'),
+    ]
+    const setting = (x: Setting, i: number) => {
+      const current = x.now()
+      const label = x.values.find(([v]) => v === current)?.[1] ?? current
+      // Read again on the press: the pane may not have redrawn since the last one.
+      const step = () => {
+        const v = x.now()
+        return x.pick(x.values[(x.values.findIndex(([y]) => y === v) + 1) % x.values.length]?.[0] ?? v)
+      }
+      return (
+        <Box key={`set-${x.key}`} flexDirection="column">
+          {term
+            ? <Button key={`toggle-${x.key}`} hotkey={i < 9 ? String(i + 1) : undefined} plain label={`${x.name}: ${label}`} onPress={step} />
+            : (
+              <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={1}>
+                <Text bold>{x.name}</Text>
+                <Box flexDirection="row" gap={0}>
+                  {x.values.map(([v, l]) => <Button key={`toggle-${x.key}-${v}`} label={l} variant={v === current ? 'primary' : 'secondary'} onPress={() => x.pick(v)} />)}
+                </Box>
+              </Box>
+            )}
+          {x.what ? <Text dimColor>{x.what}</Text> : null}
+        </Box>
+      )
+    }
     const settings = section('settings',
-      head('settings', 'Settings', 'A button steps to the next value; a field saves on Enter. Saved as /config saves them, so they hold for the next sessions. Control group: the share of prompts the router would move that keep their setting, to compare with. New session at: how full the context is when new work is offered as a new session. Compare with: what the old token re-pricing measures against (first: the chat\'s first model).'),
-      <Box key="toggles" flexDirection="column" gap={term ? 0 : 1}>
-        {toggles.map((x, i) => (term
-          ? <Button key={`toggle-${x.key}`} hotkey={i < 9 ? String(i + 1) : undefined} plain label={`${x.label}: ${x.value}`} onPress={x.onPress} />
-          : (
-            <Box key={`row-${x.key}`} flexDirection="row" justifyContent="space-between" alignItems="center">
-              <Text>{x.label}</Text>
-              <Button key={`toggle-${x.key}`} label={x.value} variant={x.key === 'enabled' && !enabled ? 'primary' : 'secondary'} onPress={x.onPress} />
-            </Box>
-          )))}
-      </Box>,
-      <Box key="texts" flexDirection="column" gap={term ? 0 : 1}>
-        {TEXT_OPTIONS.map(k => (
-          <Box key={`text-${k}`} flexDirection="column">
-            {term ? null : <Text dimColor>{LABELS[k]}</Text>}
-            <Input key={`edit-${k}`} label={term ? `${LABELS[k]}:` : undefined} value={String(cfg[k])} placeholder={k === 'language' ? 'auto' : 'empty'} submitLabel="save" onSubmit={(v: string) => saveOption($, k, v.trim())} />
-          </Box>
-        ))}
-      </Box>,
+      title('settings-title', 'Settings'),
+      ...main.map(setting),
+      fold('more', 'More settings', () => (
+        <Box key="more-body" flexDirection="column" gap={term ? 0 : 1}>
+          {more.map((x, i) => setting(x, main.length + i))}
+          {d.savings ? null : <Button key="stats-on" label="Turn the savings stats on" onPress={() => saveOption($, 'stats', 'on')} />}
+        </Box>
+      )),
       cfgNote ? <Text key="cfg-note" dimColor>{cfgNote}</Text> : null,
     )
 
-    // The old bill from the token re-pricing, folded away: without and with the router, and the parts.
-    const perPrompt = s && s.prompts ? `$${(s.classifierUsd / s.prompts).toFixed(3)}` : '$0'
-    const legacyOpen = paneOpen.has('legacy')
-    const legacy = s ? section('legacy',
-      <Button key="more-legacy" plain label={`${legacyOpen ? '▾' : '▸'} Old token re-pricing (secondary)`} onPress={flip('legacy')} />,
-      legacyOpen ? (
-        <Box key="legacy-body" flexDirection="column" gap={1}>
-          <Text dimColor>The old comparison of the same work without and with the router, re-priced from the tokens. A rough guide only.</Text>
-          <Box flexDirection="column">
-            <Text dimColor>Balance</Text>
-            <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{signed(s.balanceUsd)}</Text>
-            <Text dimColor>{s.withoutUsd <= 0 ? 'No priced work in this period yet.' : `${money(s.balanceUsd) === 'up' ? 'saved' : money(s.balanceUsd) === 'down' ? 'lost' : 'even'} · ${Math.round(Math.abs(s.balancePct))} % of ${usd(s.withoutUsd)}, what the work would have cost ${c ? `on ${compareLabel(c)}` : 'without the router'}`}</Text>
-          </Box>
-          <Box flexDirection="column">
-            {row('without', 'Without the router', usd(s.withoutUsd))}
-            {row('with', 'With the router', usd(s.actualUsd + s.classifierUsd))}
-            {row('work', '  the work', usd(s.actualUsd), { dim: true })}
-            {row('cls', s.prompts ? `  classifier · ${s.prompts} prompts × ${perPrompt}` : '  classifier', usd(s.classifierUsd), { dim: true })}
-          </Box>
-          <Box flexDirection="column">
-            <Text dimColor>Where the difference came from</Text>
-            {([
-              ['cheaper', 'Cheaper model', s.savedUsd],
-              ['stronger', 'Stronger model', -s.extraUsd],
-              ['effort', 'Effort (estimate)', s.effortUsd],
-              ['classifier', 'Classifier', -s.classifierUsd],
-            ] as const).map(([k, label, v]) => row(`old-${k}`, `  ${label}`, signedOr0(v), { dim: money(v) === 'none', color: MONEY_COLOR[money(v)] }))}
-          </Box>
-          <Box flexDirection="column">
-            {row('old-accuracy', s.routed ? `Accuracy (estimate) · ${s.rework} re-work of ${s.routed} routed` : 'Accuracy (estimate)', s.accuracyPct === null ? '–' : `${Math.round(s.accuracyPct)} %`)}
-            {row('perturn', s.pricedTurns ? `Cost per turn · ${s.pricedTurns} turns` : 'Cost per turn', usd(s.perTurnUsd), { dim: true })}
-          </Box>
-          <Text dimColor>An estimate from list prices. Effort is a guess (output tokens weighted per level). Full table: /router stats.</Text>
+    // Details: the strict balance against your own setting, how often it was right, where tasks went.
+    const t = b ? modelTable(b) : []
+    const details = b ? fold('details', 'Details', () => (
+      <Box key="details-body" flexDirection="column" gap={term ? 0 : 1}>
+        <Box flexDirection="column">
+          {row('balance', `Router balance${isRough(b) ? ' (rough)' : ''}`, signed(b.usd.value), { bold: true, color: MONEY_COLOR[money(b.usd.value)] })}
+          <Text dimColor>What the router added or saved on top of the model you had picked yourself, the classifier included.</Text>
         </Box>
-      ) : null,
-    ) : null
+        {row('accuracy', 'Decisions right', accuracyText(b))}
+        {t.length > 1 ? row('tasks', 'Tasks', t.slice(1).map(r => `${r[0]!.toLowerCase()} ${r[1]}`).join(' · ')) : null}
+        <Text dimColor>Full table: /router stats.</Text>
+      </Box>
+    )) : null
 
     return (
       <Box flexDirection="column" gap={term ? 1 : 2} padding={term ? 0 : 1}>
         <Text dimColor>{`${term ? 'Prompt Router' : 'PROMPT ROUTER'} · ${enabled ? 'on' : 'off'}`}</Text>
         {tabs}
-        {hero}
-        {parts}
-        {sure}
-        {table}
-        {reference}
+        {saved}
         {chat}
-        {d.savings ? null : <Text dimColor>Stats are off (option Savings stats).</Text>}
+        {d.savings ? null : <Text dimColor>Savings stats are off.</Text>}
         {settings}
-        {legacy}
+        {details}
       </Box>
     )
   })
