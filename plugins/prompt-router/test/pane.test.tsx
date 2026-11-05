@@ -132,8 +132,8 @@ test('You saved comes first: the period\'s saving against compareWith, without a
   // As the preview: no header line, the periods inside You saved, a hairline above each section and between settings.
   expect(texts).not.toMatch(/PROMPT ROUTER/)
   expect(JSON.stringify(await ui.find({ key: 'saved' }))).toMatch(/period-week/)
-  // Above This chat and Settings, between the 7 settings and above More settings, above Details.
-  expect(JSON.stringify(await ui.findAll({ type: 'Svg' })).split('role=\\"presentation\\"').length - 1).toBe(10)
+  // Cards part the sections; hairlines part the six settings and the More settings fold inside its card.
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' })).split('role=\\"presentation\\"').length - 1).toBe(7)
   // 7 days by default; the picked period is the primary button.
   expect(JSON.stringify(await ui.find({ type: 'Button', key: 'period-week' }))).toMatch(/"variant":"primary"/)
   await ui.press({ key: 'period-today' })
@@ -288,13 +288,12 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(splitBarText(0, 4)).toBe('··│··')
   const ring = contextBarSvg(47, 50)
   expect(ring).toMatch(/^<svg [^>]*xmlns="http:\/\/www.w3.org\/2000\/svg"/)
-  expect(ring).toMatch(/prefers-reduced-motion/)
   expect(ring).toMatch(/prefers-color-scheme: ?dark/)
   expect(ring).not.toMatch(/<script|on\w+=/)
   expect(ring).toMatch(/<title>Context 47%, new session at 50%<\/title>/)
-  // The fill grows in once; a redraw with the same share draws the same image, so nothing replays.
-  expect(ring).toMatch(/@keyframes/)
-  expect(contextBarSvg(47, 50)).toBe(ring)
+  // Still by default: only the redraw after a turn ends animates, so nothing loops.
+  expect(ring).not.toMatch(/@keyframes/)
+  expect(contextBarSvg(47, 50, 280, 10, true)).toMatch(/@keyframes[^]*prefers-reduced-motion/)
   expect(ring).toMatch(/width="100%"/)
   const left = splitBarSvg(-0.5, '#e0483f', 100, 8)
   expect(left).toMatch(/<rect x="25" width="25" [^>]*fill="#e0483f"/)

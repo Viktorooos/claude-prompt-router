@@ -96,6 +96,9 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
   }
 }
 
+// The one redraw after Claude's reply ends animates the saving and the bar; every other draw is still.
+let paneAnimate = false
+
 function redraw($: EngineInterface) {
   try {
     $.ui.invalidate('ui.render')
@@ -900,6 +903,10 @@ export const register: Register = (on, options) => {
   // Each finished turn (main chat or subagent): its tokens and the model it would have run on.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
+    if (!e.agentId) {
+      paneAnimate = true
+      redraw($)
+    }
     if (!enabled || cfg.stats !== 'on') return r
     try {
       const usage = usageOf(r.usage)
@@ -1023,6 +1030,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
+    const animate = paneAnimate
+    paneAnimate = false
     const { Box, Text, Button, Svg, Select } = $.ui.resolve(e) as any
     const cols = e.props.bodyColumns ?? 40
     const px = Math.max(220, Math.min(460, cols * 7))
@@ -1050,14 +1059,17 @@ export const register: Register = (on, options) => {
         <Text dimColor={o.dim} bold={o.bold} color={o.color}>{value}</Text>
       </Box>
     )
-    const section = (key: string, ...children: unknown[]) => (
-      <Box key={key} flexDirection="column" gap={term ? 0 : 1}>
-        {children}
-      </Box>
-    )
+    // On the app surfaces each section is a card: a soft rounded outline, room inside, no rule between cards.
+    const section = (key: string, ...children: unknown[]) => (term
+      ? <Box key={key} flexDirection="column" gap={0}>{children}</Box>
+      : (
+        <Box key={key} flexDirection="column" gap={1} borderStyle="round" borderDimColor paddingX={narrow ? 1 : 2} paddingY={1}>
+          {children}
+        </Box>
+      ))
     // A hairline between sections (strong) and between settings (faint); the terminal leaves the gap.
     const rule = (key: string, strong = true) => (term ? null : <Svg key={key} source={ruleSvg(px, strong)} alt="" height={1} />)
-    const fold = (id: string, label: string, body: () => unknown) => section(id,
+    const fold = (id: string, label: string, body: () => unknown, inline = false) => (inline ? (key: string, ...c: unknown[]) => <Box key={key} flexDirection="column" gap={term ? 0 : 1}>{c}</Box> : section)(id,
       term
         ? <Button key={`fold-${id}`} plain label={`${paneOpen.has(id) ? '▾' : '▸'} ${label}`} onPress={flip(id)} />
         // Desktop: the heading lines up with the others, the native button sits on the right like a setting's.
@@ -1093,7 +1105,7 @@ export const register: Register = (on, options) => {
           <Box key="saved-v" flexDirection="column">
             {term
               ? <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
-              : <Svg source={bigNumberSvg(savedText, money(s.balanceUsd) === 'up' ? '#2fb67c' : MONEY_COLOR[money(s.balanceUsd)] ?? TONES.idle[0], px, 40)} alt={`${savedWord}: ${savedText}`} height={50} />}
+              : <Svg source={bigNumberSvg(savedText, money(s.balanceUsd) === 'up' ? '#2fb67c' : MONEY_COLOR[money(s.balanceUsd)] ?? TONES.idle[0], px, 40, animate)} alt={`${savedWord}: ${savedText}`} height={50} />}
             <Text dimColor>{`compared with ${against}`}</Text>
           </Box>
         ),
@@ -1115,7 +1127,7 @@ export const register: Register = (on, options) => {
         {row('ctx-head', d.header, ctxRight, { dim: false })}
         {term
           ? <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
-          : <Svg source={contextBarSvg(d.share, d.at, px, 8)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={14} />}
+          : <Svg source={contextBarSvg(d.share, d.at, px, 8, animate)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={14} />}
         {term ? <Text dimColor>{[used, asks].filter(Boolean).join(' · ')}</Text> : row('ctx-foot', used, asks, { dim: true })}
       </Box>,
     )
@@ -1196,10 +1208,10 @@ export const register: Register = (on, options) => {
       rule('rule-more', false),
       fold('more', 'More settings', () => (
         <Box key="more-body" flexDirection="column" gap={term ? 0 : 1}>
-          {more.flatMap((x, i) => [i ? rule(`rule-${x.key}`, false) : null, setting(x, main.length + i)])}
+          {more.flatMap((x, i) => [rule(`rule-${x.key}`, false), setting(x, main.length + i)])}
           {d.savings ? null : <Button key="stats-on" label="Turn the savings stats on" onPress={() => saveOption($, 'stats', 'on')} />}
         </Box>
-      )),
+      ), true),
       cfgNote ? <Text key="cfg-note" dimColor>{cfgNote}</Text> : null,
     )
 
@@ -1221,12 +1233,12 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" gap={term ? 1 : narrow ? 1 : 2} padding={term ? 0 : 1}>
         {term ? <Text dimColor>{`Prompt Router · ${enabled ? 'on' : 'off'}`}</Text> : null}
         {saved ?? tabs}
-        {saved || tabs ? rule('rule-chat') : null}
+        {term && (saved || tabs) ? rule('rule-chat') : null}
         {chat}
         {d.savings ? null : <Text dimColor>Savings stats are off.</Text>}
-        {rule('rule-settings')}
+        {term ? rule('rule-settings') : null}
         {settings}
-        {details ? rule('rule-details') : null}
+        {term && details ? rule('rule-details') : null}
         {details}
       </Box>
     )

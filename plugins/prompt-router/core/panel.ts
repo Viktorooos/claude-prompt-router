@@ -32,7 +32,7 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 // The chat's context as a flat bar: filled to its share in the tone's colour, a tick at the threshold.
 // Still (no animation), so a redraw does not replay anything.
-export function contextBarSvg(share: number | null, at: number, _width = 280, height = 10): string {
+export function contextBarSvg(share: number | null, at: number, _width = 280, height = 10, animate = false): string {
   // Percent lengths: the drawing fills whatever width the pane gives it, ends stay round.
   const p = share == null ? 0 : Math.min(1, Math.max(0, share / 100))
   const [a, b] = TONES[tone(share, at)]
@@ -42,9 +42,9 @@ export function contextBarSvg(share: number | null, at: number, _width = 280, he
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height + 6}" role="img"><title>Context ${label}${at ? `, new session at ${at}%` : ''}</title><style>
 .t{fill:#1d1f23;opacity:.08}.k{stroke:#1d1f23;stroke-width:2;stroke-linecap:round;opacity:.45}
 @media (prefers-color-scheme: dark){.t{fill:#f2f3f5;opacity:.1}.k{stroke:#f2f3f5;opacity:.6}}
-.f{animation:g .7s cubic-bezier(.2,.8,.2,1) both}@keyframes g{from{width:0}}
+${animate ? `.f{animation:g .7s cubic-bezier(.2,.8,.2,1) both}@keyframes g{from{width:0}}
 .k{animation:o .5s .35s ease-out both}@keyframes o{from{opacity:0}}
-${STILL}
+${STILL}` : ''}
 </style><defs><linearGradient id="s" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
 <rect class="t" y="3" width="100%" height="${height}" rx="${r}"/>${w ? `<rect class="f" y="3" width="${w}%" height="${height}" rx="${r}" fill="url(#s)"/>` : ''}${at ? `<line class="k" x1="${at}%" y1="1" x2="${at}%" y2="${height + 5}"/>` : ''}</svg>`
 }
@@ -158,11 +158,11 @@ export function kTokens(t: number): string {
 }
 
 // A big bold figure (the pane's "You saved"), since Text has no font size.
-export function bigNumberSvg(text: string, color: string, _width = 280, size = 36): string {
+export function bigNumberSvg(text: string, color: string, _width = 280, size = 36, animate = false): string {
   const h = Math.round(size * 1.25)
   const safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
-  // Rises in once when the number changes; the same number draws the same image and does not replay.
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${h}"><style>text{animation:r .5s cubic-bezier(.2,.8,.2,1) both;letter-spacing:-.02em}@keyframes r{from{opacity:0;transform:translateY(8px)}}${STILL}</style><text x="0" y="${Math.round(size)}" font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="${size}" font-weight="700" fill="${color}">${safe}</text></svg>`
+  // animate: rises in, drawn only on the one redraw after a turn ends; every other redraw is still.
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${h}"><style>text{letter-spacing:-.02em}${animate ? `text{animation:r .5s cubic-bezier(.2,.8,.2,1) both}@keyframes r{from{opacity:0;transform:translateY(8px)}}${STILL}` : ''}</style><text x="0" y="${Math.round(size)}" font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="${size}" font-weight="700" fill="${color}">${safe}</text></svg>`
 }
 
 // A hairline across the pane: what separates its sections and settings, as the preview's border-top.
