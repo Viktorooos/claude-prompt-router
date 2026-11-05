@@ -34,12 +34,12 @@ import { fileURLToPath } from 'node:url'
 import { fromTiers, shownOptions, tierLine } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, preferSession, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, preferSession, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
 import type { Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
 import { appendStats, classifierUsage, readStats, statsReport, turnUsage } from './stats.ts'
-import { askNote, autoNote, line, otherAutoNote, otherNote, statusNote, switchNote } from './notes.ts'
+import { askNote, autoNote, line, otherAutoNote, otherNote, runAgentLine, runAgentNote, statusNote, switchNote } from './notes.ts'
 import type { NoteCtx } from './notes.ts'
 
 export const DEFAULT_MODELS: Record<Model, string> = { haiku: 'gpt-6-luna', sonnet: 'gpt-6.1-terra', opus: 'gpt-6.1-sol', fable: 'gpt-6-astra' }
@@ -327,7 +327,7 @@ function out(context: string, system?: string): Output {
 
 async function routerCommand(home: string, o: Options, arg: string, cur: { model: string; now: Level | '' }): Promise<string> {
   const a = arg.trim().toLowerCase()
-  if (a === 'stats') return statsReport(readStats(home), Date.now())
+  if (a === 'stats') return statsReport(readStats(home), Date.now(), compareTarget(o.cfg.compareWith))
   if (a === 'off' || a === 'on') {
     const enabled = a === 'on'
     let raw: Record<string, unknown> = {}
@@ -414,6 +414,10 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
     if (hereModel && !h.isFirst && p.model !== curClass && o.cfg.midChatModelDetection !== 'off') {
       // Mapped to the same Codex effort: Stay here just goes on.
       const effort = p.effort !== now && !(now && effortOf(model, p.effort) === effortOf(model, now))
+      if (o.cfg.midChatModelDetection === 'ask' && o.cfg.subagentSuggestions === 'auto') {
+        await decide('subagent', { model: o.models[p.model], effort: p.effort }, 'applied')
+        return out(`[${runAgentNote(ctx, p, model)}]`, o.cfg.notifications === 'on' ? runAgentLine(ctx, p) : undefined)
+      }
       await decide('subagent', { model: o.models[p.model], effort: p.effort }, o.cfg.midChatModelDetection === 'auto' ? 'applied' : 'asked')
       return out(`[${(o.cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(ctx, p, cur, effort)}]`, suggests(o, effortOf, p))
     }
@@ -432,6 +436,10 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
     if (asks) return out(`[${switchNote(ctx, p, cur, changeModel ? { from: model } : null, changeEffort ? { now } : null)}]`, sys)
     // notifications off: the agent still gives the line, but no system message comes with it.
     return out(`[${autoNote(ctx, slug, level, p)}]`, o.cfg.notifications === 'on' ? sys : undefined)
+  }
+  if (p.where === 'subagent' && o.cfg.subagentSuggestions === 'auto') {
+    await decide('subagent', { model: o.models[p.model], effort: p.effort }, 'applied')
+    return out(`[${runAgentNote(ctx, p)}]`, o.cfg.notifications === 'on' ? runAgentLine(ctx, p) : undefined)
   }
   await decide(p.where, { model: o.models[p.model], effort: p.effort }, 'asked')
   return out(`[${askNote(ctx, p, cur, midTurn)}]`, suggests(o, effortOf, p))

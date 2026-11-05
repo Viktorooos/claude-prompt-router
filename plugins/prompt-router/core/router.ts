@@ -18,12 +18,27 @@ export const ALL_MODELS = Object.keys(MODELS) as Model[]
 
 export type Where = 'here' | 'subagent' | 'session'
 
+const COMPARE_MODELS = ['opus', 'haiku', 'sonnet', 'fable'] as const
+const COMPARE_LEVELS = ['medium', 'low', 'high', 'xhigh', 'max'] as const
+type CompareValue = `${(typeof COMPARE_MODELS)[number]}-${(typeof COMPARE_LEVELS)[number]}` | 'first'
+// opus-medium first (the default): Anthropic's pick for everyday work.
+const COMPARE_VALUES = [...COMPARE_MODELS.flatMap(m => COMPARE_LEVELS.map(l => `${m}-${l}` as CompareValue)), 'first' as const] as readonly CompareValue[]
+
+// compareWith as a model and effort; null for `first`.
+export function compareTarget(v: string): { model: Model; effort: Level } | null {
+  const [m, l] = v.split('-')
+  const model = knownModel(m)
+  const effort = asLevel(l)
+  return model && effort ? { model, effort } : null
+}
+
 // One switch per feature; the first value of each is the default.
 export const SWITCHES = {
   effortDetection: ['ask', 'auto', 'off'],
   firstChatDetection: ['ask', 'auto', 'off'],
   midChatModelDetection: ['ask', 'auto', 'off'],
-  subagentSuggestions: ['ask', 'off'],
+  // auto: the suggested subagent runs right away, with no "Where should this go?" (one line tells the user).
+  subagentSuggestions: ['ask', 'auto', 'off'],
   sessionSuggestions: ['ask', 'off'],
   // New work in a chat past this share of its model's context window is offered as a new session.
   newSessionAt: ['50%', 'off', '40%', '60%', '70%'],
@@ -33,6 +48,9 @@ export const SWITCHES = {
   openPane: ['off', 'on'],
   // Claude Code: one line above the prompt (model · effort, context, today's saving), no extra tab.
   band: ['on', 'off'],
+  // What the savings are measured against: a model at an effort for every chat, or `first`, the
+  // chat's first model (the main chat's for a subagent). Read from the tokens, so it reprices old data.
+  compareWith: COMPARE_VALUES,
 } as const
 
 export type Switch = keyof typeof SWITCHES
@@ -139,6 +157,8 @@ Reply with JSON only: {"where": "keep|here|subagent|session", "model": "{{models
 
 // midChatModelDetection auto: the agent picks the subagent or here itself, with no question.
 export const DECIDE_OTHER = `Do not ask the user; decide yourself: use the subagent only when it is worth it: a larger self-contained piece of work that needs the other model (for example hard design or debugging on a weaker chat model, or long mechanical work on a strong one); a quick question, a short answer or a short message stays here.`
+// subagentSuggestions auto: the suggested subagent runs with no question; the user is told in one line.
+export const RUN_SUBAGENT = 'Do not ask the user where it should go: start the subagent right away. Before it, tell the user in one sentence, in their language, that Prompt Router sent this to a subagent on that model and why.'
 export const TOLD_OTHER = 'Afterwards, tell the user in one sentence what you chose (the subagent or here) and why.'
 
 export const MODEL_HEAD_FIRST = 'MODEL (this is the FIRST prompt of a new chat: pick the model the whole chat should run on, by the rules below; for a greeting or an opener with no task yet, answer the current model)'

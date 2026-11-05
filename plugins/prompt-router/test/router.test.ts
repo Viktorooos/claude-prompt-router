@@ -1178,3 +1178,75 @@ test('newSessionAt off: new work in a long chat stays here', saved({ newSessionA
   await submit($, 'now add a favourites screen')
   expect(seen.sent).toEqual(['now add a favourites screen'])
 })
+
+// subagentSuggestions auto: the subagent starts with no "Where should this go?".
+test('subagentSuggestions auto: a subagent pick runs right away, with a toast and no question', { options: { subagentSuggestions: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.subagent)
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-opus-5-5' } }))
+  await start($)
+  await submit($, 'run the whole test suite and tell me what fails')
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/AskUserQuestion/)
+  expect(t).not.toMatch(/Where should this go/)
+  expect(t).toMatch(/start the subagent right away/)
+  expect(t).toMatch(/tell the user in one sentence/)
+  expect(t).toMatch(/Agent tool with model "haiku" and effort "low"/)
+  expect(seen.toasts.join(' ')).toMatch(/Subagent: Haiku · Low, just run the tests/)
+  await $.turn.complete(TURN_DONE)
+  const [d] = statsLines(seen)
+  expect(d).toMatchObject({ kind: 'decision', where: 'subagent', outcome: 'applied', to: { model: 'haiku', effort: 'low' } })
+})
+
+test('subagentSuggestions auto: a stronger model mid-chat runs a subagent on it, the chat model stays', { options: { subagentSuggestions: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, OTHER.higher, { model: 'claude-haiku-5-5', rows: [{ ...MODEL_ROW, value: 'haiku' }] })
+  await start($)
+  await submit($, 'design the sync engine')
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/AskUserQuestion/)
+  expect(t).toMatch(/fits Opus · high better than this chat's Haiku/)
+  expect(t).toMatch(/Agent tool with model "opus" and effort "high"; it does not see this chat/)
+  expect(t).toMatch(/Never switch this chat's model/)
+  expect(seen.sets).toEqual([])
+})
+
+test('subagentSuggestions defaults to ask; a session pick still asks with auto', { options: { subagentSuggestions: 'auto' } } as any, async ($: any, on: any) => {
+  expect(toConfig({}).subagentSuggestions).toBe('ask')
+  expect(toConfig({ subagentSuggestions: 'auto' }).subagentSuggestions).toBe('auto')
+  const seen = engine(on, PICK.session)
+  await start($)
+  await submit($, 'unrelated: add a shopping list')
+  expect(seen.sent[0] ?? '').toMatch(/AskUserQuestion/)
+})
+
+test('compareWith: Opus medium by default, first and any model-effort pair, junk falls back', () => {
+  expect(toConfig({}).compareWith).toBe('opus-medium')
+  expect(toConfig({ compareWith: 'first' }).compareWith).toBe('first')
+  expect(toConfig({ compareWith: 'sonnet-high' }).compareWith).toBe('sonnet-high')
+  expect(toConfig({ compareWith: 'gpt-5' }).compareWith).toBe('opus-medium')
+})
+
+test('/router stats compares with compareWith: a Haiku chat escalated to Opus is not a loss against Opus medium', { options: { compareWith: 'opus-medium' } } as any, async ($: any, on: any) => {
+  const now = Date.now()
+  const log = [
+    { kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-opus-5-5', baseline: 'claude-haiku-5-5', effort: 'medium', baseEffort: 'medium', usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } },
+    { kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-haiku-5-5', baseline: 'claude-haiku-5-5', effort: 'medium', baseEffort: 'medium', usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } },
+  ].map(r => JSON.stringify(r)).join('\n')
+  engine(on, PICK.same, { now, files: { '*/prompt-router-stats.jsonl': `${log}\n` } })
+  await start($)
+  const r = await $.command.run({ command: 'router', args: 'stats' })
+  expect(r.text).toMatch(/Cost on Opus medium\s+\$40\.00/)
+  expect(r.text).toMatch(/Balance\s+\$19\.50 \(49 %\)/)
+  expect(r.text).not.toMatch(/^Vs\. always/m)
+  expect(r.text).toMatch(/Compared with Opus medium for every turn/)
+})
+
+test('/router stats with compareWith first keeps the chat\'s first model', { options: { compareWith: 'first' } } as any, async ($: any, on: any) => {
+  const now = Date.now()
+  const log = JSON.stringify({ kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-opus-5-5', baseline: 'claude-haiku-5-5', usage: { input: 0, output: 1_000_000, cacheRead: 0, cacheWrite: 0 } })
+  engine(on, PICK.same, { now, files: { '*/prompt-router-stats.jsonl': `${log}\n` } })
+  await start($)
+  const r = await $.command.run({ command: 'router', args: 'stats' })
+  expect(r.text).toMatch(/Cost without router\s+\$0\.50/)
+  expect(r.text).toMatch(/Balance\s+−\$19\.50/)
+  expect(r.text).toMatch(/^Vs\. always opus medium/m)
+})

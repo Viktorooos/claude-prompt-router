@@ -13,7 +13,7 @@
 ![Codex](https://img.shields.io/badge/Codex-CLI_+_desktop-10a37f?style=flat-square)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-4b5563?style=flat-square)
 
-<sub>Unit tests: Claude Code 106 · Codex 62 · OpenCode 47</sub>
+<sub>Unit tests: Claude Code 152 · Codex 90 · OpenCode 64</sub>
 
 [How it works](#how-it-works) •
 [Quick start](#quick-start) •
@@ -202,9 +202,10 @@ The same keys on every platform. Each feature has its own switch. The defaults k
 | `effortDetection` | `ask`, `auto`, `off` | The effort for a prompt that stays here. `ask`: a question first. `auto`: just switch. `off`: never touch the effort; "Do it here" and "Stay here" have no level. |
 | `firstChatDetection` | `ask`, `auto`, `off` | The model on a new chat's first prompt. `ask`: a question first. `auto`: just switch. `off`: keep the model. |
 | `midChatModelDetection` | `ask`, `auto`, `off` | A later prompt that stays here but fits another model. `ask`: offer Subagent or Stay here. `auto`: no question; the agent uses the subagent only for a larger self-contained job that needs the other model, keeps a quick question or short answer here (the effort judged as `effortDetection` says) and tells you in one sentence what it chose. The chat's model never changes. `off`: judge only the effort. Not in the Codex desktop app, which has no subagents. |
-| `subagentSuggestions` | `ask`, `off` | `ask`: offer a subagent for a self-contained task. `off`: the prompt stays here (effort and the other-model offer still apply). |
+| `subagentSuggestions` | `ask`, `auto`, `off` | `ask`: offer a subagent for a self-contained task. `auto` (Claude Code and Codex): no "Where should this go?"; the subagent starts right away and the agent says so in one sentence (Claude Code also shows a toast, Codex a system message, with `notifications: on`). It covers the other-model offer too while `midChatModelDetection` is `ask`; with `midChatModelDetection: auto` the agent still decides itself. A new-session offer still asks. In OpenCode `auto` works like `ask`. `off`: the prompt stays here (effort and the other-model offer still apply). |
 | `sessionSuggestions` | `ask`, `off` | `ask`: offer a new session for an unrelated task. `off`: the prompt stays here. |
 | `notifications` | `on`, `off` | `on`: a toast after an automatic change, and a footer label in Claude Code (Codex: a system message). `off`: none of these; the changes still happen. |
+| `compareWith` | `opus-medium`, any `<model>-<effort>` (`haiku`, `sonnet`, `opus`, `fable` × `low` … `max`), `first`; in Codex the tiers: `strong-medium` (default), `light-low`, … | What the [savings stats](#savings-stats) compare with. Default Opus at medium effort (Anthropic's pick for everyday work), the same for every chat. `first`: the model the chat started on (the main chat's for a subagent), the behaviour before this option. Claude Code and Codex; OpenCode always uses `first`. |
 | `stats` | `on`, `off` | Claude Code. `on`: note each decision and each turn's token use in a local file for [savings stats](#savings-stats). `off`: nothing is noted. Default `on`. |
 | `openPane` | `off`, `on` | Claude Code. `on`: the Prompt Router pane opens by itself when a session starts (shown from 144 terminal columns, 110 once you have opened it with `/router panel`), or else on your first prompt. `off`: only `/router panel` opens it. |
 
@@ -257,7 +258,10 @@ One classifier call per prompt: low effort, at most 150 output tokens, on the mo
 It is an **estimate**, kept honest:
 
 - Each turn's tokens (input, output, cache read and write) are priced with the list prices in [`core/prices.ts`](plugins/prompt-router/core/prices.ts), the only place with prices.
-- **Saved** = the same tokens on the model the turn would have run on without the router (the model you picked for the chat; for a subagent the router offered, the main chat's model) minus what they cost. A subagent the router did not offer saves nothing.
+- **Compared with** `compareWith`: by default every turn's tokens are priced on **Opus at medium effort** as well (shown as *Cost on Opus medium* and *Balance vs. Opus medium*), so a chat that started on Haiku and was escalated is not counted as a loss against Haiku. With `compareWith: first` it is the model the turn would have run on without the router (the model you picked for the chat; for a subagent the router offered, the main chat's model). The log keeps the tokens, so a new choice reprices the old data too.
+- **Saved** = the same tokens on that model minus what they cost. With `first`, a subagent the router did not offer saves nothing.
+- **Effort in the comparison is an estimate**: the prices do not depend on effort, only the number of tokens does. The output is weighted by level (`EFFORT_OUTPUT` in [`core/stats.ts`](plugins/prompt-router/core/stats.ts): low 0.5, medium 0.75, high 1, xhigh 1.4, max 2) and shown apart as *Effort (estimate)*. A turn whose effort is unknown (a subagent) is priced at its own output.
+- **Codex**: `compareWith` names a tier and a router effort level (`strong-medium`), priced at that tier's Claude list price (the table in [Models](#models)); Codex's own models are not in `core/prices.ts`, so their turns stay *without a price* and the comparison covers the priced ones only.
 - The **classifier's own cost** is taken off: **net saving** = saved − classifier.
 - A **stronger model** the router picked is shown as **extra cost**, apart, never hidden in the net.
 - **Effort** changes are counts only: what a turn would have cost at another effort is unknown.
@@ -394,6 +398,7 @@ All in `~/.codex` (`$CODEX_HOME` is respected), each file after a backup:
   "subagentSuggestions": "ask",
   "sessionSuggestions": "ask",
   "notifications": "on",
+  "compareWith": "strong-medium",
   "project": "",
   "rules": "",
   "language": "auto",
@@ -590,11 +595,11 @@ Use one of them, not both: they both set effort per prompt.
 Canned classifier replies, no model calls. From the repo root:
 
 ```bash
-claude plugin test plugins/prompt-router       # Claude Code mod: 106
+claude plugin test plugins/prompt-router       # Claude Code mod: 152
 claude plugin validate plugins/prompt-router   # manifest and options check
-node --test adapters/codex/test/               # Codex: 62
-node --test adapters/shared/test/              # tier names: 5
-node --test adapters/opencode/test/            # OpenCode: 47 (mock client)
+node --test adapters/codex/test/               # Codex: 90
+node --test adapters/shared/test/              # tier names: 6
+node --test adapters/opencode/test/            # OpenCode: 64 (mock client)
 ```
 
 ### Live eval
@@ -634,6 +639,7 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 
 | Version | Changes |
 | --- | --- |
+| **Unreleased** | New option `compareWith`: the savings compare with Opus medium by default (Codex: `strong-medium`), any other model and effort, or `first` (the chat's first model, as before); old data is repriced from its tokens. `subagentSuggestions: auto` starts the suggested subagent with no question and says so in one line (Claude Code and Codex). |
 | **0.9.0** | Savings stats on all three platforms. Claude Code: `/router stats` (Today / 7 days / Total, and a page with a graph of the last 30 days) and today's net saving in the footer. An estimate from list prices: the classifier's cost is taken off, a stronger model is shown as extra cost apart, effort only as counts. Codex: `/router stats` text table from Stop/SubagentStop turn tokens. OpenCode: `router_stats` tool. New option `stats`. |
 | **0.8.0** | One switch per feature: `effortDetection`, `firstChatDetection`, `midChatModelDetection`, `subagentSuggestions`, `sessionSuggestions`, `notifications`. The old `effortMode` and `modelMode` still work. `/router` lists every option and where it came from, and the log records them once per session. Codex and OpenCode: a prompt that stays here but fits another model offers a subagent on that model or staying here. `midChatModelDetection: auto` lets the agent choose between the two itself, with no question. Codex and OpenCode options name tiers (`light`, `standard`, `strong`, `top`) instead of Claude models; the old keys still work. OpenCode subagents are `router-<tier>`, and its questions show the real model. |
 | **0.7.0** | Claude Code: a prompt that stays here but fits another model offers a subagent on that model or staying here; the chat's model never changes mid-chat (it would break the prompt cache) |

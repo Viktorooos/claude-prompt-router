@@ -240,3 +240,22 @@ test('the script: a Stop event writes the turn and prints nothing', () => {
   assert.equal(lines.length, 1)
   assert.equal(JSON.parse(lines[0]).chat, 's5')
 })
+
+test('statsReport with compareWith: every priced turn on the chosen tier and effort; Codex models stay unpriced', () => {
+  const now = new Date(2026, 9, 31, 15).getTime()
+  const u = { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }
+  const records: Entry[] = [
+    // Logged against Haiku (the chat's first model), compared with the strong tier (Opus list price).
+    { kind: 'turn', ts: now - 500, platform: 'codex', chat: 'c', model: 'sonnet', baseline: 'haiku', usage: u },
+    { kind: 'turn', ts: now - 400, platform: 'codex', chat: 'c', model: 'gpt-6-luna', baseline: 'gpt-6.1-sol', usage: u },
+  ]
+  const row = (text: string, name: string) => text.split('\n').find(l => l.startsWith(name)) ?? ''
+  const first = statsReport(records, now)
+  assert.match(row(first, 'Extra cost'), /\$1\.90\s+\$1\.90\s+\$1\.90$/)
+  assert.match(first, /option compareWith: first/)
+  const strong = statsReport(records, now, { model: 'opus', effort: 'medium' })
+  assert.match(row(strong, 'Saved'), /\$2\.00\s+\$2\.00\s+\$2\.00$/)
+  assert.match(row(strong, 'Extra cost'), /\$0\.00\s+\$0\.00\s+\$0\.00$/)
+  assert.match(row(strong, 'Turns without a price'), /1\s+1\s+1$/)
+  assert.match(strong, /priced on the strong tier at medium effort/)
+})

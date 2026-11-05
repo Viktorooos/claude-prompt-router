@@ -2,11 +2,11 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, SWITCHES, allowed, asLevel, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, compactWindow, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Model, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, byDay, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
+import { REFERENCE, byDay, compareLabel, isReference, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, kTokens, partBarSvg, pulseSvg, ringSvg, sparkSvg, sparkText, tone } from '../core/panel.ts'
 import type { Decision, Entry, Report } from '../core/stats.ts'
 
@@ -323,6 +323,17 @@ function askNote(p: Pick, now: Level | '', midTurn = false, inApp = true) {
   return `${askFirst(options)} Prompt Router suggests running this prompt in ${where} (${label})${p.why ? `, because: ${p.why}` : ''}. This chat currently runs at effort ${now || 'unknown'}. Then: ${sessionThen(p, inApp)} Subagent = call the Agent tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${here.then}`
 }
 
+// subagentSuggestions auto: the subagent starts at once, no "Where should this go?". `other` is the
+// chat's model when the prompt belongs to this chat but fits another model (the subagent does not see the chat).
+function runAgentNote(p: Pick, other?: Model) {
+  const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
+  const head = other
+    ? `Prompt Router: this prompt fits ${label} better than this chat's ${MODEL_NAMES[other]}`
+    : `Prompt Router: run this prompt in a subagent (${label})`
+  const brief = other ? '; it does not see this chat, so give it everything it needs from this chat in its prompt,' : ''
+  return `${head}${p.why ? `, because: ${p.why}` : ''}. ${RUN_SUBAGENT} Call the Agent tool with model "${p.model}" and effort "${p.effort}"${brief} and have it return only a short result.${other ? " Never switch this chat's model for it." : ''}`
+}
+
 // A prompt that stays here but fits another model: a subagent on that model, or here on the chat's
 // model with only the effort judged again. The chat's model never changes mid-chat.
 function otherNote(p: Pick, from: Model, now: Level | '') {
@@ -402,6 +413,18 @@ async function noteAsked($: EngineInterface, where: Where, p: Pick, now: Level |
   lastAsked = { ts: await noteDecision($, where, { model: p.model, effort: p.effort }, 'asked', now, p), where, model: p.model }
 }
 
+// A subagent the router starts with no question (subagentSuggestions auto): applied, and remembered
+// like an asked one so its turns get the main chat's baseline when it spawns.
+async function noteRun($: EngineInterface, p: Pick, now: Level | '') {
+  lastAsked = { ts: await noteDecision($, 'subagent', { model: p.model, effort: p.effort }, 'applied', now, p), where: 'subagent', model: p.model }
+  if (cfg.notifications !== 'on') return
+  try {
+    await $.ui.toast(`Subagent: ${MODEL_NAMES[p.model]} · ${NAMES[p.effort]}${p.why ? `, ${p.why}` : ''}`)
+  } catch {
+    // The agent says it in one line.
+  }
+}
+
 async function noteAccept($: EngineInterface) {
   if (!lastAsked) return
   if (cfg.stats === 'on') pending.push({ kind: 'accept', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, decision: lastAsked.ts })
@@ -465,6 +488,10 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
       await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now)
       return e
     }
+    if (p.other && cfg.midChatModelDetection === 'ask' && cfg.subagentSuggestions === 'auto') {
+      await noteRun($, p, now)
+      return { ...e, text: `${e.text}\n\n[${runAgentNote(p, p.other.now)}]` }
+    }
     if (p.other) await noteAsked($, 'subagent', p, now)
     if (p.other) return { ...e, text: `${e.text}\n\n[${(cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(p, p.other.now, now)}]` }
     const changes: string[] = []
@@ -497,6 +524,10 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     if (askModel || askEffort) await noteAsked($, 'here', p, now)
     else await noteDecision($, 'here', changed, 'applied', now, p)
     return askModel || askEffort ? { ...e, text: `${e.text}\n\n[${switchNote(p, askModel, askEffort)}]` } : e
+  }
+  if (p.where === 'subagent' && cfg.subagentSuggestions === 'auto') {
+    await noteRun($, p, now)
+    return { ...e, text: `${e.text}\n\n[${runAgentNote(p)}]` }
   }
   await noteAsked($, p.where, p, now)
   // A mod's own dialog does not open at prompt time in the app, so Claude asks with the same options.
@@ -597,7 +628,8 @@ async function paneData($: EngineInterface) {
   let savings: { report: Report; days: ReturnType<typeof byDay> } | null = null
   if (cfg.stats === 'on') {
     const records = [...parseLog(await readStats($)), ...pending]
-    savings = { report: summarize(records, now), days: byDay(records, now, 14) }
+    const c = compareTarget(cfg.compareWith)
+    savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c) }
   }
   return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
 }
@@ -862,16 +894,17 @@ export const register: Register = (on, options) => {
       await flush($)
       const now = await $.clock.now()
       const records = parseLog(await readStats($))
-      const report = summarize(records, now)
+      const c = compareTarget(cfg.compareWith)
+      const report = summarize(records, now, c)
       const page = `${home}/.claude/mods-logs/prompt-router-stats.html`
       let link = ''
       try {
-        await $.fs.write(page, statsHtml(report, byDay(records, now, 30)))
+        await $.fs.write(page, statsHtml(report, byDay(records, now, 30, c), c))
         link = `\n\nWith a graph of the last 30 days: file://${page}`
       } catch (err) {
         await log($, 'stats page', err)
       }
-      return { text: `${statsText(report)}${link}` }
+      return { text: `${statsText(report, c)}${link}` }
     }
     const now = await currentLevel($)
     const { value } = await $.state.get(OVERRIDE)
@@ -914,9 +947,11 @@ export const register: Register = (on, options) => {
     const money = (v: number) => (Math.abs(v) < 0.005 ? 'none' : v > 0 ? 'up' : 'down')
     const MONEY_COLOR = { up: TONES.calm[0], down: TONES.over[0], none: undefined }
     const balanceColor = s ? MONEY_COLOR[money(s.balanceUsd)] : undefined
+    const c = compareTarget(cfg.compareWith)
+    const showReference = !isReference(c)
     const verdict = !s || s.withoutUsd <= 0
       ? 'No priced work in this period yet.'
-      : `${s.balanceUsd >= 0.005 ? 'saved' : s.balanceUsd <= -0.005 ? 'lost' : 'even'} · ${Math.round(Math.abs(s.balancePct))} % of ${usd(s.withoutUsd)}, what the work would have cost without the router`
+      : `${s.balanceUsd >= 0.005 ? 'saved' : s.balanceUsd <= -0.005 ? 'lost' : 'even'} · ${Math.round(Math.abs(s.balancePct))} % of ${usd(s.withoutUsd)}, what the work would have cost ${c ? `on ${compareLabel(c)}` : 'without the router'}`
     const perPrompt = s && s.prompts ? `$${(s.classifierUsd / s.prompts).toFixed(3)}` : '$0'
     const activity = s ? `${s.prompts} prompts · ${s.modelChanges} model changes · effort ↓${s.effortDown} ↑${s.effortUp} · ${s.subagents} subagents · ${s.sessions} new sessions` : ''
     const NOTE = 'An estimate from list prices. Effort is a guess (output tokens weighted per level). Full table: /router stats.'
@@ -949,11 +984,11 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column">
             <Text dimColor>Where the difference came from</Text>
             {parts.map(([k, label, v]) => row(`part-${k}`, `  ${label}`, money(v) === 'none' ? '$0.00' : signed(v), { dim: money(v) === 'none', color: MONEY_COLOR[money(v)] }))}
-            {row('balance', 'Balance', signed(s.balanceUsd), { bold: true, color: balanceColor })}
+            {row('balance', c ? `Balance vs. ${compareLabel(c)}` : 'Balance', signed(s.balanceUsd), { bold: true, color: balanceColor })}
           </Box>
           <Box flexDirection="column">
             {row('accuracy', s.routed ? `Accuracy (estimate) · ${s.rework} re-work of ${s.routed} routed` : 'Accuracy (estimate)', s.accuracyPct === null ? '–' : `${Math.round(s.accuracyPct)} %`, { bold: true })}
-            {row('reference', `Vs. always ${REFERENCE.model} ${REFERENCE.effort}`, signed(s.vsReferenceUsd), { color: MONEY_COLOR[money(s.vsReferenceUsd)] })}
+            {showReference ? row('reference', `Vs. always ${REFERENCE.model} ${REFERENCE.effort}`, signed(s.vsReferenceUsd), { color: MONEY_COLOR[money(s.vsReferenceUsd)] }) : null}
             {row('perturn', s.pricedTurns ? `Cost per turn · ${s.pricedTurns} turns` : 'Cost per turn', usd(s.perTurnUsd), { dim: true })}
           </Box>
         </Box>
@@ -1109,10 +1144,12 @@ export const register: Register = (on, options) => {
               )
             })()}
             <Box flexDirection="column" gap={1}>
-              <Box flexDirection="column">
-                <Text dimColor>{`Vs. always ${REFERENCE.model} ${REFERENCE.effort}`}</Text>
-                <Text bold color={MONEY_COLOR[money(s.vsReferenceUsd)]}>{signed(s.vsReferenceUsd)}</Text>
-              </Box>
+              {showReference ? (
+                <Box flexDirection="column">
+                  <Text dimColor>{`Vs. always ${REFERENCE.model} ${REFERENCE.effort}`}</Text>
+                  <Text bold color={MONEY_COLOR[money(s.vsReferenceUsd)]}>{signed(s.vsReferenceUsd)}</Text>
+                </Box>
+              ) : null}
               <Box flexDirection="column">
                 <Text dimColor>{s.pricedTurns ? `Cost per turn · ${s.pricedTurns} turns` : 'Cost per turn'}</Text>
                 <Text>{usd(s.perTurnUsd)}</Text>

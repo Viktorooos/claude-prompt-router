@@ -15,7 +15,9 @@ import { join } from 'node:path'
 import { cost } from '../../plugins/prompt-router/core/prices.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
 import { parseLog, summarize } from '../../plugins/prompt-router/core/stats.ts'
-import type { Entry, Summary } from '../../plugins/prompt-router/core/stats.ts'
+import type { Compare, Entry, Summary } from '../../plugins/prompt-router/core/stats.ts'
+import { TIER_OF } from '../shared/tiers.ts'
+import type { Model } from '../../plugins/prompt-router/core/router.ts'
 
 const DAY = 86_400_000
 export const KEEP_MS = 90 * DAY
@@ -133,9 +135,11 @@ function fmtTokens(n: number) {
 }
 
 // The text table for `/router stats`: Today / 7 days / Total.
-export function statsReport(records: readonly Entry[], now: number): string {
+// `c`: option compareWith (a tier at an effort, priced at that tier's Claude list price), or null
+// for the model the chat started on.
+export function statsReport(records: readonly Entry[], now: number, c: Compare = null): string {
   if (!records.length) return 'Prompt Router statistics: No statistics yet. They start with the next routed prompt.'
-  const r = summarize(records, now)
+  const r = summarize(records, now, c)
   const cols = [r.today, r.week, r.total]
   const noPrice = [startOfDay(now), now - 7 * DAY, -Infinity].map(from => String(unpricedClassifier(records, from)))
   const rows: [string, string[]][] = [
@@ -166,7 +170,9 @@ export function statsReport(records: readonly Entry[], now: number): string {
   }
   out.push(
     '',
-    'An estimate from the list prices in core/prices.ts: the same tokens priced on the model the chat started on (the main chat model for a subagent).',
+    c
+      ? `An estimate from the list prices in core/prices.ts: the same tokens priced on the ${TIER_OF[c.model as Model] ?? c.model} tier at ${c.effort} effort (option compareWith, its Claude list price; the effort weights the output, a guess).`
+      : 'An estimate from the list prices in core/prices.ts: the same tokens priced on the model the chat started on (the main chat model for a subagent; option compareWith: first).',
     'Net saving = saved minus the classifier cost. Extra cost (a stronger model) is shown apart, not in the net. Effort changes are only counted.',
     'Models missing from the price list (Codex models) are counted, not priced.',
   )

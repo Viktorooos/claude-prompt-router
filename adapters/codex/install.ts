@@ -27,6 +27,7 @@ export const DEFAULT_OPTIONS = {
   firstChatDetection: 'ask',
   midChatModelDetection: 'ask',
   subagentSuggestions: 'ask',
+  compareWith: 'strong-medium',
   sessionSuggestions: 'ask',
   newSessionAt: '50%',
   notifications: 'on',

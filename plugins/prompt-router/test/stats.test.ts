@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { EFFORT_OUTPUT, REFERENCE, byDay, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
+import { EFFORT_OUTPUT, REFERENCE, byDay, compareLabel, statsRows, parseLog, rotate, savingLabel, statsHtml, statsText, summarize } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -297,4 +297,53 @@ test('a routed prompt that comes again within three prompts counts as re-work', 
 
 test('accuracy is null when nothing was routed', () => {
   expect(summarize([decision({ key: 'hi' })], NOW).total.accuracyPct).toBe(null)
+})
+
+// compareWith: the same tokens priced on one model and effort for every turn, from the log alone.
+test('compareWith reprices old turns on the chosen model and effort, whatever baseline they logged', () => {
+  const t = turn('opus', 'haiku', { effort: 'high', baseEffort: 'low' })
+  const first = summarize([t], NOW).today
+  expect(first.balanceUsd < 0).toBe(true)
+  const s = summarize([t], NOW, { model: 'opus', effort: 'medium' }).today
+  const without = cost({ ...U, output: U.output * (EFFORT_OUTPUT.medium / EFFORT_OUTPUT.high) }, 'opus')!
+  close(s.withoutUsd, without)
+  close(s.balanceUsd, without - cost(U, 'opus')!)
+  // Same model: no model saving, only the effort part (the guess).
+  expect(s.savedUsd).toBe(0)
+  expect(s.extraUsd).toBe(0)
+  close(s.effortUsd, without - cost(U, 'opus')!)
+  // Against the reference it matches the fixed yardstick.
+  close(s.balanceUsd, s.vsReferenceUsd)
+})
+
+test('compareWith on a cheaper model: a turn on a stronger one is extra cost; a turn with no effort keeps its output', () => {
+  const sub = turn('opus', 'opus', { agentId: 'a1' })
+  const s = summarize([sub], NOW, { model: 'sonnet', effort: 'high' }).today
+  close(s.withoutUsd, cost(U, 'sonnet')!)
+  close(s.extraUsd, cost(U, 'opus')! - cost(U, 'sonnet')!)
+  expect(s.effortUsd).toBe(0)
+})
+
+test('compareWith first is the old behaviour; byDay takes the same choice', () => {
+  const records = [turn('haiku', 'opus'), turn('opus', 'sonnet')]
+  expect(summarize(records, NOW, null)).toEqual(summarize(records, NOW))
+  const c = { model: 'fable', effort: 'medium' } as const
+  const d = byDay(records, NOW, 1, c).at(-1)!
+  close(d.withoutUsd, summarize(records, NOW, c).today.withoutUsd)
+  close(d.withoutUsd, 2 * cost(U, 'fable')!)
+})
+
+test('the rows name the comparison and drop the reference row when it is the same yardstick', () => {
+  expect(compareLabel(null)).toBe("the chat's first model")
+  expect(compareLabel({ model: 'opus', effort: 'medium' })).toBe('Opus medium')
+  expect(compareLabel({ model: 'claude-sonnet-5-5', effort: 'xhigh' })).toBe('Sonnet extra high')
+  const r = summarize([turn('haiku', 'opus')], NOW)
+  const labels = (c: Parameters<typeof statsRows>[1]) => statsRows(r, c).map(x => x.label)
+  expect(labels(null)).toContain('Cost without router')
+  expect(labels(null).some(l => l.startsWith('Vs. always'))).toBe(true)
+  expect(labels({ model: 'opus', effort: 'medium' })).toContain('Cost on Opus medium')
+  expect(labels({ model: 'opus', effort: 'medium' }).some(l => l.startsWith('Vs. always'))).toBe(false)
+  expect(labels({ model: 'sonnet', effort: 'medium' }).some(l => l.startsWith('Vs. always'))).toBe(true)
+  expect(statsText(r, { model: 'opus', effort: 'medium' })).toMatch(/Compared with Opus medium for every turn/)
+  expect(statsText(r)).toMatch(/compareWith: first/)
 })
