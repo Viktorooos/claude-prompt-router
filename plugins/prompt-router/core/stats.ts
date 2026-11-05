@@ -479,7 +479,8 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
       without = { q1: s.withoutUsd, median: s.withoutUsd, q3: s.withoutUsd }
     }
     const firstGain = without.median - (actual - rework)
-    const down = above(d.from.model, d.to.model) || (d.from.model === d.to.model && above(d.from.effort, d.to.effort)) || d.where !== 'here'
+    // A subagent or session on the same model is cheaper (a fresh context); on a stronger one it is an escalation.
+    const down = above(d.from.model, d.to.model) || (d.from.model === d.to.model && (d.where !== 'here' || above(d.from.effort, d.to.effort)))
     if (down) out.parts.cheaper += firstGain
     else out.parts.escalation += firstGain
     out.parts.rework -= rework

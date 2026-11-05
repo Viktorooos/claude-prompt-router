@@ -581,3 +581,13 @@ test('balance: an older routed task without turn times saves no time, even where
   close(b.minutes.value, -0.1)
   expect(b.byModel.find(r => r.model === 'haiku')!.minutesPerTask).toBeNull()
 })
+
+test('balance: a subagent on a stronger model is an escalation, not a cheaper pick', () => {
+  const asked = decision({ where: 'subagent', from: { model: 'haiku', effort: 'low' }, to: { model: 'opus', effort: 'medium' }, outcome: 'asked' })
+  const accept: Accept = { kind: 'accept', ts: asked.ts + 1, platform: 'claude-code', chat: 'c1', decision: asked.ts }
+  const sub = turn('claude-opus-5-5', 'claude-haiku-5-5', { ts: asked.ts + 2, agentId: 'a1' })
+  const b = balance([asked, accept, sub])
+  const extra = cost(U, 'claude-opus-5-5')! - cost(U, 'claude-haiku-5-5')!
+  close(b.parts.cheaper, 0)
+  close(b.parts.escalation, -extra)
+})
