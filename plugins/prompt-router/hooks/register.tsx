@@ -628,7 +628,11 @@ const shown = (k: Option, v: string) => (k === 'holdoutPct' ? (v === '0' ? 'off'
 // Saves one option as /config does (settings.json pluginConfigs, through the engine), and goes by it now.
 async function saveOption($: EngineInterface, k: Option, value: string) {
   try {
-    const row = (await $.config.list()).find(r => r.key === `${NAME}.${k}` || (r.provider?.plugin === NAME && r.key.endsWith(`.${k}`)))
+    // An installed mod is named `<name>@<marketplace>`, and so are its rows.
+    const ours = (p = '') => p === NAME || p.startsWith(`${NAME}@`)
+    const rows = await $.config.list()
+    const row = rows.find(r => r.key === `${NAME}.${k}` || (ours(r.provider?.plugin) && r.key.endsWith(`.${k}`)))
+    if (!row) await log($, 'save option', `${k}: no row; the mod's rows: ${rows.filter(r => ours(r.provider?.plugin) || r.key.startsWith(NAME)).map(r => r.key).join(', ') || 'none'}`)
     const r = await $.config.set({ key: row?.key ?? `${NAME}.${k}`, value })
     if (r.deny) {
       await log($, 'save option', `${k}: ${r.deny}`)

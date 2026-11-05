@@ -13,7 +13,7 @@ const SESSION_PICK = '{"where": "session", "model": "sonnet", "effort": "medium"
 type Seen = { sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[] }
 
 // The engine beneath the plugin, as far as the pane needs it.
-function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string } = {}): Seen {
+function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string; rows?: any[] } = {}): Seen {
   const seen: Seen = { sets: [], store: new Map(), opened: [], sent: [] }
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
@@ -27,8 +27,9 @@ function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens:
   }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', () => ({ value: { startedAt: 0, context: opts.usage ?? { tokens: 94_000, window: 200_000 }, rateLimits: [] } }))
-  on('config.list', () => ({ value: [{ key: 'effort', label: 'Effort', kind: 'choice', value: 'medium', options: ['low', 'medium', 'high', 'xhigh', 'max'], provider: { plugin: 'engine' }, isLocked: false }] }))
+  on('config.list', () => ({ value: [{ key: 'effort', label: 'Effort', kind: 'choice', value: 'medium', options: ['low', 'medium', 'high', 'xhigh', 'max'], provider: { plugin: 'engine' }, isLocked: false }, ...(opts.rows ?? [])] }))
   on('config.set', (_: unknown, e: any) => {
+    if (opts.rows && !opts.rows.some(r => r.key === e.key)) throw new Error(`no /config row with key ${e.key}`)
     seen.sets.push({ key: e.key, value: e.value })
     return { value: e.value }
   })
@@ -283,3 +284,18 @@ test('drawings: tone, bars, sparklines and times', () => {
   for (const s of [ring, left, spark]) expect(s.length).toBeLessThan(20_000)
 })
 
+
+test('an installed mod saves through its marketplace-named /config rows', async ($: any, on: any) => {
+  const ID = 'prompt-router@prompt-router'
+  const row = (k: string, value: string) => ({ key: `${ID}.${k}`, label: k, kind: 'choice', value, options: [], provider: { plugin: ID, tier: 'user' }, isLocked: false })
+  const seen = engine(on, { rows: [row('firstChatDetection', 'auto'), row('notifications', 'on')] })
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'toggle-firstChatDetection-ask' })
+  await ui.press({ key: 'toggle-notifications-off' })
+  expect(seen.sets).toEqual([
+    { key: `${ID}.firstChatDetection`, value: 'ask' },
+    { key: `${ID}.notifications`, value: 'off' },
+  ])
+  await ui.unmount()
+})
