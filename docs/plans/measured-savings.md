@@ -30,7 +30,7 @@ Větev `feat/measured-savings` (z `integrate/all` 22ecc6e, kde už je všechno m
 - [x] 4. Tokeny z přepisu: `scripts/usage-scan.mjs` + čistá funkce `withTranscripts(records, scans)` v `core/stats.ts`, volání z `/router stats` (30–60 min). Ověření: test na fixture přepisu (dedup podle `message.id`, subagenti, okna úkolů).
 - [x] 5. Zobrazení: `/router stats` text a HTML, panel (bez přepisu), README (30 min). Ověření: testy textu, `claude plugin test`.
 - [x] 6. Adaptéry Codex/OpenCode: `follows`, `key`, `accept`, `trial`/holdout po úkolech, `redo` (30–60 min). Soubory: `adapters/codex/hook.ts`, `adapters/opencode/prompt-router.ts`, `adapters/shared`. Ověření: `node --test adapters/*/test/`.
-- [ ] 7. `/done`, verze 0.10.0, commit.
+- [x] 7. `/done`, verze 0.10.0, commit.
 
 ## Jak ověřit
 Z kořene repa: `claude plugin test plugins/prompt-router`, `node --test plugins/prompt-router/test/node/`, `node --test adapters/codex/test/`, `node --test adapters/opencode/test/`, `node --test adapters/shared/test/`.
