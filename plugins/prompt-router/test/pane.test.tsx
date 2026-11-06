@@ -221,6 +221,18 @@ test('nothing in the pane animates: not after a reply, not after a press, and no
   expect(waits.length).toBe(0)
 })
 
+test('a card\'s line under its heading wraps, never cut short with dots', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  engine(on, { now, log: TURN(now - HOUR) })
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const texts = await ui.findAll({ type: 'Text' })
+  const sub = texts.find((t: any) => /compared with/.test(t.text))
+  expect(sub).toBeTruthy()
+  expect(texts.filter((t: any) => /truncate/.test(String(t.props?.wrap ?? ''))).map((t: any) => t.text)).toEqual([])
+  await ui.unmount()
+})
+
 test('a setting\'s line sits beside its control, not under it', async ($: any, on: any) => {
   engine(on)
   await start($)

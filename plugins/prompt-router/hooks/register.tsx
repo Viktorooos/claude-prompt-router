@@ -1214,7 +1214,7 @@ export const register: Register = (on, options) => {
         {icon ? <Box flexShrink={0}><Svg source={tileSvg(icon, color, o.strong)} alt={o.alt ?? name} width={36} height={36} /></Box> : null}
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
           <Text bold>{name}</Text>
-          {sub ? <Text dimColor wrap={narrow ? 'wrap' : 'truncate-end'}>{sub}</Text> : null}
+          {sub ? <Text dimColor wrap="wrap">{sub}</Text> : null}
         </Box>
         {o.right ? <Box flexShrink={0}>{o.right}</Box> : null}
       </Box>
