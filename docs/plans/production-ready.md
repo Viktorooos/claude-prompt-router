@@ -120,8 +120,16 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
 
 ### D. Vydání
 
-- [ ] 11. Dokumentace (30 min). README: odznak verze, počty testů (410) a případů evaluace (132), řádek „Unreleased“ v changelogu patří k 0.9.1, řádek o ceně klasifikátoru v Codexu podle měření z kroku 1, tabulka Status.
+- [x] 11. Dokumentace (30 min). README: odznak verze, počty testů (410) a případů evaluace (132), řádek „Unreleased“ v changelogu patří k 0.9.1, řádek o ceně klasifikátoru v Codexu podle měření z kroku 1, tabulka Status.
+
+  Poznámky ke kroku 11 (hotovo):
+  - Odznaky: verze 0.10.0, testy 417 (CC 213, node 6, Codex 118, OpenCode 74, shared 6), eval 132 případů. Poslední živý eval (Sonnet 369/369, Opus 123/123, Haiku 114/123) běžel na 123 případech; README to tak říká, 9 novějších živě nespuštěno.
+  - Changelog: „Unreleased“ → 0.9.1, doplněný řádek 0.9.2 (panel), 0.10.0 přepsaný na celou větev (odhad podle ceníku, rychlá cesta, hash promptu, Codex: jedna klasifikace, lehký klasifikátor ~12k/4 s místo 23k/7,5 s, přeskočené požadavky appky, ceny GPT, Windows; CC: paralelní sessions, config složka).
+  - Cena klasifikátoru v Codexu (Accuracy and cost, sekce Codex) podle kroku 1. Status: Codex Windows jen unit testy, OpenCode nikdy živě. OpenCode varování 70 → 74 testů, požadavky Codexu zmiňují Windows. Věta o starých záznamech `holdout`/`trial`/`wanted` přepsaná (vývojové buildy 0.10.0, ne vydání).
 - [ ] 12. `/done`, verze, commit (navazuje na otevřený krok 7 v `measured-savings.md`).
+
+  Poznámka k verzi (krok 12, neodškrtnuto, `/done` pustí koordinátor):
+  - Verze zůstává 0.10.0: commit 8c9ec91 „Release 0.10.0“ nebyl nikdy pushnutý, takže celá práce této větve patří do 0.10.0. `marketplace.json` i `plugin.json` už 0.10.0 mají, nic se neměnilo.
 
 ## Rozhodnutí, která čekají na uživatele
 

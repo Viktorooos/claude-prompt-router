@@ -4,9 +4,9 @@
 
 **The right place, the right model and the right effort for every prompt, decided before the agent starts working.**
 
-![version](https://img.shields.io/badge/version-0.9.0-blue?style=flat-square)
-![unit tests](https://img.shields.io/badge/unit_tests-361_passing-brightgreen?style=flat-square)
-![eval](https://img.shields.io/badge/eval-123_cases-8a63d2?style=flat-square)
+![version](https://img.shields.io/badge/version-0.10.0-blue?style=flat-square)
+![unit tests](https://img.shields.io/badge/unit_tests-417_passing-brightgreen?style=flat-square)
+![eval](https://img.shields.io/badge/eval-132_cases-8a63d2?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 <br>
 ![Claude Code](https://img.shields.io/badge/Claude_Code-mod-d97757?style=flat-square)
@@ -128,7 +128,7 @@ The decisions are the same everywhere. What each platform lets a plugin do diffe
 | **`/router` command** (lists every option and where it came from) | ✅ | ⚠️ typed as a prompt; the TUI may take it as unknown | ✅ config command + toast |
 | **Default classifier** | Sonnet | `gpt-6-luna` (tier `light`) | `anthropic/claude-sonnet-5-5` |
 | **Options live in** | `~/.claude/settings.json` (`pluginConfigs`) or `/plugin` | `~/.codex/prompt-router.json` | `~/.config/opencode/prompt-router.json` or `opencode.json` |
-| **Status** | used daily | unit-tested; hook run with the real classifier | ⚠️ unit-tested only |
+| **Status** | used daily | hook run with the real classifier on macOS; Windows unit-tested only | ⚠️ unit-tested only, never run live |
 
 <a id="concepts"></a>
 ## 🧠 Concepts
@@ -241,7 +241,7 @@ Name the tier either way: `haiku`/`sonnet`/`opus`/`fable` or `light`/`standard`/
 
 ### Accuracy and cost
 
-Last live eval: **123 cases**, including the Fable / xhigh / max boundaries. How to run it: [Development](#development).
+Last live eval: **123 cases**, including the Fable / xhigh / max boundaries. `test/cases.json` now has 132; the 9 newer cases have not been run live yet. How to run it: [Development](#development).
 
 | Classifier | Result |
 | --- | --- |
@@ -249,7 +249,7 @@ Last live eval: **123 cases**, including the Fable / xhigh / max boundaries. How
 | Opus | ✅ 123 / 123 |
 | Haiku | ⚠️ 114 / 123 (none of the misses raised a tier) |
 
-One classifier call per prompt (none for a plain reply such as `yes` or `option 2`): low effort, at most 150 output tokens, on the model you pick in `classifier`. With the default Sonnet in Claude Code, that is a fraction of a cent per prompt. In Codex it runs on your ChatGPT plan and adds about 3–4 s before each prompt. The savings come from not running a 200k-token chat on a question that needed a fresh one.
+One classifier call per prompt (none for a plain reply such as `yes` or `option 2`): low effort, at most 150 output tokens, on the model you pick in `classifier`. With the default Sonnet in Claude Code, that is a fraction of a cent per prompt. In Codex it runs on your ChatGPT plan as a stripped-down `codex exec` (no MCP servers, tools or project notes): about 12k input tokens, mostly cached, and about 4 s before each prompt. The savings come from not running a 200k-token chat on a question that needed a fresh one.
 
 <a id="savings-stats"></a>
 ### Savings stats
@@ -289,7 +289,7 @@ The token estimate above assumes the work would have taken the same tokens witho
 - **Accuracy** = the share of routed tasks without a failure, with a 95 % (Wilson) interval.
 - A repeated prompt (redo) counts as a correction. Declined offers are logged and shown as *Asked / declined*.
 
-Records logged by 0.10.0 with a control group (`holdout`, `trial`, `wanted`) still read: a held-back prompt counts as a keep.
+Records from development builds of 0.10.0 with the fields `holdout`, `trial` or `wanted` still read: those fields are ignored and such a prompt counts as a keep.
 
 ---
 
@@ -372,7 +372,7 @@ The Codex CLI and the ChatGPT desktop app share `~/.codex`, so one install cover
 
 ### Requirements
 
-- Codex **0.166+** (CLI), logged in. The classifier runs on your ChatGPT login, no API key.
+- Codex **0.166+** (CLI), logged in, on macOS, Linux or Windows (Windows: unit-tested only). The classifier runs on your ChatGPT login, no API key.
 - Node **26+** (the hook runs TypeScript directly).
 - A clone of this repo. The hook runs from it, so keep it where it is.
 
@@ -441,7 +441,7 @@ All in `~/.codex` (`$CODEX_HOME` is respected), each file after a backup:
 
 </details>
 
-The classifier is a read-only `codex exec` on the `classifier` class (`gpt-6-luna`) at low effort: about **3–4 s per prompt**. Log: `~/.codex/log/prompt-router.log`; the current task per chat (to match an accepted offer): `~/.codex/log/prompt-router-tasks.json`.
+The classifier is a read-only `codex exec` on the `classifier` class (`gpt-6-luna`) at low effort, with your MCP servers, tools and notes left out: about **4 s and 12k input tokens (mostly cached) per prompt**. A `config.toml` with its own model provider keeps your full config. Log: `~/.codex/log/prompt-router.log`; the current task per chat (to match an accepted offer): `~/.codex/log/prompt-router-tasks.json`.
 
 ### Differences
 
@@ -471,7 +471,7 @@ Removes only the router's entry from `hooks.json`, the MCP server block from `co
 For the OpenCode CLI / TUI and desktop.
 
 > [!WARNING]
-> The OpenCode adapter is **unit-tested only** (70 tests with a mock client). It has not been run against a real OpenCode yet.
+> The OpenCode adapter is **unit-tested only** (74 tests with a mock client). It has not been run against a real OpenCode yet.
 
 ### Requirements
 
@@ -663,8 +663,9 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 
 | Version | Changes |
 | --- | --- |
-| **0.10.0** | Declined offers and repeated prompts (redo) are logged; a redo counts as a correction in the balance per task. A task's cost includes its subagents and the classifier. Cut-off turns get their tokens from the chat's transcript (`scripts/usage-scan.mjs`, only in `/router stats`). Effort is no longer re-priced by a guess. Codex and OpenCode log the same task fields (prompt key, follows, redo, accepted and declined offers). |
-| **Unreleased** | `compareWith: history`: the savings compare with the models and efforts you ran before the router, weighted by tokens, counted once from the transcripts. New option `compareWith`: the savings compare with Opus medium by default (Codex: `strong-medium`), any other model and effort, or `first` (the chat's first model, as before); old data is repriced from its tokens. `subagentSuggestions: auto` starts the suggested subagent with no question and says so in one line (Claude Code and Codex). |
+| **0.10.0** | Savings are an estimate from list prices only. Declined offers and repeated prompts (redo) are logged; a redo counts as a correction in the balance per task. A task's cost includes its subagents and the classifier. Cut-off turns get their tokens from the chat's transcript (`scripts/usage-scan.mjs`, only in `/router stats`). Effort is no longer re-priced by a guess. Codex and OpenCode log the same task fields (prompt key, follows, redo, accepted and declined offers). A plain reply (`yes`, `ok`, `option 2`, a number or a letter, in five languages) keeps the prompt with no classifier call, on all platforms. The stats log keeps no prompt text, only a hash of it. Codex: one classification per prompt (the hook's answer is reused by `route`); a lighter classifier run (about 12k input tokens and 4 s instead of 23k and 7.5 s); the app's own generated requests are skipped; GPT models have OpenAI list prices, so `/router stats` shows dollars; Windows support (unit-tested). Claude Code: parallel sessions no longer lose stats or log lines; the config folder comes from `CLAUDE_CONFIG_DIR`, `HOME` or `USERPROFILE`. |
+| **0.9.2** | Panel: folds stay open after a settings change; no effort button for `compareWith: history`. |
+| **0.9.1** | `compareWith: history`: the savings compare with the models and efforts you ran before the router, weighted by tokens, counted once from the transcripts. New option `compareWith`: the savings compare with Opus medium by default (Codex: `strong-medium`), any other model and effort, or `first` (the chat's first model, as before); old data is repriced from its tokens. `subagentSuggestions: auto` starts the suggested subagent with no question and says so in one line (Claude Code and Codex). |
 | **0.9.0** | Savings stats on all three platforms. Claude Code: `/router stats` (Today / 7 days / Total, and a page with a graph of the last 30 days) and today's net saving in the footer. An estimate from list prices: the classifier's cost is taken off, a stronger model is shown as extra cost apart, effort only as counts. Codex: `/router stats` text table from Stop/SubagentStop turn tokens. OpenCode: `router_stats` tool. New option `stats`. |
 | **0.8.0** | One switch per feature: `effortDetection`, `firstChatDetection`, `midChatModelDetection`, `subagentSuggestions`, `sessionSuggestions`, `notifications`. The old `effortMode` and `modelMode` still work. `/router` lists every option and where it came from, and the log records them once per session. Codex and OpenCode: a prompt that stays here but fits another model offers a subagent on that model or staying here. `midChatModelDetection: auto` lets the agent choose between the two itself, with no question. Codex and OpenCode options name tiers (`light`, `standard`, `strong`, `top`) instead of Claude models; the old keys still work. OpenCode subagents are `router-<tier>`, and its questions show the real model. |
 | **0.7.0** | Claude Code: a prompt that stays here but fits another model offers a subagent on that model or staying here; the chat's model never changes mid-chat (it would break the prompt cache) |
