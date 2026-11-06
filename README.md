@@ -209,7 +209,7 @@ The same keys on every platform. Each feature has its own switch. The defaults k
 | `compareWith` | `opus-medium`, any `<model>-<effort>` (`haiku`, `sonnet`, `opus`, `fable` × `low` … `max`), `first`, `history` (Claude Code); in Codex the tiers: `strong-medium` (default), `light-low`, … | What the [savings stats](#savings-stats) compare with. Default Opus at medium effort (Anthropic's pick for everyday work), the same for every chat. `first`: the model the chat started on (the main chat's for a subagent), the behaviour before this option. `history`: the mix of models and efforts you ran before installing the router, weighted by tokens (see [savings stats](#savings-stats)). Claude Code and Codex; OpenCode always uses `first`. |
 | `stats` | `on`, `off` | Claude Code. `on`: note each decision and each turn's token use in a local file for [savings stats](#savings-stats). `off`: nothing is noted. Default `on`. |
 | `openPane` | `off`, `on` | Claude Code. `on`: the Prompt Router pane opens by itself when a session starts (shown from 144 terminal columns, 110 once you have opened it with `/router panel`), or else on your first prompt. `off`: only `/router panel` opens it. |
-| `holdoutPct` | `10`, `0`, `5`, `20` | Claude Code. This share (%) of prompts the router would move to a cheaper model or lower effort keeps its setting, as a control group for the [savings stats](#savings-stats). Never a prompt that names a model or effort, never an xhigh or max pick. `0`: off. Default `10`. |
+| `holdoutPct` | `30`, `0`, `5`, `10`, `20` | Claude Code. This share (%) of tasks the router would change (model, effort, subagent or new session) is drawn into a control group when the task starts: the router stays quiet for the whole task and logs what it wanted, for the [measured saving](#measured). A prompt that names a model or effort, or an xhigh or max pick, is never held back. `0`: off. Default `30` for now, to collect data quickly; `10` is enough later. |
 
 Where to put them:
 
@@ -263,13 +263,24 @@ It is an **estimate**, kept honest:
 - **Compared with** `compareWith`: by default every turn's tokens are priced on **Opus at medium effort** as well (shown as *Cost on Opus medium* and *Balance vs. Opus medium*), so a chat that started on Haiku and was escalated is not counted as a loss against Haiku. With `compareWith: first` it is the model the turn would have run on without the router (the model you picked for the chat; for a subagent the router offered, the main chat's model). The log keeps the tokens, so a new choice reprices the old data too.
 - **History** `compareWith: history` (Claude Code): compares with what you really ran before the router. Once, in the background (it never holds a prompt or the session's start), `scripts/history-scan.mjs` reads the transcripts in `~/.claude/projects/*/*.jsonl` older than the first record of the stats log, streamed and only the assistant replies, and adds up their tokens per model and effort (a transcript with no effort counts as medium). Plain Node, no model calls; on about 6 GB of transcripts it took 5 s. The result is kept in `~/.claude/mods-logs/prompt-router-history.json` and never recomputed (delete the file to count again). Each turn is then priced on every part of the mix, for example 75 % Opus high, 15 % Opus extra high, 5 % Opus max, and the prices weighted by the shares. Until the count is done, or with no sessions from before the router, it compares with Opus medium and `/router stats` says so; `/router`, `/router stats` and the panel show the mix.
 - **Saved** = the same tokens on that model minus what they cost. With a fixed `compareWith` (the default `opus-medium`) every turn counts, also a subagent the router did not offer (for example the built-in Explore on Haiku): the number says what the work cost against always running on that model, not only what the router itself moved. With `first`, a subagent the router did not offer saves nothing.
-- **Effort in the comparison is an estimate**: the prices do not depend on effort, only the number of tokens does. The output is weighted by level (`EFFORT_OUTPUT` in [`core/stats.ts`](plugins/prompt-router/core/stats.ts): low 0.5, medium 0.75, high 1, xhigh 1.4, max 2) and shown apart as *Effort (estimate)*. A turn whose effort is unknown (a subagent) is priced at its own output.
+- **Effort is not re-priced**: the prices do not depend on effort, only the number of tokens does, and how many tokens another effort would have made cannot be known from one turn. What effort, subagents and new sessions save is only [measured](#measured), task against task.
 - **Codex**: `compareWith` names a tier and a router effort level (`strong-medium`), priced at that tier's Claude list price (the table in [Models](#models)); Codex's own models are not in `core/prices.ts`, so their turns stay *without a price* and the comparison covers the priced ones only.
 - The **classifier's own cost** is taken off: **net saving** = saved − classifier.
 - A **stronger model** the router picked is shown as **extra cost**, apart, never hidden in the net.
-- A turn cut off before it finished has no token count and is counted as unknown; a model with no price claims no saving.
+- A turn cut off before it finished has no token count in the log. `/router stats` (never a prompt or the panel) then reads its chat's transcript with `scripts/usage-scan.mjs` (plain Node, no model calls; only the chats with such a turn) and takes the tokens of the requests since the turn before; the panel counts it as unknown. A model with no price claims no saving.
 
 The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl`, trimmed to 90 days and 5 MB. Turn it off with `"stats": "off"`.
+
+<a id="measured"></a>
+### Measured saving: router vs. control
+
+The one number to trust. When a task starts that the router would change (a model, an effort, a subagent or a new session), it is drawn at random into the **router group** or the **control group** (`holdoutPct`). In a control task the router stays quiet for every prompt of the task and only logs what it wanted; a declined offer still counts in the router group. Nothing here calls a model.
+
+- **Task** = the first prompt plus the prompts that continue or fix it (the classifier says which; the same words again go on with it), ending at a new topic or after 30 min of quiet.
+- **Cost of a task** = all its turns as the log has them (real tokens, cache writes after a model switch included): later prompts, re-work, subagents, and a new session it started (`start_session`, matched by the new session's first prompt within 15 min). In the router group the classifier counts too, since without the router it would not run.
+- **Saving per task** = the control group's mean cost minus the router group's, with a 95 % interval (Welch). Below 5 tasks in either group: *too little data*.
+- **Kinds**: where the router sent the task, or would have in control: *cheaper here*, *stronger here*, *subagent*, *new session*.
+- `/router stats` and the stats page show a row per kind; the panel's Details show the whole trial in one line.
 
 <a id="balance"></a>
 ### How the balance is worked out
@@ -277,7 +288,7 @@ The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl`,
 The token estimate above assumes the work would have taken the same tokens without the router. It misses the cost of a cheap model that fails and has to be run again. So the panel, `/router stats` and the stats page also show a **balance per task, against a control group** (money and time):
 
 - **Task** = a routed prompt plus the prompts that continue or fix it (the classifier says which), ending at a new topic or after 30 min of quiet.
-- **Control group** (`holdoutPct`, default 10 %, `0` = off): for that share of prompts the router would have moved *down*, it changes nothing and logs what it wanted. It never holds back a step up, `xhigh`/`max`, or a prompt that names a model or effort.
+- **Control group**: the control tasks of the [trial](#measured) (`holdoutPct`, default 30 %, `0` = off). The balance compares a routed task with the control tasks the router would have moved *down* the same way.
 - **Balance of a routed task** = the median cost (and time) of control tasks of the same kind (where it ran and which model the router chose) − what the task cost. A negative number means the router cost you more.
 - **Too few control tasks** (fewer than 5 of that kind; always for escalations, subagents and new chats): the task falls back to the token estimate, marked as an estimate.
 - **Re-work**: when the task failed (you switched to a stronger model, repeated the prompt, corrected it or broke it off), its follow-up turns count as lost, weighted 1 / 1 / 0.7 / 0.4.

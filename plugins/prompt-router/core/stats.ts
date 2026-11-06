@@ -848,7 +848,33 @@ export function statsRows(r: Report, c: Compare = null): { label: string; cells:
 }
 
 // A plain text table of the three periods (for /router stats and the Codex and OpenCode adapters).
-export function statsText(r: Report, c: Compare = null, b?: Balance): string {
+const KIND_LABEL: Record<TrialRow['kind'], string> = { all: 'All tasks', cheaper: 'Cheaper here', dearer: 'Stronger here', subagent: 'Subagent', session: 'New session' }
+const TRIAL_NOTE =
+  `Measured, not estimated: when a task starts that the router would change, it is drawn into the router group or the control group (option holdoutPct), where the router stays quiet for the whole task. A task costs all its turns: later prompts, re-work, subagents, a session it started, and in the router group the classifier. Saving = the control mean minus the router mean, with its 95 % interval (Welch); below ${MIN_TRIAL} tasks in a group, too little data. A kind is where the router sent the task, or would have.`
+const armText = (a: ArmStats) => `${a.tasks} · ${a.tasks ? usd(a.usd) : '–'}`
+const savingText = (r: TrialRow) => (r.saving ? `${signed(r.saving.value)} (${signed(r.saving.low)} to ${signed(r.saving.high)})` : 'too little data')
+
+// The pane's short line for the whole trial.
+export const measuredLabel = (r: TrialRow) =>
+  r.saving ? `${signed(r.saving.value)} per task (${signed(r.saving.low)} to ${signed(r.saving.high)})` : `${r.router.tasks} router / ${r.control.tasks} control tasks, too little data`
+
+// /router stats: the trial, one row per kind of task.
+export function trialText(rows: readonly TrialRow[]): string {
+  if (!rows.some(r => r.router.tasks + r.control.tasks)) return 'Measured per task: no tasks in the trial yet (option holdoutPct).'
+  const t = [['', 'Router', 'Control', 'Saving per task (95 %)'], ...rows.map(r => [KIND_LABEL[r.kind], armText(r.router), armText(r.control), savingText(r)])]
+  const w = t[0]!.map((_, i) => Math.max(...t.map(r => r[i]!.length)) + 2)
+  return ['Measured per task: router vs. control', ...t.map(r => r.map((c, i) => c.padEnd(w[i]!)).join('').trimEnd()), '', TRIAL_NOTE].join('\n')
+}
+
+function trialHtml(rows: readonly TrialRow[]): string {
+  if (!rows.some(r => r.router.tasks + r.control.tasks)) return '<h2>Measured per task</h2><p>No tasks in the trial yet (option holdoutPct).</p>'
+  const body = rows.map(r => `<tr><th>${KIND_LABEL[r.kind]}</th><td>${armText(r.router)}</td><td>${armText(r.control)}</td><td>${savingText(r)}</td></tr>`).join('')
+  return `<h2>Measured per task: router vs. control</h2>
+<div class="wrap"><table><thead><tr><th></th><th>Router</th><th>Control</th><th>Saving per task (95 %)</th></tr></thead><tbody>${body}</tbody></table></div>
+<p>${TRIAL_NOTE}</p>`
+}
+
+export function statsText(r: Report, c: Compare = null, b?: Balance, t?: readonly TrialRow[]): string {
   const rows = statsRows(r, c)
   const w = Math.max(...rows.map(x => x.label.length)) + 2
   const line = (n: string, cells: readonly string[]) => `${n.padEnd(w)}${cells.map((t, i) => (i < 2 ? t.padEnd(16) : t)).join('')}`
@@ -858,6 +884,7 @@ export function statsText(r: Report, c: Compare = null, b?: Balance): string {
     '',
     NOTE,
     NOTE_COMPARE(c),
+    ...(t ? ['', trialText(t)] : []),
     ...(b ? ['', balanceText(b)] : []),
   ].join('\n')
 }
@@ -869,7 +896,7 @@ export function savingLabel(s: Summary): string {
 }
 
 // A self-contained page for /router stats: the three periods and the balance per day as bars.
-export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[], c: Compare = null, b?: Balance): string {
+export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[], c: Compare = null, b?: Balance, t?: readonly TrialRow[]): string {
   const W = 720
   const H = 200
   const pad = 24
@@ -917,6 +944,7 @@ thead th { color: var(--muted); font-weight: 500; }
 <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Balance per day"><line class="axis" x1="${pad}" x2="${W - pad}" y1="${zero}" y2="${zero}"/>${bars}</svg>
 <div class="days"><span>${first}</span><span>balance per day</span><span>${last}</span></div>
 <div class="wrap"><table><thead><tr><th></th><th>Today</th><th>7 days</th><th>Total</th></tr></thead><tbody>${table}</tbody></table></div>
+${t ? trialHtml(t) : ''}
 ${b ? balanceHtml(b) : ''}
 </main></body></html>
 `

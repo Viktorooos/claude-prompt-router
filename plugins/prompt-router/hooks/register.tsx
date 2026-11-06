@@ -6,10 +6,10 @@ import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWi
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, startsTask, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
+import { REFERENCE, measuredLabel, startsTask, trial, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CardIcon } from '../core/panel.ts'
-import type { Balance, Balances, Compare, Decision, Entry, History, Report, UsageScan } from '../core/stats.ts'
+import type { Balance, Balances, Compare, Decision, Entry, History, Report, TrialRow, UsageScan } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -830,11 +830,11 @@ async function paneData($: EngineInterface) {
   const at = cfg.sessionSuggestions === 'off' ? 0 : Number.parseInt(cfg.newSessionAt, 10) || 0
   const model = knownModel(seenModel || (await chatModel($)))
   const effort = await currentLevel($)
-  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances } | null = null
+  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances; measured: TrialRow } | null = null
   if (cfg.stats === 'on') {
     const records = [...parseLog(await readStats($)), ...pending]
     const c = compareNow()
-    savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now) }
+    savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now), measured: trial(records)[0]! }
   }
   return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
 }
@@ -1149,15 +1149,16 @@ export const register: Register = (on, options) => {
       const c = compareNow()
       const report = summarize(records, now, c)
       const perTask = balance(records)
+      const measured = trial(records)
       const page = `${home}/.claude/mods-logs/prompt-router-stats.html`
       let link = ''
       try {
-        await $.fs.write(page, statsHtml(report, byDay(records, now, 30, c), c, perTask))
+        await $.fs.write(page, statsHtml(report, byDay(records, now, 30, c), c, perTask, measured))
         link = `\n\nWith a graph of the last 30 days: file://${page}`
       } catch (err) {
         await log($, 'stats page', err)
       }
-      return { text: `${statsText(report, c, perTask)}${link}` }
+      return { text: `${statsText(report, c, perTask, measured)}${link}` }
     }
     const now = await currentLevel($)
     const { value } = await $.state.get(OVERRIDE)
@@ -1211,6 +1212,9 @@ export const register: Register = (on, options) => {
     }
     const s = d.savings?.report[panePeriod] ?? null
     const b: Balance | null = d.savings?.balance[panePeriod] ?? null
+    // The trial over all time: a period would leave too few tasks.
+    const m = d.savings?.measured
+    const measured = m && m.router.tasks + m.control.tasks ? m : null
     const c = compareNow()
     const money = (v: number) => (Math.abs(v) < 0.005 ? 'none' : v > 0 ? 'up' : 'down')
     const MONEY_COLOR = { up: TONES.calm[0], down: TONES.over[0], none: undefined }
@@ -1515,6 +1519,7 @@ export const register: Register = (on, options) => {
           </Box>
           {row('accuracy', 'Decisions right', accuracyText(b))}
           {t.length > 1 ? row('tasks', 'Tasks', tasksText) : null}
+          {measured ? row('measured', 'Measured vs. control', measuredLabel(measured)) : null}
           <Text dimColor>Full table: /router stats.</Text>
         </Box>
       )
@@ -1532,6 +1537,7 @@ export const register: Register = (on, options) => {
               </Box>
             </Box>
             <Text dimColor>{b.accuracy ? `Decisions right · 95 %: ${Math.round(b.accuracy.low)}–${Math.round(b.accuracy.high)} %` : 'Decisions right · not enough tasks yet'}</Text>
+            {measured ? <Text dimColor>{`Measured vs. control: ${measuredLabel(measured)}`}</Text> : null}
           </Box>
           {byTasks.length ? (
             <Box key="tasks" flexDirection="column" gap={1}>

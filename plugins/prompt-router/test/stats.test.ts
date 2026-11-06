@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, MIN_TRIAL, trial, withTranscripts, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, MIN_TRIAL, measuredLabel, trial, trialText, withTranscripts, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -832,4 +832,28 @@ test('withTranscripts: a cut-off turn gets the tokens of the main-chat requests 
 test('withTranscripts: a chat with no transcript id or no scan stays as it is', () => {
   const records: Entry[] = [decision({ chat: 'c2' }), turn('opus', 'opus', { chat: 'c2', usage: undefined })]
   expect(withTranscripts(records, [{ session: 's1', requests: [REQ(NOW - HOUR)] }])).toEqual(records)
+})
+
+test('trialText: per kind the tasks and mean cost of each group, the saving with its interval, or too little data', () => {
+  const records = [
+    ...[1, 2, 3, 4, 5].map((u, i) => routerTask(`r${i}`, [u - 0.01])).flat(),
+    ...[2, 4, 6, 8, 10].map((u, i) => controlTask(`k${i}`, [u])).flat(),
+    ...controlTask('sub', [1], { wantedWhere: 'subagent' }),
+  ]
+  const t = trialText(trial(records))
+  expect(t).toMatch(/Measured per task/)
+  expect(t).toMatch(/All tasks\s+5 · \$3\.00\s+6 · \$5\.17\s+/)
+  expect(t).toMatch(/Cheaper here\s+5 · \$3\.00\s+5 · \$6\.00\s+\+\$3\.00 \(−\$0\.10 to \+\$6\.10\)/)
+  expect(t).toMatch(/Subagent\s+0 · –\s+1 · \$1\.00\s+too little data/)
+  expect(trialText(trial([]))).toMatch(/no tasks in the trial yet/)
+  const html = statsHtml(summarize(records, NOW), [], null, undefined, trial(records))
+  expect(html).toMatch(/Measured per task/)
+  expect(html).toMatch(/Cheaper here/)
+  expect(statsText(summarize(records, NOW), null, undefined, trial(records))).toMatch(/All tasks/)
+})
+
+test('measuredLabel: the pane\'s short line for the whole trial', () => {
+  const enough = [...[1, 2, 3, 4, 5].map((u, i) => routerTask(`r${i}`, [u - 0.01])).flat(), ...[2, 4, 6, 8, 10].map((u, i) => controlTask(`k${i}`, [u])).flat()]
+  expect(measuredLabel(trial(enough)[0]!)).toBe('+$3.00 per task (−$0.10 to +$6.10)')
+  expect(measuredLabel(trial(routerTask('r', [1]))[0]!)).toBe('1 router / 0 control tasks, too little data')
 })

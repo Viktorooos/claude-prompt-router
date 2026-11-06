@@ -276,13 +276,14 @@ test('Details, folded: the strict balance, how often it was right, where the tas
       expect(texts).toMatch(/Router balance \(rough\)\n\+\$2\.00/)
       expect(texts).toMatch(/Decisions right\n100 % \(95 %: 21–100 %\)/)
       expect(texts).toMatch(/Tasks\nhaiku 1/)
+      expect(texts).toMatch(/Measured vs\. control\n0 router \/ 5 control tasks, too little data/)
     } else {
       // The app surfaces: one tinted tile, the balance as a big figure in the colour of its sign beside a
       // ring of how often it was right; then one bar parted by model over a legend of tasks, cost and share.
       const hero = await ui.find({ key: 'details-hero' })
       expect(hero.props.backgroundColor).toBe('#8b7cf60f')
       expect(hero.props.borderColor).toBe('#8b7cf638')
-      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nDecisions right · 95 %: 21–100 %\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
+      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nDecisions right · 95 %: 21–100 %\nMeasured vs\. control: 0 router \/ 5 control tasks, too little data\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
       const balance = JSON.stringify(await ui.find({ key: 'balance' }))
       expect(balance).toMatch(/Router balance \(rough\) \+\$2\.00/)
       expect(balance).toMatch(/fill=\\"#1fa37a\\"[^<]*>\+\$2\.00</)
