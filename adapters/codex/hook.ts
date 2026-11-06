@@ -260,36 +260,89 @@ export function childPath(env: NodeJS.ProcessEnv = process.env, node = process.e
   return [...new Set(dirs)].join(delimiter)
 }
 
+// The classifier's own base instructions, in place of Codex's long coding-agent prompt.
+const INSTRUCTIONS = 'You are a classifier. Answer with JSON only, matching the output schema. Do not call tools.\n'
+
+// What the light run turns off: the tools and the developer notes a classifier never uses. Each
+// costs input tokens on every call (measured on codex 0.166: 22.9k tokens, 7.5 s with the plain
+// args; 11.7k, 4.0 s with these). A Codex that does not know one of them fails at once, and the
+// runner falls back to the plain args.
+const OFF_FEATURES = ['multi_agent', 'apps', 'plugins', 'hooks', 'browser_use', 'computer_use', 'in_app_browser', 'image_generation', 'goals', 'tool_suggest', 'skill_search', 'shell_tool', 'unified_exec', 'view_image', 'sleep_tool']
+const OFF_NOTES = ['include_permissions_instructions', 'include_environment_context', 'include_apps_instructions', 'include_skills_usage_instructions', 'include_plugin_usage_instructions', 'include_apps_usage_instructions', 'include_collaboration_mode_instructions']
+
+// The `codex exec` arguments. light: without the user's config.toml (MCP servers, plugins, apps,
+// rules) and the tools above; plain: today's config with only our own MCP server off.
+export function classifierArgs(o: { model: string; effort: string }, t: { file: string; out: string; dir: string; instructions: string }, light: boolean) {
+  const head = ['exec', '-m', o.model, '-c', `model_reasoning_effort=${o.effort}`]
+  const tail = ['--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '--json', '--output-schema', t.file, '-o', t.out, '-C', t.dir, '-']
+  if (!light) return [...head, '-c', 'mcp_servers.prompt_router.enabled=false', ...tail]
+  return [
+    ...head,
+    '--ignore-user-config',
+    '--ignore-rules',
+    '-c', `model_instructions_file=${JSON.stringify(t.instructions)}`,
+    '-c', 'web_search="disabled"',
+    ...OFF_FEATURES.flatMap(f => ['--disable', f]),
+    ...OFF_NOTES.flatMap(k => ['-c', `${k}=false`]),
+    ...tail,
+  ]
+}
+
+// A config.toml that sets its own provider or endpoint: the light run would drop it (it skips the
+// user config), so the classifier keeps the plain args there.
+export function needsUserConfig(toml: string) {
+  return /^\s*(model_provider|openai_base_url|chatgpt_base_url)\s*=|^\s*\[model_providers[.\]]/m.test(toml)
+}
+
+// A Codex too old or too new for a light flag stops before any model call with one of these.
+const FLAG_ERROR = /unknown feature|unexpected argument|unrecognized|invalid value|unknown variant/i
+
+type Run = { code: number | null; stdout: string; stderr: string }
+
+function runCodex(args: string[], prompt: string, timeoutMs: number): Promise<Run> {
+  const child = spawn(codexBin(), args, { env: { ...process.env, PATH: childPath(), PROMPT_ROUTER_INNER: '1' }, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.on('data', d => (stdout = (stdout + d).slice(-200_000)))
+  child.stderr.on('data', d => (stderr = (stderr + d).slice(-4000)))
+  child.stdin.on('error', () => {})
+  child.stdin.end(prompt)
+  return new Promise<Run>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      try {
+        process.kill(-(child.pid as number), 'SIGKILL')
+      } catch {
+        child.kill('SIGKILL')
+      }
+      reject(new Error(`classifier timed out after ${timeoutMs} ms`))
+    }, timeoutMs)
+    child.on('error', err => {
+      clearTimeout(timer)
+      reject(err)
+    })
+    child.on('exit', c => {
+      clearTimeout(timer)
+      resolve({ code: c, stdout, stderr })
+    })
+  })
+}
+
 export const codexRunner: Runner = async (prompt, o) => {
-  const t = schemaFile()
+  const t = { ...schemaFile(), instructions: '' }
+  t.instructions = join(t.dir, 'instructions.md')
   try {
     await writeFile(t.file, JSON.stringify(SCHEMA))
-    const args = ['exec', '-m', o.model, '-c', `model_reasoning_effort=${o.effort}`, '-c', 'mcp_servers.prompt_router.enabled=false', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '--json', '--output-schema', t.file, '-o', t.out, '-C', t.dir, '-']
-    const child = spawn(codexBin(), args, { env: { ...process.env, PATH: childPath(), PROMPT_ROUTER_INNER: '1' }, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', d => (stdout = (stdout + d).slice(-200_000)))
-    child.stderr.on('data', d => (stderr = (stderr + d).slice(-4000)))
-    child.stdin.on('error', () => {})
-    child.stdin.end(prompt)
-    const code = await new Promise<number | null>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        try {
-          process.kill(-(child.pid as number), 'SIGKILL')
-        } catch {
-          child.kill('SIGKILL')
-        }
-        reject(new Error(`classifier timed out after ${o.timeoutMs} ms`))
-      }, o.timeoutMs)
-      child.on('error', err => {
-        clearTimeout(timer)
-        reject(err)
-      })
-      child.on('exit', c => {
-        clearTimeout(timer)
-        resolve(c)
-      })
-    })
+    await writeFile(t.instructions, INSTRUCTIONS)
+    let toml = ''
+    try {
+      toml = await readFile(paths(codexHome()).config, 'utf8')
+    } catch {
+      // No config.toml.
+    }
+    const started = Date.now()
+    let r = await runCodex(classifierArgs(o, t, !needsUserConfig(toml)), prompt, o.timeoutMs)
+    if (r.code !== 0 && !r.stdout.trim() && FLAG_ERROR.test(r.stderr) && !needsUserConfig(toml)) r = await runCodex(classifierArgs(o, t, false), prompt, Math.max(1000, o.timeoutMs - (Date.now() - started)))
+    const { code, stdout, stderr } = r
     const usage = classifierUsage(stdout)
     if (usage) o.onUsage?.(usage)
     let answer = ''

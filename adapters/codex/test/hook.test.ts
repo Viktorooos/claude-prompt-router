@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { childPath, codexBin, codexRunner, configDefaults, effortFor, readHistory } from '../hook.ts'
+import { childPath, classifierArgs, codexBin, codexRunner, configDefaults, effortFor, needsUserConfig, readHistory } from '../hook.ts'
 import { readStats } from '../stats.ts'
 import { FIXTURE, PICK, home, send, tmp } from './helpers.ts'
 
@@ -180,8 +180,56 @@ test('codexRunner: passes the flags and the inner env, reads the -o answer', asy
     delete process.env.PROMPT_ROUTER_CODEX
   }
   const args = readFileSync(log, 'utf8')
-  assert.match(args, /^1 exec -m gpt-6-luna -c model_reasoning_effort=low -c mcp_servers\.prompt_router\.enabled=false --ephemeral --skip-git-repo-check -s read-only --json --output-schema \S+ -o \S+ -C \S+ -$/m)
+  assert.match(args, /^1 exec -m gpt-6-luna -c model_reasoning_effort=low --ignore-user-config --ignore-rules -c model_instructions_file="\S+instructions\.md" -c web_search="disabled" (--disable \w+ )+(-c include_\w+=false )+--ephemeral --skip-git-repo-check -s read-only --json --output-schema \S+ -o \S+ -C \S+ -$/m)
+  for (const f of ['multi_agent', 'apps', 'plugins', 'hooks', 'shell_tool', 'unified_exec']) assert.match(args, new RegExp(`--disable ${f} `))
   assert.equal(readFileSync(`${log}.in`, 'utf8'), 'the prompt')
+})
+
+test('classifierArgs: the plain args keep the user config with only our MCP server off', () => {
+  const t = { file: '/t/s.json', out: '/t/o', dir: '/t', instructions: 'C:\\t\\i.md' }
+  assert.deepEqual(classifierArgs({ model: 'm', effort: 'low' }, t, false), ['exec', '-m', 'm', '-c', 'model_reasoning_effort=low', '-c', 'mcp_servers.prompt_router.enabled=false', '--ephemeral', '--skip-git-repo-check', '-s', 'read-only', '--json', '--output-schema', '/t/s.json', '-o', '/t/o', '-C', '/t', '-'])
+  // A Windows path stays a valid TOML string (backslashes escaped).
+  assert.ok(classifierArgs({ model: 'm', effort: 'low' }, t, true).includes('model_instructions_file="C:\\\\t\\\\i.md"'))
+})
+
+test('needsUserConfig: a custom provider or endpoint keeps the user config', () => {
+  assert.equal(needsUserConfig('model = "gpt-6.1-sol"\n[tui]\n'), false)
+  assert.equal(needsUserConfig('model_provider = "azure"\n'), true)
+  assert.equal(needsUserConfig('openai_base_url = "https://x"\n'), true)
+  assert.equal(needsUserConfig('model = "x"\n[model_providers.azure]\nname = "Azure"\n'), true)
+})
+
+test('codexRunner: a Codex that rejects a light flag gets the plain args', async () => {
+  const log = join(tmp(), 'args')
+  const bin = fakeCodex(`echo "$@" >> ${log}; cat > /dev/null; case "$*" in *--ignore-user-config*) echo "Error: Unknown feature flag: sleep_tool" >&2; exit 1;; esac; while [ "$1" != "-o" ]; do shift; done; echo '{"where":"keep"}' > "$2"`)
+  process.env.PROMPT_ROUTER_CODEX = bin
+  try {
+    assert.equal((await codexRunner('x', { model: 'm', effort: 'low', timeoutMs: 5000 })).trim(), '{"where":"keep"}')
+  } finally {
+    delete process.env.PROMPT_ROUTER_CODEX
+  }
+  const runs = readFileSync(log, 'utf8').trim().split('\n')
+  assert.equal(runs.length, 2)
+  assert.match(runs[1], /mcp_servers\.prompt_router\.enabled=false/)
+  assert.doesNotMatch(runs[1], /--ignore-user-config/)
+})
+
+test('codexRunner: a custom provider in config.toml runs with the plain args', async () => {
+  const log = join(tmp(), 'args')
+  const h = tmp()
+  writeFileSync(join(h, 'config.toml'), 'model_provider = "azure"\n')
+  const bin = fakeCodex(`echo "$@" >> ${log}; cat > /dev/null; while [ "$1" != "-o" ]; do shift; done; echo '{"where":"keep"}' > "$2"`)
+  process.env.PROMPT_ROUTER_CODEX = bin
+  const old = process.env.CODEX_HOME
+  process.env.CODEX_HOME = h
+  try {
+    await codexRunner('x', { model: 'm', effort: 'low', timeoutMs: 5000 })
+  } finally {
+    delete process.env.PROMPT_ROUTER_CODEX
+    if (old === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = old
+  }
+  assert.doesNotMatch(readFileSync(log, 'utf8'), /--ignore-user-config/)
 })
 
 test('codexRunner: times out and kills the child', async () => {
