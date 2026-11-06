@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, MIN_TRIAL, trial, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, MIN_TRIAL, trial, withTranscripts, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -801,4 +801,35 @@ test('trial: `since` keeps the tasks that started then or later', () => {
   const records = [...routerTask('r', [1]), ...controlTask('k', [1])]
   expect(trial(records, NOW).length).toBe(1)
   expect(trial(records, NOW)[0]!.router.tasks + trial(records, NOW)[0]!.control.tasks).toBe(0)
+})
+
+// Transcript fixtures: chat c1 is transcript s1; requests of 1 000 output tokens each on Opus.
+const REQ = (ts: number, agent?: string) => ({ ts, model: 'claude-opus-4-1', ...(agent ? { agent } : {}), usage: { input: 0, output: 1_000, cacheRead: 0, cacheWrite: 0 } })
+
+test('withTranscripts: a cut-off turn gets the tokens of the main-chat requests since the turn before; it still counts as cut off', () => {
+  const t0 = NOW - DAY
+  const records: Entry[] = [
+    decision({ ts: t0, session: 's1', key: 'a' }),
+    turn('opus', 'opus', { ts: t0 + 10 }),
+    decision({ ts: t0 + 20, key: 'b', follows: 'continues' }),
+    turn('opus', 'opus', { ts: t0 + 30, usage: undefined }),
+  ]
+  const scans = [{ session: 's1', requests: [REQ(t0 + 5), REQ(t0 + 22), REQ(t0 + 25), REQ(t0 + 26, 'agent-a1'), REQ(t0 + 40)] }]
+  const out = withTranscripts(records, scans)
+  const cut = out.filter((r): r is Turn => r.kind === 'turn')[1]!
+  // Two main requests in (t0 + 10, t0 + 30]; the subagent's and the later one are not this turn's.
+  expect(cut.usage).toEqual({ input: 0, output: 2_000, cacheRead: 0, cacheWrite: 0 })
+  expect(cut.transcript).toBe(true)
+  // The first turn had its own usage: untouched. The input is not changed.
+  expect(out[1]).toBe(records[1])
+  expect((records[3] as Turn).usage).toBe(undefined)
+  expect(failureOf(episodes(out)[0]!).reasons).toContain('interrupted')
+  // Now priced: no turn with unknown tokens left.
+  expect(summarize(out, NOW).total.unknownTurns).toBe(0)
+  expect(summarize(records, NOW).total.unknownTurns).toBe(1)
+})
+
+test('withTranscripts: a chat with no transcript id or no scan stays as it is', () => {
+  const records: Entry[] = [decision({ chat: 'c2' }), turn('opus', 'opus', { chat: 'c2', usage: undefined })]
+  expect(withTranscripts(records, [{ session: 's1', requests: [REQ(NOW - HOUR)] }])).toEqual(records)
 })

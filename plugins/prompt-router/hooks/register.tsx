@@ -6,10 +6,10 @@ import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWi
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, startsTask, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
+import { REFERENCE, startsTask, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CardIcon } from '../core/panel.ts'
-import type { Balance, Balances, Compare, Decision, Entry, History, Report } from '../core/stats.ts'
+import type { Balance, Balances, Compare, Decision, Entry, History, Report, UsageScan } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -437,6 +437,29 @@ async function readHistory($: EngineInterface): Promise<History | null> {
     return h && typeof h.tokens === 'object' ? h : null
   } catch {
     return null
+  }
+}
+
+// /router stats only: the tokens of cut-off turns (no usage in the log) from their chats' transcripts,
+// by scripts/usage-scan.mjs. Only the sessions that have such a turn are read.
+const usagePath = () => `${home}/.claude/mods-logs/prompt-router-usage.json`
+
+async function fillFromTranscripts($: EngineInterface, records: Entry[]): Promise<Entry[]> {
+  const cut = new Set(records.flatMap(r => (r.kind === 'turn' && !r.agentId && !r.usage ? [r.chat] : [])))
+  const ids = [...new Set(records.flatMap(r => (r.kind === 'decision' && r.session && cut.has(r.chat) ? [r.session] : [])))]
+  if (!ids.length) return records
+  try {
+    const scan = $.process.spawn({ argv: ['node', `${$.plugin.root}/scripts/usage-scan.mjs`, `${home}/.claude/projects`, usagePath(), ...ids] })
+    for await (const _ of scan) void _
+  } catch (err) {
+    // The last scan's result still holds the older sessions.
+    await log($, 'usage scan', err)
+  }
+  try {
+    const out = JSON.parse(String(await $.fs.read(usagePath()))) as { scans?: UsageScan[] }
+    return withTranscripts(records, Array.isArray(out.scans) ? out.scans : [])
+  } catch {
+    return records
   }
 }
 
@@ -1122,7 +1145,7 @@ export const register: Register = (on, options) => {
       await flush($)
       const now = await $.clock.now()
       await loadHistory($)
-      const records = parseLog(await readStats($))
+      const records = await fillFromTranscripts($, parseLog(await readStats($)))
       const c = compareNow()
       const report = summarize(records, now, c)
       const perTask = balance(records)

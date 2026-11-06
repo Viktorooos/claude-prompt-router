@@ -51,6 +51,8 @@ export type Turn = {
   baseline: string
   usage?: Usage
   usd?: number
+  /** The log had no tokens (the turn was cut off); these come from the chat's transcript (withTranscripts). */
+  transcript?: true
   /** A routed subagent: the main chat's context when it started and the requests it made. Without
    *  the router each of those requests would have read that context from the main chat's cache. */
   mainContext?: number
@@ -307,6 +309,8 @@ function failure(reasons: FailureReason[]): Failure {
 }
 
 const main = (t: Turn) => !t.agentId
+// A turn that did not finish: no tokens in the log, or only those its transcript had.
+const cutOff = (t: Turn) => !t.usage || !!t.transcript
 
 // Re-work: a routed prompt whose same text (`key`) comes again within the next few prompts of the chat,
 // whose next prompt corrects it, whose next prompt ran after a switch up by hand, or whose answer was
@@ -335,7 +339,7 @@ function reworkedSet(records: readonly Entry[]) {
       if (d.key && next.some(n => n.key === d.key)) reasons.push('repeated')
       if (next[0]?.follows === 'corrects' || next[0]?.redo) reasons.push('corrected')
       if (next[0] && turns.some(t => t.manual && t.ts >= next[0]!.ts && t.ts < until(1))) reasons.push('switched')
-      if (answer && !answer.usage) reasons.push('interrupted')
+      if (answer && cutOff(answer)) reasons.push('interrupted')
       if (reasons.length) out.set(takenKey(d.chat, d.ts), failure(reasons))
     })
   }
@@ -395,7 +399,7 @@ export function failureOf(e: Episode): Failure {
   if (e.decisions.slice(1).some(d => d.follows === 'corrects' || d.redo)) reasons.push('corrected')
   const answers = e.turns.filter(main)
   if (answers.slice(1).some(t => t.manual)) reasons.push('switched')
-  if (answers.some(t => !t.usage)) reasons.push('interrupted')
+  if (answers.some(cutOff)) reasons.push('interrupted')
   return failure(reasons)
 }
 
@@ -665,6 +669,32 @@ export function trial(records: readonly Entry[], since = -Infinity): TrialRow[] 
     const g = groups.get(k)!
     return { kind: k, router: stats(g.router), control: stats(g.control), saving: welch(g.control, g.router) }
   })
+}
+
+// What scripts/usage-scan.mjs writes: every API request of a session's transcript (subagents with `agent`).
+export type Request = { ts: number; model: string; agent?: string; usage: Usage }
+export type UsageScan = { session: string; requests: Request[] }
+
+// The log with the transcripts' tokens filled in where it has none: a main-chat turn that was cut off
+// gets the main-chat requests since the chat's turn before it. Read only for /router stats (never when
+// a prompt comes or the pane draws). The records passed in are not changed.
+export function withTranscripts(records: readonly Entry[], scans: readonly UsageScan[]): Entry[] {
+  const bySession = new Map(scans.map(s => [s.session, s.requests]))
+  const sessionOf = new Map<string, string>()
+  for (const r of records) if (r.kind === 'decision' && r.session && !sessionOf.has(r.chat)) sessionOf.set(r.chat, r.session)
+  const prev = new Map<string, number>()
+  const filled = new Map<Turn, Turn>()
+  for (const t of records.filter((r): r is Turn => r.kind === 'turn' && main(r)).sort((a, b) => a.ts - b.ts)) {
+    const since = prev.get(t.chat) ?? -Infinity
+    prev.set(t.chat, t.ts)
+    const reqs = t.usage ? undefined : bySession.get(sessionOf.get(t.chat) ?? '')
+    const mine = reqs?.filter(q => !q.agent && q.ts > since && q.ts <= t.ts) ?? []
+    if (!mine.length) continue
+    const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    for (const q of mine) for (const k of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) usage[k] = (usage[k] ?? 0) + (q.usage[k] ?? 0)
+    filled.set(t, { ...t, model: knownModel(mine.at(-1)!.model) || t.model, usage, transcript: true })
+  }
+  return filled.size ? records.map(r => (r.kind === 'turn' && filled.get(r)) || r) : [...records]
 }
 
 function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>, c: Compare) {

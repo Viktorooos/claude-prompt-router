@@ -1323,6 +1323,20 @@ test('/router stats shows the table from the log', async ($: any, on: any) => {
   expect(r.text).toMatch(/file:\/\/.*prompt-router-stats\.html/)
 })
 
+test('/router stats with a cut-off turn takes its tokens from the transcript scan, the last one when a new scan fails', async ($: any, on: any) => {
+  const now = Date.now()
+  const log = [
+    { kind: 'decision', ts: now - 10, platform: 'claude-code', chat: 'c', session: 's9', where: 'here', from: { model: 'opus', effort: 'medium' }, to: { model: 'opus', effort: 'medium' }, outcome: 'applied' },
+    { kind: 'turn', ts: now, platform: 'claude-code', chat: 'c', model: 'claude-opus-5-5', baseline: 'claude-opus-5-5' },
+  ].map(r => JSON.stringify(r)).join('\n')
+  const scan = { version: 1, scans: [{ session: 's9', requests: [{ ts: now - 5, model: 'claude-opus-5-5', usage: { input: 0, output: 1_000, cacheRead: 0, cacheWrite: 0 } }] }] }
+  engine(on, PICK.same, { now, files: { '*/prompt-router-stats.jsonl': `${log}\n`, '*/prompt-router-usage.json': JSON.stringify(scan) } })
+  await start($)
+  const r = await $.command.run({ command: 'router', args: 'stats' })
+  expect(r.text).toMatch(/Today\s+7 days\s+Total/)
+  expect(r.text).toMatch(/Turns unknown \/ unpriced\s+0 \/ 0/)
+})
+
 test('stats off: nothing is noted and /router stats says so', { options: { stats: 'off' } } as any, async ($: any, on: any) => {
   const seen = engine(on, PICK.here)
   on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-opus-5-5' } }))
