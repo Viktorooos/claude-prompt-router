@@ -170,7 +170,7 @@ test('You saved comes first: the period\'s saving against compareWith, without a
   await term.unmount()
 })
 
-test('each draw animates once only what changed: a period or baseline the saving, the session share the bar', async ($: any, on: any) => {
+test('a press in the pane draws still: the pointer is on the pane, and every hover would replay an animated drawing', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   engine(on, { now, log: TURN(now - HOUR) })
   await start($)
@@ -186,9 +186,6 @@ test('each draw animates once only what changed: a period or baseline the saving
   await d.ui.press({ key: 'period-today' })
   await d.ui.unmount()
   d = await draw()
-  expect([d.saved, d.bar, d.heads]).toEqual([true, false, false])
-  await d.ui.unmount()
-  d = await draw()
   expect([d.saved, d.bar, d.heads]).toEqual([false, false, false])
   // The period already shown changes nothing, so nothing moves.
   await d.ui.press({ key: 'period-today' })
@@ -198,7 +195,7 @@ test('each draw animates once only what changed: a period or baseline the saving
   await d.ui.select({ key: 'pick-newSessionAt', value: 'off' })
   await d.ui.unmount()
   d = await draw()
-  expect([d.saved, d.bar, d.heads]).toEqual([false, true, false])
+  expect([d.saved, d.bar, d.heads]).toEqual([false, false, false])
   await d.ui.unmount()
 })
 

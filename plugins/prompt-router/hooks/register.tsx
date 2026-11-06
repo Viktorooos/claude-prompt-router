@@ -131,14 +131,12 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
   }
 }
 
-// What the next draw animates, once: after Claude's reply only the saving or the context bar whose
-// value changed since the last draw (the settings' tiles never); a new period or savings baseline the
-// saving; a new session threshold the context bar. Every other draw is still.
-type PaneAnimate = '' | 'reply' | 'saved' | 'bar'
-let paneAnimate: PaneAnimate = ''
+// What the next draw animates, once: after Claude's reply only what changed since the last draw (the
+// settings' tiles never). A press in the pane draws still: the pointer is on the pane then, and the app
+// puts an image back on every hover, press and focus, so an animated drawing would replay each time.
+let paneAnimate: '' | 'reply' = ''
 // What the last draw showed, to tell whether a reply changed it.
 let shown: { period: string; savedText: string; costShare: number | null; ctxText: string; ctxShare: number | null } | undefined
-const ANIMATES_ON_SAVE: Partial<Record<string, PaneAnimate>> = { compareWith: 'saved', newSessionAt: 'bar', sessionSuggestions: 'bar' }
 // An animated drawing stays the pane's drawing until the next one, and the app replays its animation
 // whenever it puts the image back (a hover, a scroll, a focus). So once the longest animation has
 // played (the sparkline's, under 2 s) the pane draws itself once more, still.
@@ -765,7 +763,6 @@ async function saveOption($: EngineInterface, k: Option, value: string) {
   }
   opts = { ...opts, [k]: value }
   cfg = toConfig(opts)
-  paneAnimate = ANIMATES_ON_SAVE[k] ?? paneAnimate
   void loadHistory($)
   redraw($)
 }
@@ -1182,10 +1179,8 @@ export const register: Register = (on, options) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
     const report = d.savings?.report[panePeriod] ?? null
-    // A period or baseline change draws the whole saving in; a reply moves only what it changed, from
-    // where it was: a number fades in only when its text changed, a bar grows from its last length, the
-    // sparkline stays still. So a reply that adds a few cents does not replay the card from nothing.
-    const whole = paneAnimate === 'saved' || paneAnimate === 'bar' ? paneAnimate : ''
+    // A reply moves only what it changed, from where it was: a number fades in only when its text
+    // changed, a bar grows from its last length, the sparkline stays still.
     const before = paneAnimate === 'reply' ? shown : undefined
     paneAnimate = ''
     const { Box, Text, Button, Svg, Select } = $.ui.resolve(e) as any
@@ -1202,7 +1197,6 @@ export const register: Register = (on, options) => {
     const pickPeriod = (k: typeof panePeriod) => async () => {
       if (panePeriod === k) return
       panePeriod = k
-      paneAnimate = 'saved'
       redraw($)
     }
     const s = d.savings?.report[panePeriod] ?? null
@@ -1295,16 +1289,15 @@ export const register: Register = (on, options) => {
     const now = { period: panePeriod, savedText, costShare, ctxText, ctxShare }
     const moved = (k: 'savedText' | 'costShare' | 'ctxText' | 'ctxShare') => before !== undefined && before.period === now.period && before[k] !== now[k]
     const anim = {
-      savedNum: whole === 'saved' || moved('savedText'),
-      cost: whole === 'saved' || moved('costShare'),
-      costFrom: whole === 'saved' ? 0 : (before?.costShare ?? 0),
-      spark: whole === 'saved',
-      ctxNum: whole === 'bar' || moved('ctxText'),
-      ctx: whole === 'bar' || moved('ctxShare'),
-      ctxFrom: whole === 'bar' ? 0 : (before?.ctxShare ?? 0),
+      savedNum: moved('savedText'),
+      cost: moved('costShare'),
+      costFrom: before?.costShare ?? 0,
+      ctxNum: moved('ctxText'),
+      ctx: moved('ctxShare'),
+      ctxFrom: before?.ctxShare ?? 0,
     }
     shown = now
-    if (anim.savedNum || anim.cost || anim.spark || anim.ctxNum || anim.ctx) {
+    if (anim.savedNum || anim.cost || anim.ctxNum || anim.ctx) {
       settle?.cancel()
       settle = $.clock.after(SETTLE_MS, () => {
         settle = undefined
@@ -1359,7 +1352,7 @@ export const register: Register = (on, options) => {
       trend ? (
         <Box key="saved-trend" flexDirection="column" gap={0}>
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
-          <Svg source={sparkSvg(days.map(x => x.balanceUsd), days.map(x => `${x.day}: ${usd(x.balanceUsd)}`), px, 48, savedColor, anim.spark)} alt="Saved per day" height={48} />
+          <Svg source={sparkSvg(days.map(x => x.balanceUsd), days.map(x => `${x.day}: ${usd(x.balanceUsd)}`), px, 48, savedColor, false)} alt="Saved per day" height={48} />
         </Box>
       ) : null,
     ], { tint: `${savedColor}0d` })
