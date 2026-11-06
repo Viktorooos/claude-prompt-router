@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { TEMPLATE, claudeDir, compactWindow, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { TEMPLATE, claudeDir, compactWindow, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -483,7 +483,7 @@ test('max stays max (auto): the effort is set to max', { options: { effortMode: 
 test('max (ask): offered as Switch (Max) through the mod tool', async ($: any, on: any) => {
   const seen = engine(on, '{"where": "here", "model": "opus", "effort": "max", "why": "x"}')
   await start($)
-  await submit($, 'p')
+  await submit($, 'fix the login bug')
   expect(seen.sent[0]).toMatch(/"Switch \(Max\)", "Keep as is"/)
   expect(seen.sent[0]).toMatch(/\{"effort":"max"\}/)
 })
@@ -1006,10 +1006,10 @@ test('stats: a keep reply still notes follows; a reply without it notes none', a
   const seen = engine(on, () => reply)
   on('turn.complete', () => ({ text: '' }))
   await start($)
-  await submit($, 'yes, go on')
+  await submit($, 'now the docs too')
   await $.turn.complete(TURN_DONE)
   reply = PICK.keep
-  await submit($, 'ok')
+  await submit($, 'and the changelog')
   await $.turn.complete(TURN_DONE)
   const ds = statsLines(seen).filter(l => l.kind === 'decision')
   expect(ds[0].follows).toBe('continues')
@@ -1453,4 +1453,24 @@ test('claudeDir: CLAUDE_CONFIG_DIR first, then HOME or USERPROFILE, then the plu
   expect(claudeDir({ pluginRoot: '/Users/x/.claude/plugins/cache/prompt-router' })).toBe('/Users/x/.claude')
   expect(claudeDir({ pluginRoot: '/srv/plugins/prompt-router' })).toBe('')
   expect(claudeDir({})).toBe('')
+})
+
+test('quickReply: plain approvals, thanks and picks from the agent\'s options, in several languages', () => {
+  // The eval's yes / option2 / thanks / cz_yes / es_yes cases.
+  for (const t of ['yes, go on', 'option 2', 'thanks!', 'ano, pokračuj', 'sí, hazlo']) expect(quickReply(t)).toBe(true)
+  for (const t of ['yes', 'ok', 'OK.', 'd', 'B)', '3', '2.', 'Možnost 2', 'jo', 'ne', 'díky', 'do it', 'sounds good', 'ja, weiter', 'merci', '👍']) expect(quickReply(t)).toBe(true)
+})
+
+test('quickReply: anything with a word of its own, a re-work sign or a slash command goes to the classifier', () => {
+  for (const t of ['yes but use postgres', 'no, fix the tests first', 'continue with the refactor', 'why', 'what?', 'ano, ale v Kotlinu', 'nefunguje', 'still wrong', 'try again', '/router', '', 'ok '.repeat(6)]) expect(quickReply(t)).toBe(false)
+  expect(quickReply('yes '.repeat(12))).toBe(false)
+})
+
+test('a plain reply ("yes, go on", "option 2") passes through untouched, with no classifier call', async ($: any, on: any) => {
+  const seen = engine(on, PICK.keep)
+  await start($)
+  await submit($, 'yes, go on')
+  await submit($, 'option 2')
+  expect(seen.prompts).toEqual([])
+  expect(seen.sent).toEqual(['yes, go on', 'option 2'])
 })

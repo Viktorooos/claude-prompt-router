@@ -73,7 +73,7 @@ test('stats: a subagent offer is logged as asked, a keep as keep', async () => {
   const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) })
   await send(hooks, S, 'run the tests')
   client.reply = PICK.keep
-  await send(hooks, S, 'yes, go on')
+  await send(hooks, S, 'and the readme too')
   const [a, b] = decisions(dir)
   assert.equal(a.where, 'subagent')
   assert.equal(a.outcome, 'asked')
@@ -104,7 +104,7 @@ test('stats: a finished reply in the main chat is logged once, reasoning as outp
 
 test('stats: user messages and the classifier session are not turns', async () => {
   const { hooks, dir, calls } = await setup({ reply: PICK.same, history: ongoing(S) })
-  await send(hooks, S, 'go on')
+  await send(hooks, S, 'and the readme')
   // The mock names the classifier's throwaway session scratch-1.
   assert.equal(named(calls, 'session.create').length, 1)
   await hooks.event(done('scratch-1', 'msg_c'))
@@ -200,7 +200,7 @@ test('stats: the log drops records older than 90 days and stays under 5 MB', asy
   writeFileSync(path, [old, ...recent].join('\n') + '\n')
   assert.ok(statSync(path).size > 5_000_000)
   const { hooks } = await setup({ reply: PICK.same, history: ongoing(S) }, { stateDir: dir })
-  await send(hooks, S, 'go on')
+  await send(hooks, S, 'and the readme')
   const text = readFileSync(path, 'utf8')
   assert.ok(statSync(path).size < 5_000_000)
   assert.ok(!text.includes(old))
@@ -300,4 +300,11 @@ test('accept: none without an offer, or for a tool that does not take it', async
   await send(none.hooks, S, 'ok')
   await none.hooks['tool.execute.before']({ tool: 'task', sessionID: S, callID: 'c1' }, { args: { subagent_type: 'router-light', prompt: 'x', description: 'x' } })
   assert.deepEqual([...accepts(sub.dir), ...accepts(none.dir)], [])
+})
+
+test('a plain reply ("yes, go on") has no classifier session and no decision', async () => {
+  const { hooks, dir, calls } = await setup({ reply: PICK.subagent, history: ongoing(S) })
+  await send(hooks, S, 'yes, go on')
+  assert.equal(named(calls, 'session.create').length, 0)
+  assert.deepEqual(decisions(dir), [])
 })

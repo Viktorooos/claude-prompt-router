@@ -132,8 +132,8 @@ test('the classifier usage reported by the runner goes into the decision', async
 })
 
 test('ask mode (the default) is asked; keep and nothing to switch are keep; a subagent offer is asked', async () => {
-  assert.equal((await decisions('x', { reply: PICK.here })).log[0].outcome, 'asked')
-  const keep = (await decisions('ok', { reply: PICK.keep })).log[0]
+  assert.equal((await decisions('fix it', { reply: PICK.here })).log[0].outcome, 'asked')
+  const keep = (await decisions('and the readme', { reply: PICK.keep })).log[0]
   assert.equal(keep.where, 'keep')
   assert.deepEqual(keep.to, keep.from)
   assert.equal((await decisions('same', { reply: PICK.same })).log[0].where, 'keep')

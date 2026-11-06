@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, claudeDir, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, isRedo, promptKey, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, claudeDir, quickReply, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, isRedo, promptKey, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
@@ -594,6 +594,8 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   turnLevel = null
   lastAsked = null
   lastClassifier = null
+  // "yes", "option 2", "díky": nothing to route, no classifier call.
+  if (quickReply(text)) return e
   const now = await currentLevel($)
   let p: Pick | null = null
   try {

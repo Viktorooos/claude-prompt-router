@@ -32,7 +32,7 @@
 
 > Every reply in a long chat re-reads the whole context. Opus on a rename burns money. Haiku on a race condition burns time.
 
-Prompt Router makes **one small classifier call per prompt**. Before any work starts, it tells the agent where the prompt belongs and which model and effort it needs. You stay in control: every change is offered first, unless you tell it to just do it.
+Prompt Router makes **one small classifier call per prompt** (none for a plain `yes` or `option 2`). Before any work starts, it tells the agent where the prompt belongs and which model and effort it needs. You stay in control: every change is offered first, unless you tell it to just do it.
 
 <table>
 <tr>
@@ -93,7 +93,7 @@ Effort: Low (was Medium), small follow-up to the last fix
 
 On a new chat's **first prompt** it also checks the model: Opus picked for a rename? Haiku for debugging? It offers the switch (or makes it, with `firstChatDetection: auto`).
 
-Approvals (`yes`, `go on`, `option 2`), answers to the agent's questions, slash commands and prompts where nothing needs to change pass through untouched.
+Plain replies to the agent pass through untouched with **no classifier call at all**: up to five words that are each a yes / no / ok / thanks / go on word (English, Czech, Spanish, German, French: `yes, go on`, `ano, pokračuj`, `sí, hazlo`, `díky`), `option 2` / `možnost 2`, a number or a single letter (`3`, `b`). A reply with any word of its own (`yes, but use Postgres`) or a re-work sign (`still wrong`) goes to the classifier as usual. Other answers to the agent's questions, slash commands and prompts where nothing needs to change pass through untouched too.
 
 > [!NOTE]
 > **Architecture.** [`plugins/prompt-router/core/router.ts`](plugins/prompt-router/core/router.ts) holds the shared logic: the classifier prompt, parsing its reply, the routing rules. [`hooks/register.tsx`](plugins/prompt-router/hooks/register.tsx) (Claude Code), [`adapters/codex/`](adapters/codex) and [`adapters/opencode/`](adapters/opencode) only wire it to each platform.
@@ -249,7 +249,7 @@ Last live eval: **123 cases**, including the Fable / xhigh / max boundaries. How
 | Opus | ✅ 123 / 123 |
 | Haiku | ⚠️ 114 / 123 (none of the misses raised a tier) |
 
-One classifier call per prompt: low effort, at most 150 output tokens, on the model you pick in `classifier`. With the default Sonnet in Claude Code, that is a fraction of a cent per prompt. In Codex it runs on your ChatGPT plan and adds about 3–4 s before each prompt. The savings come from not running a 200k-token chat on a question that needed a fresh one.
+One classifier call per prompt (none for a plain reply such as `yes` or `option 2`): low effort, at most 150 output tokens, on the model you pick in `classifier`. With the default Sonnet in Claude Code, that is a fraction of a cent per prompt. In Codex it runs on your ChatGPT plan and adds about 3–4 s before each prompt. The savings come from not running a 200k-token chat on a question that needed a fresh one.
 
 <a id="savings-stats"></a>
 ### Savings stats

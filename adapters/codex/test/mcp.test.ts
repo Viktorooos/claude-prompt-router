@@ -169,14 +169,14 @@ test('route hands back the hook answer for the same prompt in the same chat, wit
 
 test('route: a prompt the hook left as it is goes on; an old answer is classified again', async () => {
   const h = home()
-  rollout(sessions(h), 'chat-8', 'ok')
+  rollout(sessions(h), 'chat-8', 'and the readme')
   const now = Date.now()
-  await handle({ session_id: 'chat-8', prompt: 'ok', transcript_path: null, model: 'gpt-6.1-sol' }, { codexHome: h, now, runner: async () => PICK.keep })
+  await handle({ session_id: 'chat-8', prompt: 'and the readme', transcript_path: null, model: 'gpt-6.1-sol' }, { codexHome: h, now, runner: async () => PICK.keep })
   let calls = 0
   const runner = async () => (calls++, PICK.keep)
-  assert.match(await route({ prompt: 'ok' }, { codexHome: h, now: now + 1000, runner }), /nothing to switch/i)
+  assert.match(await route({ prompt: 'and the readme' }, { codexHome: h, now: now + 1000, runner }), /nothing to switch/i)
   assert.equal(calls, 0)
-  await route({ prompt: 'ok' }, { codexHome: h, now: now + REUSE_MS + 1, runner })
+  await route({ prompt: 'and the readme' }, { codexHome: h, now: now + REUSE_MS + 1, runner })
   assert.equal(calls, 1)
 })
 
@@ -186,5 +186,13 @@ test('route skips app-generated requests without the classifier', async () => {
   rollout(sessions(h), 'chat-9', prompt)
   let calls = 0
   assert.match(await route({ prompt }, { codexHome: h, runner: async () => (calls++, PICK.here) }), /nothing to switch/i)
+  assert.equal(calls, 0)
+})
+
+test('route answers a plain reply ("option 2") without the classifier', async () => {
+  const h = home()
+  rollout(sessions(h), 'chat-10', 'option 2')
+  let calls = 0
+  assert.match(await route({ prompt: 'option 2' }, { codexHome: h, runner: async () => (calls++, PICK.here) }), /nothing to switch/i)
   assert.equal(calls, 0)
 })

@@ -29,7 +29,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, isRedo, preferSession, describeOptions, knownModel, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, isRedo, preferSession, describeOptions, knownModel, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, quickReply, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import { SESSION_TOOL, STATS_TOOL, SWITCH_TOOL, agentFor, askNote, modelName, otherAutoNote, otherNote, switchNote } from './notes.ts'
 import { TIER_NAMES, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
@@ -439,6 +439,8 @@ export function routerPlugin(tool: ToolFn) {
       const text = typed(textOf(parts))
       if (!text || text.startsWith('/')) return
       st.turnLevel = null
+      // "yes", "option 2", "díky": nothing to route, no classifier call.
+      if (quickReply(text)) return
       const now = st.seen
       let res: Classified | null = null
       try {

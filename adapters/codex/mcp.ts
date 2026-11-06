@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
-import { typed } from '../../plugins/prompt-router/core/router.ts'
+import { quickReply, typed } from '../../plugins/prompt-router/core/router.ts'
 import { CHECKED, codexHome, handle, isAppRequest, readHistory, recentAnswer } from './hook.ts'
 import type { Deps } from './hook.ts'
 
@@ -56,6 +56,8 @@ export async function route(args: { prompt?: unknown }, deps: Deps = {}): Promis
   const prompt = typeof args.prompt === 'string' ? args.prompt : ''
   // The app's own requests to the model are no user prompts.
   if (isAppRequest(prompt)) return GO_ON
+  // "yes", "option 2": nothing to route.
+  if (quickReply(prompt)) return GO_ON
   try {
     const transcript = await findTranscript(home, prompt)
     const h = await readHistory(transcript)

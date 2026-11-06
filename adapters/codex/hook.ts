@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url'
 import { TIER_OF, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, isRedo, mappedModel, preferSession, describeOptions, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, isRedo, mappedModel, preferSession, describeOptions, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, quickReply, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
 import type { Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
@@ -536,6 +536,12 @@ async function classify(input: Input, deps: Deps, home: string, ran: { on: boole
     return out(statusNote(status), status)
   }
   if (!o.enabled || text.startsWith('/') || isAppRequest(text)) return null
+  // "yes", "option 2", "díky": nothing to route, no classifier call. The hook still answers (CHECKED),
+  // so the agent does not ask route instead.
+  if (quickReply(text)) {
+    Object.assign(ran, { on: true, key: promptKey(text), ts: deps.now ?? Date.now() })
+    return null
+  }
 
   const levels = await supported(home)
   const effortOf = (slug: string, l: Level) => effortFor(o.efforts, levels, slug, l)

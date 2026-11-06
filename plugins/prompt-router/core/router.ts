@@ -123,6 +123,29 @@ export const isRedo = (text: string) => REDO.test(text)
 // The prompt's text in a form that repeats when the same question comes again (case and spaces ignored).
 export const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 200)
 
+// The words of a plain reply to the agent: yes / no / ok / thanks / go on, in English, Czech, Spanish,
+// German and French, accents dropped. "option" / "možnost" / "opción" / "variant(e/a)" take a number.
+const QUICK_WORDS = new Set(
+  (
+    'yes yeah yep yup ya no nope nah ok okay okey k kk sure fine good great perfect cool nice right correct exactly agreed lgtm ' +
+    'thanks thank you thx ty please pls go on ahead continue proceed do it sounds looks option ' +
+    'ano jo jj ne nee dobre jasne jasny diky dekuju dekuji pokracuj pokracujte delej udelej to klidne souhlas super parada presne moznost varianta ' +
+    'si vale dale hazlo gracias claro adelante sigue continua perfecto bien de acuerdo opcion ' +
+    'ja nein danke weiter mach es genau gut bitte variante oui non merci vas'
+  ).split(' '),
+)
+
+// A reply too plain to route (an approval, a thank-you, a pick from the agent's options: "yes",
+// "ano, pokračuj", "option 2", "3", "b"): the prompt stays as it is, with no classifier call.
+// Anything with a word of its own goes to the classifier.
+export function quickReply(text: string): boolean {
+  const t = typed(text).toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
+  if (!t || t.length > 40 || t.startsWith('/') || isRedo(t)) return false
+  const words = t.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  if (words.length > 5) return false
+  return words.every(w => QUICK_WORDS.has(w) || /^\d{1,3}$/.test(w) || /^\p{L}$/u.test(w))
+}
+
 // A model the router may offer: an unknown or unavailable one falls back to Opus.
 export function asModel(v: unknown, models: readonly Model[] = ALL_MODELS): Model {
   const m = knownModel(v)

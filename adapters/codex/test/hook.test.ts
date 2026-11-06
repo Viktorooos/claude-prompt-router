@@ -128,11 +128,11 @@ test('custom model mapping and Fable from the models cache', async () => {
 })
 
 test('a failing classifier or an unparsed reply leaves only the neutral note', async () => {
-  const failed = await send('x', { reply: new Error('boom') })
+  const failed = await send('fix it', { reply: new Error('boom') })
   assert.equal(checked(failed.r), true)
   assert.equal(failed.system, '')
   assert.match(readFileSync(join(failed.home, 'log', 'prompt-router.log'), 'utf8'), /classifier: boom/)
-  const { r, home: h } = await send('x', { reply: 'no json here' })
+  const { r, home: h } = await send('fix it', { reply: 'no json here' })
   assert.equal(checked(r), true)
   assert.match(readFileSync(join(h, 'log', 'prompt-router.log'), 'utf8'), /parse: reply could not be parsed/)
 })
@@ -580,4 +580,15 @@ test('codexSpawn: a codex.cmd shim runs its codex.js with node, no shell; anythi
   assert.deepEqual(codexSpawn('C:\\npm\\codex.cmd', 'win32', () => false, 'node'), { file: 'C:\\npm\\codex.cmd', args: [], shell: true })
   assert.deepEqual(codexSpawn('C:\\bin\\codex.exe', 'win32', () => true, 'node'), { file: 'C:\\bin\\codex.exe', args: [], shell: false })
   assert.deepEqual(codexSpawn('/opt/homebrew/bin/codex', 'darwin', () => true, 'node'), { file: '/opt/homebrew/bin/codex', args: [], shell: false })
+})
+
+test('a plain reply ("yes", "option 2") gets the neutral note with no classifier call, and no decision', async () => {
+  for (const prompt of ['yes, go on', 'option 2', 'ano']) {
+    const { r, calls, home: h } = await send(prompt)
+    assert.equal(calls.length, 0)
+    assert.equal(checked(r), true)
+    assert.deepEqual(readStats(h), [])
+    // route reuses that answer.
+    assert.equal(await recentAnswer(h, 's1', prompt, Date.now()), CHECKED)
+  }
 })
