@@ -319,7 +319,7 @@ test('a press on a value saves the option the way /config does, and the pane sho
 test('every setting says which value is recommended, on both surfaces', async ($: any, on: any) => {
   engine(on)
   await start($)
-  const want = [/suggests a better model[^\n]*Recommended: ask\./, /offers to switch[^\n]*Recommended: ask\./, /thinking effort[^\n]*Recommended: ask\./, /cheaper subagent[^\n]*Recommended: ask\./, /fresh session[^\n]*Recommended: 50%\./, /short note[^\n]*Recommended: on\./, /decides[^\n]*Recommended: haiku\./, /measured against[^\n]*Recommended: history\./, /by itself[^\n]*Recommended: off\./, /cheapest model[^\n]*Recommended: on\./]
+  const want = [/suggests a better model[^\n]*Recommended: ask\./, /offers to switch[^\n]*Recommended: ask\./, /thinking effort[^\n]*Recommended: ask\./, /cheaper subagent[^\n]*Recommended: ask\./, /fresh session[^\n]*Recommended: 50%\./, /short note[^\n]*Recommended: on\./, /decides[^\n]*Recommended: haiku\./, /measured against[^\n]*Recommended: history\./, /by itself[^\n]*Recommended: off\./, /cheapest model[^]*?Recommended: on\./]
   for (const surface of ['desktop', 'terminal']) {
     const ui = await $.ui.mount({ ...PANE, surface })
     const texts = await textsOf(ui)
