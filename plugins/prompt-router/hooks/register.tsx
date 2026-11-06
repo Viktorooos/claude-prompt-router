@@ -131,18 +131,8 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
   }
 }
 
-// What the next draw animates, once: after Claude's reply only what changed since the last draw (the
-// settings' tiles never). A press in the pane draws still: the pointer is on the pane then, and the app
-// puts an image back on every hover, press and focus, so an animated drawing would replay each time.
-let paneAnimate: '' | 'reply' = ''
-// What the last draw showed, to tell whether a reply changed it.
-let shown: { period: string; savedText: string; costShare: number | null; ctxText: string; ctxShare: number | null } | undefined
-// An animated drawing stays the pane's drawing until the next one, and the app replays its animation
-// whenever it puts the image back (a hover, a scroll, a focus). So once the longest animation has
-// played (the sparkline's, under 2 s) the pane draws itself once more, still.
-const SETTLE_MS = 2_500
-let settle: { cancel: () => void } | undefined
-
+// The pane draws still: the app puts an image back on every hover, press and focus, and an animated
+// drawing replayed each time.
 function redraw($: EngineInterface) {
   try {
     $.ui.invalidate('ui.render')
@@ -1029,10 +1019,7 @@ export const register: Register = (on, options) => {
   // Each finished turn (main chat or subagent): its tokens and the model it would have run on.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId) {
-      paneAnimate = 'reply'
-      redraw($)
-    }
+    if (!e.agentId) redraw($)
     if (!enabled || cfg.stats !== 'on') return r
     try {
       const usage = usageOf(r.usage)
@@ -1179,10 +1166,6 @@ export const register: Register = (on, options) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
     const report = d.savings?.report[panePeriod] ?? null
-    // A reply moves only what it changed, from where it was: a number fades in only when its text
-    // changed, a bar grows from its last length, the sparkline stays still.
-    const before = paneAnimate === 'reply' ? shown : undefined
-    paneAnimate = ''
     const { Box, Text, Button, Svg, Select } = $.ui.resolve(e) as any
     const cols = e.props.bodyColumns ?? 40
     const px = Math.max(220, Math.min(460, cols * 7))
@@ -1283,27 +1266,6 @@ export const register: Register = (on, options) => {
     const savedPct = s && s.withoutUsd > 0 ? Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100) : 0
     const days = d.savings?.days.slice(panePeriod === 'week' ? -7 : -14) ?? []
     const trend = days.some(x => Math.abs(x.balanceUsd) >= 0.005) && panePeriod !== 'today'
-    const costShare = s && s.withoutUsd > 0 ? Math.min(100, Math.round((withUsd / s.withoutUsd) * 1000) / 10) : null
-    const ctxText = d.share == null ? '–' : `${Math.round(d.share)} %`
-    const ctxShare = d.share == null ? null : Math.round(d.share * 10) / 10
-    const now = { period: panePeriod, savedText, costShare, ctxText, ctxShare }
-    const moved = (k: 'savedText' | 'costShare' | 'ctxText' | 'ctxShare') => before !== undefined && before.period === now.period && before[k] !== now[k]
-    const anim = {
-      savedNum: moved('savedText'),
-      cost: moved('costShare'),
-      costFrom: before?.costShare ?? 0,
-      ctxNum: moved('ctxText'),
-      ctx: moved('ctxShare'),
-      ctxFrom: before?.ctxShare ?? 0,
-    }
-    shown = now
-    if (anim.savedNum || anim.cost || anim.ctxNum || anim.ctx) {
-      settle?.cancel()
-      settle = $.clock.after(SETTLE_MS, () => {
-        settle = undefined
-        redraw($)
-      })
-    }
     const stat = (key: string, label: string, value: string, color?: string) => (
       <Box key={key} flexDirection="column" flexGrow={1}>
         <Text dimColor>{label}</Text>
@@ -1336,11 +1298,11 @@ export const register: Register = (on, options) => {
           <Box key="saved-v" flexDirection="column" gap={1}>
             <Box flexDirection="row" alignItems="center" gap={2}>
               <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                <Svg source={bigNumberSvg(savedText, savedColor, px, 44, anim.savedNum)} alt={`${savedWord}: ${savedText}`} height={56} />
+                <Svg source={bigNumberSvg(savedText, savedColor, px, 44)} alt={`${savedWord}: ${savedText}`} height={56} />
               </Box>
               {savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
             </Box>
-            <Svg source={costBarSvg(withUsd, s.withoutUsd, anim.cost, 10, anim.costFrom)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
+            <Svg source={costBarSvg(withUsd, s.withoutUsd)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
           </Box>
         ),
       s.withoutUsd > 0 ? (
@@ -1373,11 +1335,11 @@ export const register: Register = (on, options) => {
       <Box key="ctx" flexDirection="column" gap={1}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Svg source={bigNumberSvg(d.share == null ? '–' : `${Math.round(d.share)} %`, TONES[d.tone][0], px, 30, anim.ctxNum)} alt={used || 'Context unknown'} height={38} />
+            <Svg source={bigNumberSvg(d.share == null ? '–' : `${Math.round(d.share)} %`, TONES[d.tone][0], px, 30)} alt={used || 'Context unknown'} height={38} />
           </Box>
           <Box flexShrink={0}><Text dimColor>{ctxRight}</Text></Box>
         </Box>
-        <Svg source={contextBarSvg(d.share, d.at, px, 10, anim.ctx, anim.ctxFrom)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={16} />
+        <Svg source={contextBarSvg(d.share, d.at, px, 10)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={16} />
         <Text dimColor>{`${asks[0]!.toUpperCase()}${asks.slice(1)}. ${d.at ? 'The tick on the bar marks it.' : ''}`.trim()}</Text>
       </Box>,
     ])

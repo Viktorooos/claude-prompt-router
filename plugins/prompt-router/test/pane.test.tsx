@@ -199,74 +199,26 @@ test('a press in the pane draws still: the pointer is on the pane, and every hov
   await d.ui.unmount()
 })
 
-test('a reply animates only what it changed, once, then a still redraw replaces it, so nothing replays', async ($: any, on: any) => {
-  const now = 20 * 86_400_000 + 12 * HOUR
-  const opts = { now, log: TURN(now - HOUR) }
-  const seen = engine(on, opts)
-  const waits: { ms: number; release: () => void }[] = []
-  on('clock.after', (_: unknown, e: any) => new Promise<any>(r => waits.push({ ms: e.ms, release: () => r({ value: undefined }) })))
-  on('turn.complete', () => ({ text: '' }))
-  await start($)
-  const draw = async () => {
-    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    const moves = async (key: string) => /animation:/.test(JSON.stringify(await ui.find({ key })))
-    const svgs = JSON.stringify(await ui.findAll({ type: 'Svg' }))
-    // The tiles' pop is `animation:p ` (the sparkline's dots use `animation:pop`).
-    const r = { any: /animation:/.test(svgs), saved: await moves('saved'), bar: await moves('chat'), heads: /animation:p /.test(svgs) }
-    await ui.unmount()
-    return r
-  }
-  expect((await draw()).any).toBe(false)
-  // A reply that changes neither the saving nor the context moves nothing and asks for no redraw.
-  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
-  seen.writes.clear()
-  expect((await draw()).any).toBe(false)
-  expect(waits.length).toBe(0)
-  // A reply that changes the saving animates the saving only, never the settings' tiles.
-  opts.log = [TURN(now - 2 * HOUR), TURN(now - HOUR)].join('\n')
-  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' })
-  seen.writes.clear()
-  const d = await draw()
-  expect([d.saved, d.bar, d.heads]).toEqual([true, false, false])
-  // Once the animation has played, the pane draws itself again, still.
-  expect(waits.length).toBe(1)
-  expect(waits[0].ms).toBeGreaterThanOrEqual(2000)
-  const before = seen.redraws
-  waits[0].release()
-  await new Promise(r => setTimeout(r, 0))
-  expect(seen.redraws).toBe(before + 1)
-  expect((await draw()).any).toBe(false)
-  expect(waits.length).toBe(1)
-  // A subagent's turn does not animate the pane.
-  opts.log = [TURN(now - 3 * HOUR), TURN(now - 2 * HOUR), TURN(now - HOUR)].join('\n')
-  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer', agentId: 'a1' })
-  seen.writes.clear()
-  expect((await draw()).any).toBe(false)
-})
-
-test('a reply that changes the numbers does not replay the card from zero: the sparkline stays, bars grow from where they were', async ($: any, on: any) => {
+test('nothing in the pane animates: not after a reply, not after a press, and no extra redraw', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   const opts = { now, log: [TURN(now - 30 * HOUR), TURN(now - HOUR)].join('\n') }
   const seen = engine(on, opts)
-  on('clock.after', () => new Promise<any>(() => {}))
+  const waits: unknown[] = []
+  on('clock.after', (_: unknown, e: any) => { waits.push(e); return new Promise<any>(() => {}) })
   on('turn.complete', () => ({ text: '' }))
   await start($)
-  const svgs = async () => {
+  const moving = async () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    const r = (await ui.findAll({ type: 'Svg' })).map((x: any) => String(x.props?.source ?? JSON.stringify(x)))
+    const r = /animation:/.test(JSON.stringify(await ui.findAll({ type: 'Svg' })))
     await ui.unmount()
     return r
   }
-  const first = await svgs()
-  expect(first.some((x: string) => x.includes('Saved per day') || x.includes('stroke-dashoffset'))).toBe(true)
+  expect(await moving()).toBe(false)
   opts.log = [TURN(now - 30 * HOUR), TURN(now - 2 * HOUR), TURN(now - HOUR)].join('\n')
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
   seen.writes.clear()
-  const after = (await svgs()).join('\n')
-  // Something changed, so something moves, but nothing restarts from nothing.
-  expect(after).toMatch(/animation:/)
-  expect(after).not.toMatch(/@keyframes draw/)
-  expect(after).not.toMatch(/from\{width:0\}/)
+  expect(await moving()).toBe(false)
+  expect(waits.length).toBe(0)
 })
 
 test('a setting\'s line sits beside its control, not under it', async ($: any, on: any) => {
