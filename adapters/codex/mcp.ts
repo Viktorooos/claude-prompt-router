@@ -1,13 +1,15 @@
 // Prompt Router for the ChatGPT desktop app: an MCP server with one tool, `route`.
-// The desktop app does not run UserPromptSubmit hooks, so AGENTS.md asks the agent to call
-// `route` with the prompt first. The answer is the hook's own note, from the same code.
+// Where no UserPromptSubmit hook ran (the ChatGPT desktop), AGENTS.md asks the agent to call
+// `route` with the prompt first. The answer is the hook's own note, from the same code. Where the
+// hook did run (it always leaves a "[Prompt Router: ..." note once it classified), `route` hands
+// back the hook's answer for the same prompt instead of classifying it a second time.
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import { typed } from '../../plugins/prompt-router/core/router.ts'
-import { codexHome, handle, readHistory } from './hook.ts'
+import { CHECKED, codexHome, handle, readHistory, recentAnswer } from './hook.ts'
 import type { Deps } from './hook.ts'
 
 const GO_ON = 'Prompt Router: nothing to switch. Answer the prompt now and do not mention the router.'
@@ -55,10 +57,14 @@ export async function route(args: { prompt?: unknown }, deps: Deps = {}): Promis
   try {
     const transcript = await findTranscript(home, prompt)
     const h = await readHistory(transcript)
+    // The hook classified this prompt already (the desktop runs both): its answer, no second call.
+    const known = await recentAnswer(home, h.id, prompt, deps.now ?? Date.now())
+    if (known) return known === CHECKED ? GO_ON : known
     // The routed prompt's own turn is open already; it is not a running one. The desktop has no
     // spawn_agent, so a here prompt on another model only judges the effort, as before.
     const r = await handle({ session_id: h.id || undefined, prompt, transcript_path: transcript, turn_id: h.openTurns.at(-1), model: h.model || undefined }, { ...deps, codexHome: home, noSubagent: true })
-    return r?.hookSpecificOutput?.additionalContext ?? GO_ON
+    const note = r?.hookSpecificOutput?.additionalContext
+    return !note || note === CHECKED ? GO_ON : note
   } catch {
     return GO_ON
   }

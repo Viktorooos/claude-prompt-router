@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import { findTranscript, route, serve } from '../mcp.ts'
 import { readStats } from '../stats.ts'
 import { PICK, home } from './helpers.ts'
+import { REUSE_MS, handle } from '../hook.ts'
 
 // A rollout of a chat whose current turn (t9) is still open, the prompt already in it.
 function rollout(dir: string, name: string, prompt: string, o: { model?: string; replied?: boolean } = {}) {
@@ -139,7 +140,8 @@ test('the desktop never offers a subagent, with subagentSuggestions ask or auto'
     rollout(sessions(h), 'a', 'spusť testy', { model: 'gpt-6.1-sol', replied: true })
     const r = await route({ prompt: 'spusť testy' }, { codexHome: h, runner: async () => PICK.subagent })
     assert.doesNotMatch(r, /Subagent|spawn_agent/)
-    const s = await route({ prompt: 'spusť testy' }, { codexHome: h, runner: async () => PICK.session })
+    // Past REUSE_MS, so the first answer is not handed back again.
+    const s = await route({ prompt: 'spusť testy' }, { codexHome: h, now: Date.now() + REUSE_MS + 1, runner: async () => PICK.session })
     assert.match(s, /New session/)
     assert.doesNotMatch(s, /Subagent|spawn_agent/)
   }
@@ -151,4 +153,29 @@ test('the desktop logs each decision under the chat id from the rollout', async 
   await route({ prompt: 'napiš zprávu pro kolegu' }, { codexHome: h, runner: async () => PICK.first })
   const d = readStats(h).find(r => r.kind === 'decision')
   assert.equal(d?.kind === 'decision' && d.chat, 'chat-42')
+})
+
+test('route hands back the hook answer for the same prompt in the same chat, without the classifier', async () => {
+  const h = home()
+  rollout(sessions(h), 'chat-7', 'přejmenuj tu proměnnou')
+  const now = Date.now()
+  const hook = await handle({ session_id: 'chat-7', prompt: 'přejmenuj tu proměnnou', transcript_path: null, model: 'gpt-6.1-sol', turn_id: 't9' }, { codexHome: h, now, runner: async () => PICK.first })
+  let calls = 0
+  const r = await route({ prompt: 'přejmenuj tu proměnnou' }, { codexHome: h, now: now + 5000, runner: async () => (calls++, PICK.keep) })
+  assert.equal(calls, 0)
+  assert.equal(r, hook?.hookSpecificOutput?.additionalContext)
+  assert.equal(readStats(h).filter(x => x.kind === 'decision').length, 1)
+})
+
+test('route: a prompt the hook left as it is goes on; an old answer is classified again', async () => {
+  const h = home()
+  rollout(sessions(h), 'chat-8', 'ok')
+  const now = Date.now()
+  await handle({ session_id: 'chat-8', prompt: 'ok', transcript_path: null, model: 'gpt-6.1-sol' }, { codexHome: h, now, runner: async () => PICK.keep })
+  let calls = 0
+  const runner = async () => (calls++, PICK.keep)
+  assert.match(await route({ prompt: 'ok' }, { codexHome: h, now: now + 1000, runner }), /nothing to switch/i)
+  assert.equal(calls, 0)
+  await route({ prompt: 'ok' }, { codexHome: h, now: now + REUSE_MS + 1, runner })
+  assert.equal(calls, 1)
 })

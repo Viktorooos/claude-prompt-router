@@ -419,9 +419,11 @@ async function routerCommand(home: string, o: Options, arg: string, cur: { model
 // Each chat's open subagent offer (the decision's time stamp, until the Stop hook sees spawn_agent or
 // another offer replaces it) and when it was last active. The hook is a new process per prompt, so
 // this lives in a small file next to the stats log; chats idle for a day are dropped.
-type ChatTask = { end: number; offer?: number }
+// last: the hook's answer to the chat's newest classified prompt, so MCP `route` can hand it out
+// again instead of classifying the same prompt twice.
+type ChatTask = { end: number; offer?: number; last?: { key: string; ts: number; note: string } }
 
-async function readTasks(home: string, now: number): Promise<Record<string, ChatTask>> {
+export async function readTasks(home: string, now: number): Promise<Record<string, ChatTask>> {
   try {
     const all = JSON.parse(await readFile(paths(home).tasks, 'utf8')) as Record<string, ChatTask>
     return Object.fromEntries(Object.entries(all).filter(([, t]) => t && now - t.end < 86_400_000))
@@ -449,9 +451,46 @@ async function saveTask(home: string, chat: string, task: ChatTask | undefined, 
   }
 }
 
-// Works out the hook's answer for one prompt; null = the prompt goes on untouched.
+// The note of a prompt the router checked and left as it is (keep, nothing to switch, or a classifier
+// failure). It is there so the agent does not call MCP `route` for the prompt again (AGENTS.md).
+export const CHECKED = '[Prompt Router: checked, nothing to switch. Answer the prompt as usual and do not mention the router.]'
+
+// How long the hook's answer stands for MCP `route` on the same prompt.
+export const REUSE_MS = 120_000
+
+// The hook's answer for this prompt from the last REUSE_MS: in this chat, or in any chat when the
+// chat is not known. Compared by promptKey, whatever form the key takes.
+export async function recentAnswer(home: string, chat: string, prompt: string, now: number): Promise<string | null> {
+  const key = promptKey(typed(prompt))
+  if (!key) return null
+  const tasks = await readTasks(home, now)
+  const found = (chat ? [tasks[chat]] : Object.values(tasks)).map(t => t?.last).filter(l => !!l && l.key === key && now - l.ts >= 0 && now - l.ts < REUSE_MS).sort((a, b) => b!.ts - a!.ts)[0]
+  return found?.note ?? null
+}
+
+// Works out the hook's answer for one prompt; null = the prompt goes on untouched (the router is
+// off, a slash command, no prompt). Once the classifier was asked, there is always a note: the
+// router's, or CHECKED.
 export async function handle(input: Input, deps: Deps = {}): Promise<Output | null> {
   const home = deps.codexHome ?? codexHome()
+  const ran = { on: false, key: '', ts: 0 }
+  let r: Output | null
+  try {
+    r = await classify(input, deps, home, ran)
+  } catch (err) {
+    if (!ran.on) throw err
+    await log(home, 'classifier', err)
+    r = null
+  }
+  if (!ran.on) return r
+  const res = r ?? out(CHECKED)
+  const chat = input.session_id ?? ''
+  const t = (await readTasks(home, ran.ts))[chat] ?? { end: ran.ts }
+  await saveTask(home, chat, { ...t, last: { key: ran.key, ts: ran.ts, note: res.hookSpecificOutput?.additionalContext ?? CHECKED } }, ran.ts)
+  return res
+}
+
+async function classify(input: Input, deps: Deps, home: string, ran: { on: boolean; key: string; ts: number }): Promise<Output | null> {
   const o = await loadOptions(home)
   // The client has no spawn_agent: a subagent pick stays here, as with subagentSuggestions off.
   if (deps.noSubagent) o.cfg = { ...o.cfg, subagentSuggestions: 'off' }
@@ -487,6 +526,7 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   const c: Chat = { first: all[0] ?? '', recent: all.slice(-4, -1), reply: h.reply, model, now, tokens: h.tokens, window: h.window, conf: o.cfg, isFirst: h.isFirst, hereModel, models: avail }
   const runner = deps.runner ?? codexRunner
   let usage: Usage | null = null
+  Object.assign(ran, { on: true, key: promptKey(text), ts: deps.now ?? Date.now() })
   const reply = await runner(pickPrompt(text, c), { model: classifier, effort: effortOf(classifier, 'low'), timeoutMs: o.timeoutMs, onUsage: u => (usage = u) })
   // One stats record per routed prompt. Codex cannot switch itself: "applied" means the router's
   // line was given without a question (auto); whether the user then switched shows in the turns.

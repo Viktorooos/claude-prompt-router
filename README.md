@@ -389,14 +389,14 @@ All in `~/.codex` (`$CODEX_HOME` is respected), each file after a backup:
 | `hooks.json` | Merges a `UserPromptSubmit` hook (`node <repo>/adapters/codex/hook.ts`), keeping your other hooks. Backup: `hooks.json.bak-prompt-router-<time>`. |
 | `prompt-router.json` | Written with the defaults when there is none. |
 | `config.toml` | A `prompt_router` MCP server (`node <repo>/adapters/codex/mcp.ts`, tool `route`, approved without a prompt), between marker comments. |
-| `AGENTS.md` | A short rule, between marker comments: call `route` with the prompt first, and skip the call when the hook's note is already there (the CLI). |
+| `AGENTS.md` | A short rule, between marker comments: call `route` with the prompt first, and skip the call when the hook's note is already there. Once the hook has classified a prompt it always leaves a note (at least `[Prompt Router: checked, …]`). |
 
 </details>
 
 > [!IMPORTANT]
 > Codex runs a new or changed hook only after you trust it. Trust it again after every update that changes the hook command (for example after moving the repo and installing again).
 
-**ChatGPT desktop app.** It runs no `UserPromptSubmit` hooks (tested with 0.166). Instead it uses the MCP tool `route` plus the `AGENTS.md` rule. `route` runs the same code as the hook and returns the same note. Restart the desktop app after installing. The cost is one tool call per prompt (3–4 s), and the model may now and then skip the rule.
+**ChatGPT desktop app.** It runs no `UserPromptSubmit` hooks (tested with 0.166). Instead it uses the MCP tool `route` plus the `AGENTS.md` rule. `route` runs the same code as the hook and returns the same note; when the hook already classified the same prompt in the last two minutes, `route` returns the hook's answer instead of classifying it again, so a prompt is classified once. Restart the desktop app after installing. The cost is one tool call per prompt (3–4 s), and the model may now and then skip the rule.
 
 ### Options
 

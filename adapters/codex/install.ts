@@ -62,9 +62,10 @@ export function mcpBlock(mcp = MCP) {
 }
 
 export const AGENTS_RULE = [
-  'Prompt Router: at the start of every new user prompt, before anything else, call the `route` tool of the',
-  '`prompt_router` MCP server with the prompt exactly as typed, and follow what it returns. Skip the call when',
-  'this turn already carries a "[Prompt Router: ..." note, or the prompt is a reply to your own question.',
+  'Prompt Router: when a new user prompt arrives without a "[Prompt Router: ..." note, call the `route` tool of the',
+  '`prompt_router` MCP server once, before anything else, with the prompt exactly as typed, and follow what it',
+  'returns. When the note is there, the router has checked the prompt already: follow the note and do not call',
+  '`route`. Never call it for a reply to your own question or for an app-generated request.',
 ].join('\n')
 
 // Puts body between the markers (replacing an old copy), or removes the block when body is null.

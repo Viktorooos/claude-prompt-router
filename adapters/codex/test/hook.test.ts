@@ -6,9 +6,12 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { childPath, classifierArgs, codexBin, codexRunner, configDefaults, effortFor, needsUserConfig, readHistory } from '../hook.ts'
+import { CHECKED, REUSE_MS, childPath, classifierArgs, codexBin, codexRunner, configDefaults, effortFor, needsUserConfig, readHistory, recentAnswer } from '../hook.ts'
+import type { Output } from '../hook.ts'
 import { readStats } from '../stats.ts'
 import { FIXTURE, PICK, home, send, tmp } from './helpers.ts'
+
+const checked = (r: Output | null) => r?.hookSpecificOutput?.additionalContext === CHECKED && !r.systemMessage
 
 const HOOK = fileURLToPath(new URL('../hook.ts', import.meta.url))
 const IDENTITY = { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max' } as const
@@ -64,8 +67,8 @@ test('the classifier sees the chat and runs on the classifier model at low', asy
 })
 
 test('here at the same effort, and keep, pass the prompt untouched', async () => {
-  assert.equal((await send('rename that variable', { reply: PICK.same })).r, null)
-  assert.equal((await send('yes, go on', { reply: PICK.keep })).r, null)
+  assert.equal(checked((await send('rename that variable', { reply: PICK.same })).r), true)
+  assert.equal(checked((await send('yes, go on', { reply: PICK.keep })).r), true)
 })
 
 test('auto mode: a here pick at another effort makes the agent give the /model line and go on', async () => {
@@ -113,7 +116,7 @@ test('subagent: the options and the switch line for doing it here', async () => 
 })
 
 test('a prompt typed over a running turn keeps its setting', async () => {
-  assert.equal((await send('also that one', { reply: PICK.here, turn: 't3' })).r, null)
+  assert.equal(checked((await send('also that one', { reply: PICK.here, turn: 't3' })).r), true)
 })
 
 test('custom model mapping and Fable from the models cache', async () => {
@@ -124,11 +127,30 @@ test('custom model mapping and Fable from the models cache', async () => {
   assert.equal(system, 'Prompt Router: suggests a subagent on my-sol · medium (x)')
 })
 
-test('a failing classifier or an unparsed reply passes the prompt untouched', async () => {
-  await assert.rejects(send('x', { reply: new Error('boom') }))
+test('a failing classifier or an unparsed reply leaves only the neutral note', async () => {
+  const failed = await send('x', { reply: new Error('boom') })
+  assert.equal(checked(failed.r), true)
+  assert.equal(failed.system, '')
+  assert.match(readFileSync(join(failed.home, 'log', 'prompt-router.log'), 'utf8'), /classifier: boom/)
   const { r, home: h } = await send('x', { reply: 'no json here' })
-  assert.equal(r, null)
+  assert.equal(checked(r), true)
   assert.match(readFileSync(join(h, 'log', 'prompt-router.log'), 'utf8'), /parse: reply could not be parsed/)
+})
+
+test('the neutral note names no decision and no model', () => {
+  assert.match(CHECKED, /^\[Prompt Router: /)
+  assert.doesNotMatch(CHECKED, /gpt|model|effort|subagent|session/i)
+})
+
+test('the hook remembers its answer for MCP route, by chat and prompt key, for REUSE_MS', async () => {
+  const { home: h, context } = await send('Rename  THAT variable', { reply: PICK.here, now: 1_000_000 })
+  assert.equal(await recentAnswer(h, 's1', 'rename that variable', 1_000_000 + REUSE_MS - 1), context)
+  assert.equal(await recentAnswer(h, '', 'rename that variable', 1_000_001), context)
+  assert.equal(await recentAnswer(h, 's2', 'rename that variable', 1_000_001), null)
+  assert.equal(await recentAnswer(h, 's1', 'something else', 1_000_001), null)
+  assert.equal(await recentAnswer(h, 's1', 'rename that variable', 1_000_000 + REUSE_MS), null)
+  const kept = await send('yes, go on', { reply: PICK.keep, now: 2_000_000 })
+  assert.equal(await recentAnswer(kept.home, 's1', 'yes, go on', 2_000_001), CHECKED)
 })
 
 test('/router: status, off and on, persisted in the options file', async () => {
@@ -326,7 +348,7 @@ test('modelMode off: here on another model only judges the effort, as before', a
 })
 
 test('here on another model typed over a running turn: nothing changes', async () => {
-  assert.equal((await send('and rename these too', { reply: OTHER.lower, turn: 't3' })).r, null)
+  assert.equal(checked((await send('and rename these too', { reply: OTHER.lower, turn: 't3' })).r), true)
 })
 
 test('here on another model when the chat model is unknown: as before', async () => {
@@ -338,7 +360,7 @@ test('here on another model when the chat model is unknown: as before', async ()
 
 // One switch per feature (0.8.0), read from ~/.codex/prompt-router.json like the real hook.
 test('effortDetection off: no effort line and no level in the options', async () => {
-  assert.equal((await send('rename that variable', { reply: PICK.here, options: { effortDetection: 'off' } })).r, null)
+  assert.equal(checked((await send('rename that variable', { reply: PICK.here, options: { effortDetection: 'off' } })).r), true)
   const s = await send('run the tests', { reply: PICK.subagent, options: { effortDetection: 'off' } })
   assert.match(s.context, /"Subagent \(gpt-6-luna · low\)", "Do it here"\./)
   assert.doesNotMatch(s.context, /Do it here \(/)
@@ -385,7 +407,7 @@ test('subagentSuggestions off: a subagent pick is handled as here', async () => 
 })
 
 test('sessionSuggestions off: a session pick is handled as here', async () => {
-  assert.equal((await send('build the billing page', { reply: '{"where": "session", "model": "opus", "effort": "medium", "why": "unrelated"}', options: { sessionSuggestions: 'off' } })).r, null)
+  assert.equal(checked((await send('build the billing page', { reply: '{"where": "session", "model": "opus", "effort": "medium", "why": "unrelated"}', options: { sessionSuggestions: 'off' } })).r), true)
 })
 
 test('notifications off: the auto line is still given, but no system message', async () => {
@@ -455,9 +477,9 @@ test('newSessionAt: without a window the chat counts against 200k', async () => 
 test('newSessionAt: a continuation goes to a session too; a big window or the option off stays here', async () => {
   const goOn = HERE_NEW.replace('"new"', '"continue"')
   assert.match((await send('fix it', { reply: goOn, transcript: longChat(200_000, 258_400) })).system, /new session/)
-  assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(150_000, 1_000_000) })).r, null)
-  assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { newSessionAt: 'off' } })).r, null)
-  assert.equal((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { sessionSuggestions: 'off' } })).r, null)
+  assert.equal(checked((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(150_000, 1_000_000) })).r), true)
+  assert.equal(checked((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { newSessionAt: 'off' } })).r), true)
+  assert.equal(checked((await send('now add a favourites screen', { reply: HERE_NEW, transcript: longChat(200_000, 258_400), options: { sessionSuggestions: 'off' } })).r), true)
 })
 
 // subagentSuggestions auto: the subagent starts with no "Where should this go?".
