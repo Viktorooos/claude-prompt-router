@@ -155,9 +155,10 @@ test('You saved comes first: the period\'s saving against compareWith, without a
   expect(session.props.borderColor).toBe('#36b3a8')
   expect(JSON.stringify(session)).toMatch(/group-session-head[\s\S]*"Svg"[\s\S]*set-newSessionAt[\s\S]*set-notifications/)
   expect(JSON.stringify(model)).not.toMatch(/set-newSessionAt/)
-  // Each fold is headed by an icon, its name and what is inside; closed, its button says Show.
-  expect(JSON.stringify(await ui.find({ key: 'more' }))).toMatch(/More settings, closed/)
-  expect(JSON.stringify(await ui.find({ type: 'Button', key: 'fold-more' }))).toMatch(/Show/)
+  // The cards that used to fold are always open: an icon heading, the content, no Show/Hide button.
+  expect(JSON.stringify(await ui.find({ key: 'more' }))).not.toMatch(/closed/)
+  expect(await ui.find({ type: 'Button', key: 'fold-more' })).toBeUndefined()
+  expect(await ui.find({ type: 'Select', key: 'pick-classifier' })).toBeDefined()
   // 7 days by default; the picked period is the primary button.
   expect(JSON.stringify(await ui.find({ type: 'Button', key: 'period-week' }))).toMatch(/"variant":"primary"/)
   await ui.press({ key: 'period-today' })
@@ -261,16 +262,13 @@ function taskLog(now: number) {
   return lines.join('\n')
 }
 
-test('Details, folded: the strict balance, how often it was right, where the tasks went', async ($: any, on: any) => {
+test('Details, always open: the strict balance, how often it was right, where the tasks went', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   engine(on, { now, log: taskLog(now) })
   await start($)
   for (const surface of ['desktop', 'terminal'] as const) {
-    const shut = await $.ui.mount({ ...PANE, surface })
-    expect(await textsOf(shut)).not.toMatch(/Router balance/)
-    await shut.press({ key: 'fold-details' })
-    await shut.unmount()
     const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Button', key: 'fold-details' })).toBeUndefined()
     const texts = await textsOf(ui)
     if (surface === 'terminal') {
       // The terminal puts the figure beside the name.
@@ -294,7 +292,6 @@ test('Details, folded: the strict balance, how often it was right, where the tas
       expect(JSON.stringify(await ui.find({ key: 'tasks' }))).toMatch(/Where tasks went[\s\S]*Tasks: haiku 100 %[\s\S]*tasks-haiku/)
       expect(JSON.stringify(await ui.find({ key: 'tasks-haiku' }))).toMatch(/haiku: 1 of 1 tasks[\s\S]*#6d5ce8|#6d5ce8[\s\S]*haiku: 1 of 1 tasks/)
     }
-    await ui.press({ key: 'fold-details' })
     await ui.unmount()
   }
 })
@@ -346,13 +343,9 @@ test('new session at off turns the suggestion off; a share turns it back on', as
   await ui2.unmount()
 })
 
-test('More settings, folded: the classifier, what the saving is compared with, the pane on start', async ($: any, on: any) => {
+test('More settings, always open: the classifier, what the saving is compared with, the pane on start', async ($: any, on: any) => {
   const seen = engine(on)
   await start($)
-  const shut = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await shut.find({ type: 'Select', key: 'pick-classifier' })).toBeUndefined()
-  await shut.press({ key: 'fold-more' })
-  await shut.unmount()
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(JSON.stringify(await ui.find({ type: 'Select', key: 'pick-classifier' }))).not.toMatch(/opus/)
   await ui.select({ key: 'pick-classifier', value: 'haiku' })
@@ -472,30 +465,17 @@ test('with no /config row for the mod, a press saves the option in settings.json
   await again.unmount()
 })
 
-test('a fold stays open while a value under it changes', async ($: any, on: any) => {
+test('no surface has a fold button, and a saved option leaves the content shown', async ($: any, on: any) => {
   const now = 30 * 86_400_000
-  const seen = engine(on, { now, log: taskLog(now) })
+  engine(on, { now, log: taskLog(now) })
   await start($)
-  const draw = async (act?: (ui: any) => Promise<void>) => {
-    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    const shown = { more: /Hide/.test(JSON.stringify(await ui.find({ type: 'Button', key: 'fold-more' }))), details: /Hide/.test(JSON.stringify(await ui.find({ type: 'Button', key: 'fold-details' }))) }
-    if (act) await act(ui)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Button', key: 'fold-more' })).toBeUndefined()
+    expect(await ui.find({ type: 'Button', key: 'fold-details' })).toBeUndefined()
+    expect(await textsOf(ui)).toMatch(/Router balance/)
     await ui.unmount()
-    return shown
   }
-  await draw(async ui => {
-    for (const id of ['more', 'details']) {
-      if (/Show/.test(JSON.stringify(await ui.find({ type: 'Button', key: `fold-${id}` })))) await ui.press({ key: `fold-${id}` })
-    }
-  })
-  // Saving an option reloads the mod, which keeps $.state but not module variables: the folds live there.
-  expect(JSON.stringify([...seen.state.values()])).toMatch(/"more"[\s\S]*"details"|"details"[\s\S]*"more"/)
-  await draw(ui => ui.select({ key: 'pick-classifier', value: 'haiku' }))
-  expect(await draw()).toEqual({ more: true, details: true })
-  await draw(ui => ui.select({ key: 'pick-compareModel', value: 'opus' }))
-  expect(await draw()).toEqual({ more: true, details: true })
-  await draw(ui => ui.select({ key: 'pick-newSessionAt', value: '60%' }))
-  expect(await draw()).toEqual({ more: true, details: true })
 })
 
 test('You saved with too little data says so instead of a figure', async ($: any, on: any) => {
@@ -521,7 +501,8 @@ test('a negative balance says the router cost more, never You saved', async ($: 
     const texts = await textsOf(ui)
     expect(texts).toMatch(/The router cost more/)
     expect(texts).toMatch(/Stronger models cost more than the cheaper ones saved/)
-    expect(texts).not.toMatch(/You saved/)
+    // The always-open settings quote "You saved" in a label, so only the saving card is checked.
+    expect(JSON.stringify(await ui.find({ key: 'saved' }))).not.toMatch(/You saved/)
     await ui.unmount()
   }
 })
