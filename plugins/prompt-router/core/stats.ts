@@ -19,7 +19,7 @@ export type Decision = {
   where: 'here' | 'subagent' | 'session' | 'keep'
   from: Side
   to: Side
-  /** The prompt's normalized text (promptKey): the same key again means the same question came back. */
+  /** promptKey: a short hash of the normalized prompt (older records: its first 200 characters); the same key again means the same question came back. */
   key?: string
   /** What the classifier read of the prompt: a fix of the last answer, the next step, or new work. */
   follows?: 'continues' | 'corrects' | 'new'

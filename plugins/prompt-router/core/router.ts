@@ -1,4 +1,5 @@
 import type { Level } from '../types'
+import { sha256 } from './hash.ts'
 
 // The router logic every platform shares: the classifier prompt, reading its answer, the options.
 // Platform code (Claude Code mod, Codex hook, OpenCode plugin) imports it and adds only its own I/O.
@@ -120,8 +121,10 @@ const REDO = /(?<!\p{L})(nefung\p{L}*|nejde|zkus(?:te)? to (?:znovu|ještě)|šp
 
 export const isRedo = (text: string) => REDO.test(text)
 
-// The prompt's text in a form that repeats when the same question comes again (case and spaces ignored).
-export const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 200)
+// A key that repeats when the same question comes again (case and spaces ignored), without the text:
+// the first 16 hex digits of the SHA-256 of the normalized prompt. Older logs hold the text itself
+// (its first 200 characters); such a key never equals a hash, so an old prompt never counts as repeated.
+export const promptKey = (text: string) => sha256(text.trim().toLowerCase().replace(/\s+/g, ' ')).slice(0, 16)
 
 // The words of a plain reply to the agent: yes / no / ok / thanks / go on, in English, Czech, Spanish,
 // German and French, accents dropped. "option" / "možnost" / "opción" / "variant(e/a)" take a number.

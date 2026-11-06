@@ -1,5 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
+import { promptKey } from '../core/router.ts'
 import type { Usage } from '../core/prices.ts'
 import { FAILURE_WEIGHTS, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
@@ -763,4 +764,13 @@ test('withTranscripts: a cut-off turn gets the tokens of the main-chat requests 
 test('withTranscripts: a chat with no transcript id or no scan stays as it is', () => {
   const records: Entry[] = [decision({ chat: 'c2' }), turn('opus', 'opus', { chat: 'c2', usage: undefined })]
   expect(withTranscripts(records, [{ session: 's1', requests: [REQ(NOW - HOUR)] }])).toEqual(records)
+})
+
+test('an old text key and the new hash of the same prompt never match: the old one is not counted as repeated', () => {
+  const ds = [
+    decision({ ts: NOW - 60 * MIN, key: 'why is it slow', follows: 'new' }),
+    decision({ ts: NOW - 50 * MIN, key: promptKey('why is it slow'), follows: 'new' }),
+  ]
+  expect(parseLog(ds.map(d => JSON.stringify(d)).join('\n')).length).toBe(2)
+  expect(episodes(ds).length).toBe(2)
 })

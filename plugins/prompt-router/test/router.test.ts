@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { TEMPLATE, claudeDir, compactWindow, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { TEMPLATE, claudeDir, compactWindow, promptKey, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -1473,4 +1473,14 @@ test('a plain reply ("yes, go on", "option 2") passes through untouched, with no
   await submit($, 'option 2')
   expect(seen.prompts).toEqual([])
   expect(seen.sent).toEqual(['yes, go on', 'option 2'])
+})
+
+test('promptKey: a 16-digit hex hash, the same for case and spacing, never the text', () => {
+  const k = promptKey('Fix the  Login bug\n')
+  expect(k).toMatch(/^[0-9a-f]{16}$/)
+  expect(promptKey('fix the login bug')).toBe(k)
+  expect(promptKey('fix the logout bug')).not.toBe(k)
+  expect(k).not.toContain('login')
+  // sha256("abc") starts ba7816bf8f01cfea.
+  expect(promptKey(' ABC ')).toBe('ba7816bf8f01cfea')
 })

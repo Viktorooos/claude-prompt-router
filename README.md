@@ -268,7 +268,13 @@ It is an **estimate**, kept honest:
 - A **stronger model** the router picked is shown as **extra cost**, apart, never hidden in the net.
 - A turn cut off before it finished has no token count in the log. `/router stats` (never a prompt or the panel) then reads its chat's transcript with `scripts/usage-scan.mjs` (plain Node, no model calls; only the chats with such a turn) and takes the tokens of the requests since the turn before; the panel counts it as unknown. A model with no price claims no saving.
 
-The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl` (under `CLAUDE_CONFIG_DIR` when you set it), trimmed to 90 days and 5 MB. Parallel sessions append to it under a lock (`scripts/append.mjs`), so none loses another's records. Turn it off with `"stats": "off"`.
+The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl` (under `CLAUDE_CONFIG_DIR` when you set it), trimmed to 90 days and 5 MB. Parallel sessions append to it under a lock (`scripts/append.mjs`), so none loses another's records.
+
+What one line of the log holds, and nothing more: **no prompt text, no replies, no file names or paths**.
+
+- **decision**, one per routed prompt: time, platform, a random chat id (and the Claude Code session id), where it went (here / subagent / session / keep), the model and effort before and after, whether it was applied, asked or declined, how the prompt follows the last answer (continues / corrects / new), whether it reads as a redo, the classifier's model, tokens and time, and `key`: the first 16 hex digits of the SHA-256 of the prompt (lower case, spaces collapsed). The key only tells that the same prompt came again (a repeat counts as a failed task); it is not the text, though a very short, common prompt could be guessed by hashing candidates. Logs from before this change hold the prompt's first 200 characters in `key` instead; they still load, and an old key never matches a new one, so a prompt repeated across the upgrade is not seen as a repeat. Those lines leave the log with the 90-day trim.
+- **turn**, one per finished turn (main chat or subagent): time, chat id, subagent id, the model and the model it would have run on, token counts, duration, effort, and whether you moved the picker yourself.
+- **accept**: time, chat id and which decision you took or declined. Turn it off with `"stats": "off"`.
 
 <a id="balance"></a>
 ### How the balance is worked out

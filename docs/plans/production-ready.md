@@ -102,7 +102,15 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
   - Testy: 7 existujících testů používalo jako zástupný prompt „p“, „x“, „ok“, „go on“, „yes, go on“ a čekalo volání klasifikátoru; zástupné prompty změněné na věcné („fix it“, „and the readme“), aserce beze změny. Nové testy: `quickReply` ano/ne, CC/Codex hook/`route`/OpenCode bez volání klasifikátoru. CC 211, Codex 118, OpenCode 74.
   - README: odstavec o schválení (ř. ~96), „one small classifier call per prompt“ a cena klasifikátoru zmiňují výjimku.
 
-- [ ] 9. Soukromí ve statistikách (30 min). `promptKey` ukládá 200 znaků promptu na 90 dní (`register.tsx:499`, `register.tsx:1063`). Podle rozhodnutí níže zkrátit nebo hashovat (trial páruje session podle prvních 60 znaků, commit d45e3d9), a popsat v README v sekci Savings stats, co se ukládá.
+- [x] 9. Soukromí ve statistikách (30 min). `promptKey` ukládá 200 znaků promptu na 90 dní (`register.tsx:499`, `register.tsx:1063`). Podle rozhodnutí níže zkrátit nebo hashovat (trial páruje session podle prvních 60 znaků, commit d45e3d9), a popsat v README v sekci Savings stats, co se ukládá.
+
+  Poznámky ke kroku 9 (hotovo):
+  - Rozhodnutí uživatele: hash. `promptKey` = prvních 16 hex číslic SHA-256 normalizovaného promptu (trim, malá písmena, mezery sloučené), bez zkrácení na 200 znaků. SHA-256 v čistém JS (`core/hash.ts`, synchronní; prostředí modu nemá `node:crypto`), node test proti `node:crypto` (čeština, emoji, hranice bloků).
+  - Porovnávání beze změny (všude jen rovnost klíčů): `startsTask`/episody a „repeated“ ve stats, `recentAnswer` v Codexu (`last.key` v souboru úkolů), OpenCode. Staré řádky s textovým klíčem se načtou, ale s novým hashem se nikdy neshodují: prompt zopakovaný přes upgrade se nebere jako opakování (test v `stats.test.ts`); staré klíče zmizí s 90denním ořezem.
+  - README, Savings stats: co přesně obsahují řádky decision / turn / accept, že text promptu ani odpovědi se neukládá a že krátký běžný prompt jde z hashe uhodnout zkoušením.
+  - Mimo rozsah, k rozhodnutí: Codex `~/.codex/log/prompt-router.log` (ladicí log) dál zapisuje u každého `pick` prvních 60 znaků promptu a 200 znaků odpovědi klasifikátoru (`hook.ts`, `log(home, 'pick', …)`).
+  - Testy: CC 213, node 6.
+
 
 ### C. OpenCode
 
@@ -115,7 +123,6 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
 
 ## Rozhodnutí, která čekají na uživatele
 
-- `promptKey`: hash, nebo zkrátit na 60 znaků?
 - Instalovat OpenCode kvůli kroku 10?
 
 ## Rozhodnutí
