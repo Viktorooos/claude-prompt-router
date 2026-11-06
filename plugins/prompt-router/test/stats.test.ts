@@ -704,3 +704,25 @@ test('history: a turn costs the share-weighted average of its price on each part
   expect(mix.pricedTurns).toBe(1)
   expect(statsRows(summarize(t, NOW), { mix: [{ model: 'opus', effort: 'high', share: 1 }] }).some(r => r.label === 'Cost on your history')).toBe(true)
 })
+
+test('a declined offer counts as declined and never as taken', () => {
+  const d = decision({ where: 'session', outcome: 'asked', to: { model: 'sonnet', effort: 'medium' } })
+  const no: Accept = { kind: 'accept', ts: d.ts + 1, platform: 'claude-code', chat: 'c1', decision: d.ts, outcome: 'declined' }
+  const s = summarize([d, no], NOW).today
+  expect(s.declined).toBe(1)
+  expect(s.sessions).toBe(0)
+})
+
+test('a prompt that redoes the last answer marks its task as failed (corrected), with no classifier', () => {
+  const [e] = episodes([decision({ ts: NOW - HOUR, key: 'a' }), decision({ ts: NOW - HOUR + 1, key: 'b', follows: 'continues', redo: true })])
+  expect(failureOf(e!).reasons).toEqual(['corrected'])
+})
+
+test('a spawn record is kept by parseLog and is no turn of any task', () => {
+  const log = [JSON.stringify(decision({ key: 'a' })), JSON.stringify({ kind: 'spawn', ts: NOW - HOUR + 5, platform: 'claude-code', chat: 'c1', key: 'build it' })].join('\n')
+  const rs = parseLog(log)
+  expect(rs.map(r => r.kind)).toEqual(['decision', 'spawn'])
+  const [e] = episodes(rs)
+  expect(e!.turns).toEqual([])
+  expect(summarize(rs, NOW).today.prompts).toBe(1)
+})

@@ -1,5 +1,5 @@
 import { expect, test as base } from 'claude-code/testing'
-import { SWITCHES, TEMPLATE, compactWindow, describeOptions, inHoldout, namesSetting, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { SWITCHES, TEMPLATE, compactWindow, describeOptions, inHoldout, isRedo, namesSetting, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
 
 // The routing tests run without the control group (holdoutPct 0), so no prompt lands in it by chance;
 // the holdout tests below turn it on.
@@ -1216,6 +1216,72 @@ test('holdout: the control group is 30 % by default, 10 % one step away', () => 
   expect(toConfig({}).holdoutPct).toBe('30')
   expect(SWITCHES.holdoutPct[0]).toBe('30')
   expect(SWITCHES.holdoutPct).toContain('10')
+})
+
+const USED = { text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }
+
+test('stats: a router question answered without a switch is noted as declined', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "low", "why": "short message"}', { isFirst: true, rows: [MODEL_ROW] })
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => USED)
+  await start($)
+  await submit($, 'what does this regex match')
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ header: 'Prompt Router', question: 'Switch?', options: [{ label: 'Keep as is' }] }] })
+  await $.turn.complete(TURN_DONE)
+  const lines = statsLines(seen)
+  const d = lines.find((x: any) => x.kind === 'decision')
+  expect(d.outcome).toBe('asked')
+  const acc = lines.filter((x: any) => x.kind === 'accept')
+  expect(acc.length).toBe(1)
+  expect(acc[0].outcome).toBe('declined')
+  expect(acc[0].decision).toBe(d.ts)
+})
+
+test('stats: an asked question that was never shown is not a decline', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "haiku", "effort": "low", "why": "short message"}', { isFirst: true, rows: [MODEL_ROW] })
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => USED)
+  await start($)
+  await submit($, 'what does this regex match')
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ header: 'Deploy', question: 'Which?', options: [] }] })
+  await $.turn.complete(TURN_DONE)
+  expect(statsLines(seen).filter((x: any) => x.kind === 'accept')).toEqual([])
+})
+
+test('stats: a started session is noted with its prompt and takes the session offer', async ($: any, on: any) => {
+  const seen = engine(on, PICK.session)
+  on('tool.call', () => ({ result: {} }))
+  on('turn.complete', () => USED)
+  await start($)
+  await submit($, 'build the export screen')
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ header: 'Prompt Router', question: 'Where should this go?', options: [] }] })
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', prompt: 'Build the  export screen', initiation: 'user_asked' })
+  await $.turn.complete(TURN_DONE)
+  const lines = statsLines(seen)
+  const d = lines.find((x: any) => x.kind === 'decision')
+  const spawn = lines.find((x: any) => x.kind === 'spawn')
+  expect(spawn.chat).toBe(d.chat)
+  expect(spawn.key).toBe('build the export screen')
+  expect(lines.filter((x: any) => x.kind === 'accept').map((a: any) => [a.decision, a.outcome])).toEqual([[d.ts, undefined]])
+})
+
+test('stats: a decision names the transcript it belongs to, and a prompt that redoes the last answer', async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  on('session.id', () => ({ value: 'f00d-1234' }))
+  on('turn.complete', () => USED)
+  await start($)
+  await submit($, 'pořád to nefunguje, zkus to znovu')
+  await $.turn.complete(TURN_DONE)
+  await submit($, 'and the mobile search too')
+  await $.turn.complete(TURN_DONE)
+  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
+  expect(ds.map((d: any) => d.session)).toEqual(['f00d-1234', 'f00d-1234'])
+  expect(ds.map((d: any) => d.redo)).toEqual([true, undefined])
+})
+
+test('isRedo: a prompt that says the last answer did not do the job (Czech and English)', () => {
+  for (const t of ['pořád to nefunguje', 'Zkus to znovu', 'to je špatně', 'stále padá', 'still broken', 'that did not work', "it doesn't work", 'try again', 'wrong, it should be blue', 'nefunguje to']) expect(isRedo(t)).toBe(true)
+  for (const t of ['fix the empty search', 'make it work offline', 'add a retry button', 'run the tests again', 'proč to funguje takhle?']) expect(isRedo(t)).toBe(false)
 })
 
 test('stats: a subagent the router did not offer counts at its own price', async ($: any, on: any) => {

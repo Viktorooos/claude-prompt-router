@@ -32,6 +32,10 @@ export type Decision = {
   wantedWhere?: 'subagent' | 'session'
   /** On a task's first prompt the router wanted to act on: the group the whole task was drawn into. */
   trial?: 'router' | 'control'
+  /** The transcript the decision belongs to (Claude Code: the session id, the name of its .jsonl). */
+  session?: string
+  /** The prompt's own words say the last answer did not do the job (isRedo). */
+  redo?: true
 }
 
 // One finished turn (main chat, or a subagent with `agentId`). `baseline` is the model it would
@@ -66,9 +70,14 @@ export type Turn = {
 }
 
 // The user took an asked decision (switched, or ran the suggested subagent). `decision` is its `ts`.
-export type Accept = { kind: 'accept'; ts: number; platform: string; chat: string; decision: number }
+// `outcome: 'declined'`: the person was asked and kept their setting instead.
+export type Accept = { kind: 'accept'; ts: number; platform: string; chat: string; decision: number; outcome?: 'declined' }
 
-export type Entry = Decision | Turn | Accept
+// The chat started a session (start_session); `key` is the promptKey of its prompt, which the new
+// session's first decision repeats, so its work counts for the task that started it.
+export type Spawn = { kind: 'spawn'; ts: number; platform: string; chat: string; key: string }
+
+export type Entry = Decision | Turn | Accept | Spawn
 
 export type Summary = {
   prompts: number
@@ -302,7 +311,7 @@ function finish(s: Summary): Summary {
 const takenKey = (chat: string, ts: number) => `${chat}\n${ts}`
 
 function takenSet(records: readonly Entry[]) {
-  return new Set(records.filter((r): r is Accept => r.kind === 'accept').map(r => takenKey(r.chat, r.decision)))
+  return new Set(records.filter((r): r is Accept => r.kind === 'accept' && r.outcome !== 'declined').map(r => takenKey(r.chat, r.decision)))
 }
 
 // A prompt the router sent to a cheaper model or effort than the person's pick.
@@ -331,7 +340,7 @@ const REWORK_WINDOW = 3
 function reworkedSet(records: readonly Entry[]) {
   const byChat = new Map<string, { decisions: Decision[]; turns: Turn[] }>()
   for (const r of records) {
-    if (r.kind === 'accept' || (r.kind === 'turn' && !main(r))) continue
+    if ((r.kind !== 'decision' && r.kind !== 'turn') || (r.kind === 'turn' && !main(r))) continue
     let c = byChat.get(r.chat)
     if (!c) byChat.set(r.chat, (c = { decisions: [], turns: [] }))
     if (r.kind === 'decision') c.decisions.push(r)
@@ -348,7 +357,7 @@ function reworkedSet(records: readonly Entry[]) {
       const answer = turns.find(t => t.ts >= d.ts && t.ts < until(0))
       const reasons: FailureReason[] = []
       if (d.key && next.some(n => n.key === d.key)) reasons.push('repeated')
-      if (next[0]?.follows === 'corrects') reasons.push('corrected')
+      if (next[0]?.follows === 'corrects' || next[0]?.redo) reasons.push('corrected')
       if (next[0] && turns.some(t => t.manual && t.ts >= next[0]!.ts && t.ts < until(1))) reasons.push('switched')
       if (answer && !answer.usage) reasons.push('interrupted')
       if (reasons.length) out.set(takenKey(d.chat, d.ts), failure(reasons))
@@ -379,7 +388,7 @@ const startsEpisode = (d: Decision, cur: Episode) => startsTask(d, { end: cur.en
 export function episodes(records: readonly Entry[]): Episode[] {
   const byChat = new Map<string, (Decision | Turn)[]>()
   for (const r of records) {
-    if (r.kind === 'accept') continue
+    if (r.kind !== 'decision' && r.kind !== 'turn') continue
     const list = byChat.get(r.chat)
     if (list) list.push(r)
     else byChat.set(r.chat, [r])
@@ -407,7 +416,7 @@ export function failureOf(e: Episode): Failure {
   const reasons: FailureReason[] = []
   if (!e.decisions.length) return failure(reasons)
   if (e.decisions.some((d, i) => d.key && e.decisions.slice(0, i).some(x => x.key === d.key))) reasons.push('repeated')
-  if (e.decisions.slice(1).some(d => d.follows === 'corrects')) reasons.push('corrected')
+  if (e.decisions.slice(1).some(d => d.follows === 'corrects' || d.redo)) reasons.push('corrected')
   const answers = e.turns.filter(main)
   if (answers.slice(1).some(t => t.manual)) reasons.push('switched')
   if (answers.some(t => !t.usage)) reasons.push('interrupted')
@@ -609,7 +618,7 @@ function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Fai
       s.routed++
       s.rework += reworked.get(takenKey(r.chat, r.ts))?.weight ?? 0
     }
-  }
+  } else if (r.kind === 'accept' && r.outcome === 'declined') s.declined++
 }
 
 function startOfDay(ts: number) {
@@ -659,7 +668,7 @@ export function parseLog(text: string): Entry[] {
     if (!line.trim()) continue
     try {
       const r = JSON.parse(line)
-      if (r && (r.kind === 'turn' || r.kind === 'decision' || r.kind === 'accept') && typeof r.ts === 'number') out.push(r)
+      if (r && (r.kind === 'turn' || r.kind === 'decision' || r.kind === 'accept' || r.kind === 'spawn') && typeof r.ts === 'number') out.push(r)
     } catch {}
   }
   return out

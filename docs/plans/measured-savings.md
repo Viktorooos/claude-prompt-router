@@ -25,7 +25,7 @@ Větev `feat/measured-savings` (z `integrate/all` 22ecc6e, kde už je všechno m
 ## Kroky
 - [x] 0. Merge: vše už v `integrate/all`, testy 370/370. `main` = `origin/main`, posouvá se jen pullem z GitHubu, proto lokálně ne.
 - [x] 1. Pokus po úkolech + oprava `now === ''` (30–60 min). Soubory: `core/router.ts` (`startsTask`, `trialEligible`), `core/stats.ts` (`episodes` použije `startsTask`), `hooks/register.tsx` (`holdsOut` → stav úkolu), `.claude-plugin/plugin.json`, `core/router.ts` OPTIONS (30 %). Ověření: nejdřív padající test „unknown effort → may be held out“, pak testy úkolu přes víc promptů v `test/router.test.ts`.
-- [ ] 2. Odmítnutí, `redo`, `session` v rozhodnutích, `spawn` (30–60 min). Soubory: `hooks/register.tsx`, `core/router.ts` (`isRedo`), `core/stats.ts` (typy, `failureOf`, `declined`). Ověření: testy v `test/router.test.ts` a `test/stats.test.ts`.
+- [x] 2. Odmítnutí, `redo`, `session` v rozhodnutích, `spawn` (30–60 min). Soubory: `hooks/register.tsx`, `core/router.ts` (`isRedo`), `core/stats.ts` (typy, `failureOf`, `declined`). Ověření: testy v `test/router.test.ts` a `test/stats.test.ts`.
 - [ ] 3. Měření: `trial(records)` v `core/stats.ts` (cena úkolu, sessions přes `spawn`, klasifikátor, Welch, typy), odstranit `EFFORT_OUTPUT` (30–60 min). Ověření: testy v `test/stats.test.ts` s ručně spočítanými čísly.
 - [ ] 4. Tokeny z přepisu: `scripts/usage-scan.mjs` + čistá funkce `withTranscripts(records, scans)` v `core/stats.ts`, volání z `/router stats` (30–60 min). Ověření: test na fixture přepisu (dedup podle `message.id`, subagenti, okna úkolů).
 - [ ] 5. Zobrazení: `/router stats` text a HTML, panel (bez přepisu), README (30 min). Ověření: testy textu, `claude plugin test`.
@@ -37,3 +37,4 @@ Z kořene repa: `claude plugin test plugins/prompt-router`, `node --test adapter
 
 ## Poznámky pro další krok
 - Krok 1: `startsTask` v `core/stats.ts` sdílí pravidlo s `episodes()`; stav úkolu `task` + `lastTrial` v `hooks/register.tsx` (`holdsOut` se volá pro každý prompt s rozhodnutím, i bez pick). Kontrolní úkol: `where: 'keep'`, `holdout`, `wanted`, `wantedWhere` (subagent/session); první rozhodnutí úkolu `trial`.
+- Krok 2: `isRedo` v `core/router.ts`; v rozhodnutí `session` (z `$.session.id()` při `session.start`) a `redo`; `tool.call` hook bez filtru: AskUserQuestion s hlavičkou „Prompt Router“ → `routerAsked`, na konci tahu bez přijetí `{kind:'accept', outcome:'declined'}`; `start_session` → přijetí nabídky session + `{kind:'spawn', key}`. `Spawn` je v `Entry`, `episodes`/`reworkedSet` ho přeskakují.

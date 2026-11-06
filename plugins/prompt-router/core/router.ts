@@ -117,6 +117,12 @@ export function namesSetting(text: string): boolean {
   return /\b(haik(u|em)|sonnet(u|em|y|a)?|opus(u|em|y|a)?|fabl(e|u|em)|effort(s|u|em|y)?|ultrathink|think (hard|harder|deeply))\b/i.test(text)
 }
 
+// Whether the prompt says the last answer did not do the job (a re-work sign that needs no model):
+// "nefunguje", "zkus to znovu", "pořád padá", "still broken", "didn't work", "try again", "wrong".
+const REDO = /(?<!\p{L})(nefung\p{L}*|nejde|zkus(?:te)? to (?:znovu|ještě)|špatně|(?:pořád|stále|furt) (?:to )?(?:padá|nejde|nefunguje|je špatně|hází)|still (?:broken|failing|wrong|crashes|not)|(?:doesn'?t|does not|didn'?t|did not|won'?t) work|not working|try again|wrong)(?!\p{L})/iu
+
+export const isRedo = (text: string) => REDO.test(text)
+
 // A model the router may offer: an unknown or unavailable one falls back to Opus.
 export function asModel(v: unknown, models: readonly Model[] = ALL_MODELS): Model {
   const m = knownModel(v)

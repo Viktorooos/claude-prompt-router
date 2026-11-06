@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, inHoldout, namesSetting, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, inHoldout, isRedo, namesSetting, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
@@ -462,6 +462,11 @@ async function loadHistory($: EngineInterface) {
 
 // The prompt's text in a form that repeats when the same question comes again (case and spaces ignored).
 let lastPromptKey = ''
+// The prompt's own words say the last answer failed (isRedo); the chat's transcript id; whether this
+// turn showed the router's question (AskUserQuestion with the header "Prompt Router").
+let lastRedo = false
+let sessionId = ''
+let routerAsked = false
 const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 200)
 
 // Notes one routing decision (with what the classifier cost); returns its time stamp. Every result of
@@ -469,7 +474,7 @@ const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' 
 async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick, wanted?: Decision['to'], wantedWhere?: Decision['wantedWhere']) {
   const ts = await $.clock.now()
   if (cfg.stats === 'on') {
-    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(wanted ? { holdout: true as const, wanted } : {}), ...(wantedWhere ? { wantedWhere } : {}), ...(lastTrial ? { trial: lastTrial } : {}) })
+    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(wanted ? { holdout: true as const, wanted } : {}), ...(wantedWhere ? { wantedWhere } : {}), ...(lastTrial ? { trial: lastTrial } : {}), ...(sessionId ? { session: sessionId } : {}), ...(lastRedo ? { redo: true as const } : {}) })
   }
   lastTrial = undefined
   lastClassifier = null
@@ -566,6 +571,8 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   const text = typed(e.text)
   if (!text || text.startsWith('/')) return e
   lastPromptKey = promptKey(text)
+  lastRedo = isRedo(text)
+  routerAsked = false
   turnLevel = null
   lastAsked = null
   lastClassifier = null
@@ -833,6 +840,11 @@ export const register: Register = (on, options) => {
     home = $.plugin.root.split('/.claude/')[0] ?? ''
     chatId = `${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
     task = null
+    try {
+      sessionId = String((await $.session.id()) ?? '')
+    } catch {
+      sessionId = ''
+    }
     pending = []
     baseline = ''
     routed = ''
@@ -1008,6 +1020,12 @@ export const register: Register = (on, options) => {
       const switched = !e.agentId && !!lastTurnModel && !!model && model !== lastTurnModel && model !== base
       if (!e.agentId && model) lastTurnModel = model
       if (!e.agentId && task) task.end = await $.clock.now()
+      // The router asked and the turn ended with no switch, subagent or session: the person kept their setting.
+      if (!e.agentId && routerAsked && lastAsked) {
+        pending.push({ kind: 'accept', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, decision: lastAsked.ts, outcome: 'declined' })
+        lastAsked = null
+      }
+      if (!e.agentId) routerAsked = false
       const manual = !e.agentId && manualUp
       if (!e.agentId) manualUp = false
       pending.push({
@@ -1019,6 +1037,24 @@ export const register: Register = (on, options) => {
         ...(!e.agentId && stepEffort?.effort && stepEffort.base ? { effort: stepEffort.effort, baseEffort: stepEffort.base } : {}),
       })
       await flush($)
+    } catch (err) {
+      await log($, 'stats', err)
+    }
+    return r
+  })
+
+  // The router's question was shown, or a session started (its prompt is noted, so the new session's
+  // work counts for this task, and an offered session counts as taken).
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      const a = e as { tool?: unknown; questions?: unknown; prompt?: unknown }
+      const name = String(a.tool ?? '')
+      if (name === 'AskUserQuestion' && Array.isArray(a.questions) && a.questions.some(q => (q as { header?: unknown })?.header === 'Prompt Router')) routerAsked = true
+      if (/(^|__)start_session$/.test(name) && !(r && typeof r === 'object' && ('deny' in r || ('isError' in r && r.isError)))) {
+        if (lastAsked?.where === 'session') await noteAccept($)
+        if (enabled && cfg.stats === 'on') pending.push({ kind: 'spawn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, key: promptKey(String(a.prompt ?? '')) })
+      }
     } catch (err) {
       await log($, 'stats', err)
     }
