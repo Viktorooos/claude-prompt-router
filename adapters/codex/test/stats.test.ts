@@ -185,9 +185,9 @@ test('statsReport: Today / 7 days / Total with net saving, classifier, extra cos
     { kind: 'turn', ts: now - 500, platform: 'codex', chat: 'c', model: 'sonnet', baseline: 'opus', usage: u },
     // 3 days ago: Fable instead of Opus costs $6 more.
     { kind: 'turn', ts: now - 3 * DAY, platform: 'codex', chat: 'd', model: 'fable', baseline: 'opus', usage: u },
-    // 30 days ago: a GPT turn has no price.
-    { kind: 'turn', ts: now - 30 * DAY, platform: 'codex', chat: 'e', model: 'gpt-6-luna', baseline: 'gpt-6.1-sol', usage: u },
-    { kind: 'decision', ts: now - 30 * DAY, platform: 'codex', chat: 'e', where: 'keep', from: { model: 'gpt-6.1-sol', effort: 'medium' }, to: { model: 'gpt-6.1-sol', effort: 'medium' }, outcome: 'applied', classifier: { model: 'gpt-6-luna', usage: u } },
+    // 30 days ago: a model missing from the price list has no price.
+    { kind: 'turn', ts: now - 30 * DAY, platform: 'codex', chat: 'e', model: 'gpt-5-codex', baseline: 'gpt-5', usage: u },
+    { kind: 'decision', ts: now - 30 * DAY, platform: 'codex', chat: 'e', where: 'keep', from: { model: 'gpt-5', effort: 'medium' }, to: { model: 'gpt-5', effort: 'medium' }, outcome: 'applied', classifier: { model: 'gpt-5-codex', usage: u } },
   ]
   const text = statsReport(records, now)
   const row = (name: string) => text.split('\n').find(l => l.startsWith(name)) ?? ''
@@ -202,7 +202,7 @@ test('statsReport: Today / 7 days / Total with net saving, classifier, extra cos
   assert.match(row('Classifier calls without a price'), /0\s+0\s+1$/)
   assert.match(text, /estimate/i)
   assert.match(text, /not in the net/i)
-  assert.match(text, /gpt-6-luna/)
+  assert.match(text, /gpt-5-codex/)
 })
 
 test('statsReport with no records says so', () => {
@@ -242,23 +242,33 @@ test('the script: a Stop event writes the turn and prints nothing', () => {
   assert.equal(JSON.parse(lines[0]).chat, 's5')
 })
 
-test('statsReport with compareWith: every priced turn on the chosen tier and effort; Codex models stay unpriced', () => {
+test('statsReport with compareWith: every turn priced on the tier\'s own GPT model at its OpenAI list price', () => {
   const now = new Date(2026, 9, 31, 15).getTime()
   const u = { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 }
   const records: Entry[] = [
-    // Logged against Haiku (the chat's first model), compared with the strong tier (Opus list price).
-    { kind: 'turn', ts: now - 500, platform: 'codex', chat: 'c', model: 'sonnet', baseline: 'haiku', usage: u },
+    // Logged against the chat's first model; compared with the strong tier (gpt-6.1-sol, $2 input).
+    { kind: 'turn', ts: now - 500, platform: 'codex', chat: 'c', model: 'gpt-6.1-terra', baseline: 'gpt-6-luna', usage: u },
     { kind: 'turn', ts: now - 400, platform: 'codex', chat: 'c', model: 'gpt-6-luna', baseline: 'gpt-6.1-sol', usage: u },
   ]
   const row = (text: string, name: string) => text.split('\n').find(l => l.startsWith(name)) ?? ''
   const first = statsReport(records, now)
-  assert.match(row(first, 'Extra cost'), /\$1\.90\s+\$1\.90\s+\$1\.90$/)
+  assert.match(row(first, 'Actual'), /\$1\.10\s+\$1\.10\s+\$1\.10$/)
+  assert.match(row(first, 'Extra cost'), /\$0\.90\s+\$0\.90\s+\$0\.90$/)
+  assert.match(row(first, 'Saved'), /\$1\.90\s+\$1\.90\s+\$1\.90$/)
   assert.match(first, /option compareWith: first/)
-  const strong = statsReport(records, now, { model: 'opus', effort: 'medium' })
-  assert.match(row(strong, 'Saved'), /\$2\.00\s+\$2\.00\s+\$2\.00$/)
+  const strong = statsReport(records, now, { model: 'gpt-6.1-sol', effort: 'medium' }, 'strong')
+  assert.match(row(strong, 'Saved'), /\$2\.90\s+\$2\.90\s+\$2\.90$/)
   assert.match(row(strong, 'Extra cost'), /\$0\.00\s+\$0\.00\s+\$0\.00$/)
-  assert.match(row(strong, 'Turns without a price'), /1\s+1\s+1$/)
-  assert.match(strong, /priced on the strong tier \(option compareWith[^)]*effort is not re-priced\)/)
+  assert.match(row(strong, 'Turns without a price'), /0\s+0\s+0$/)
+  assert.match(strong, /priced on gpt-6\.1-sol, the strong tier \(option compareWith, its OpenAI API list price; effort is not re-priced\)/)
+})
+
+test('/router stats: compareWith strong-medium compares with the strong tier\'s mapped GPT model', async () => {
+  const h = home({ compareWith: 'strong-medium' })
+  await appendStats(h, { kind: 'turn', ts: Date.now(), platform: 'codex', chat: 'c', model: 'gpt-6-luna', baseline: 'gpt-6-luna', usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } })
+  const { system } = await send('/router stats', { codexHome: h })
+  assert.match(system, /priced on gpt-6\.1-sol, the strong tier/)
+  assert.match(system.split('\n').find(l => l.startsWith('Saved')) ?? '', /\$1\.90$/)
 })
 
 // The per-prompt fields, as the Claude Code mod writes them (register.tsx).

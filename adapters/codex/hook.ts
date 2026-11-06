@@ -31,7 +31,7 @@ import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
+import { TIER_OF, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
 import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, isRedo, mappedModel, preferSession, describeOptions, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
@@ -395,7 +395,11 @@ function out(context: string, system?: string): Output {
 
 async function routerCommand(home: string, o: Options, arg: string, cur: { model: string; now: Level | '' }): Promise<string> {
   const a = arg.trim().toLowerCase()
-  if (a === 'stats') return statsReport(readStats(home), Date.now(), compareTarget(o.cfg.compareWith))
+  if (a === 'stats') {
+    // compareWith names a tier: compared with that tier's Codex model at its OpenAI list price.
+    const t = compareTarget(o.cfg.compareWith)
+    return statsReport(readStats(home), Date.now(), t && { ...t, model: o.models[t.model] }, t ? TIER_OF[t.model] : undefined)
+  }
   if (a === 'off' || a === 'on') {
     const enabled = a === 'on'
     let raw: Record<string, unknown> = {}

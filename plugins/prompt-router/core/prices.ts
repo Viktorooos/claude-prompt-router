@@ -1,6 +1,7 @@
-// The only place with model prices. List prices in USD per 1M tokens, from the Claude API docs
-// (2026-10-06). Cache write is the 5-minute one (1.25 × input). Haiku's higher price above 100K
-// prompt tokens is left out: the router uses Haiku for short work. Savings built on these are estimates.
+// The only place with model prices. List prices in USD per 1M tokens: Claude from the Claude API
+// docs (2026-10-06), GPT (Codex) from OpenAI's API price list (MODEL_PRICES below). Claude's cache
+// write is the 5-minute one (1.25 × input). Haiku's higher price above 100K prompt tokens is left
+// out: the router uses Haiku for short work. Savings built on these are estimates.
 import { knownModel } from './router.ts'
 import type { Model } from './router.ts'
 
@@ -15,8 +16,24 @@ export const PRICES: Record<Model, Price> = {
   fable: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
 }
 
-// The price of a short name or a model id the router knows; null for any other model.
+// OpenAI API list prices (standard tier, prompts up to 272K tokens) of the GPT models Codex runs,
+// from https://developers.openai.com/api/docs/pricing (2026-11-06). OpenAI bills no cache write:
+// written tokens are input tokens, so cacheWrite is 0. Long context and Fast mode cost more and are
+// left out, as Haiku's long-context price is.
+export const MODEL_PRICES: Record<string, Price> = {
+  'gpt-6-luna': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0 },
+  'gpt-6.1-terra': { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 0 },
+  'gpt-6.1-sol': { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+  'gpt-6-sol': { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 },
+  'gpt-6-astra': { input: 10, output: 50, cacheRead: 1, cacheWrite: 0 },
+}
+
+// The price of a short name or a model id the router knows, or of a listed model id (also with a
+// date suffix, e.g. gpt-6.1-sol-2026-09-01); null for any other model.
 export function priceOf(model: unknown): Price | null {
+  const t = typeof model === 'string' ? model.toLowerCase() : ''
+  const id = Object.keys(MODEL_PRICES).find(k => t === k || (t.startsWith(`${k}-`) && /^\d/.test(t.slice(k.length + 1))))
+  if (id) return MODEL_PRICES[id]
   const m = knownModel(model)
   return m ? PRICES[m] : null
 }

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { MODELS } from '../core/router.ts'
-import { PRICES, cost, priceOf, usageOf } from '../core/prices.ts'
+import { MODEL_PRICES, PRICES, cost, priceOf, usageOf } from '../core/prices.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
 function close(a: number | null, b: number) {
@@ -21,6 +21,18 @@ test('priceOf knows short names and model ids, not other providers', () => {
   expect(priceOf('claude-haiku-5-5')).toEqual(PRICES.haiku)
   expect(priceOf('gpt-5')).toBe(null)
   expect(priceOf(undefined)).toBe(null)
+})
+
+test('priceOf knows the GPT models Codex runs, by exact id or a dated id', () => {
+  expect(priceOf('gpt-6-luna')).toEqual({ input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0 })
+  expect(priceOf('gpt-6.1-terra')).toEqual({ input: 1, output: 5, cacheRead: 0.05, cacheWrite: 0 })
+  expect(priceOf('gpt-6.1-sol')).toEqual({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 })
+  expect(priceOf('GPT-6-Astra')).toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 0 })
+  // gpt-6-sol is an older model with its own price, not gpt-6.1-sol's.
+  expect(priceOf('gpt-6-sol')).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 })
+  expect(priceOf('gpt-6.1-sol-2026-09-01')).toEqual(MODEL_PRICES['gpt-6.1-sol'])
+  expect(priceOf('gpt-6.1-solar')).toBe(null)
+  close(cost({ input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 }, 'gpt-6.1-sol'), 2 + 10 + 0.1)
 })
 
 test('cost adds the four kinds of tokens, each at its own price per 1M', () => {

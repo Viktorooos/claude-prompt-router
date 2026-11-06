@@ -60,7 +60,16 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
   - Hook: takový prompt vrací `null` (žádná klasifikace, poznámka ani záznam ve stats). Historie (`readHistory`, `textParts`) ho nepočítá mezi uživatelovy prompty. `route` v `mcp.ts` ho odbaví hned `GO_ON` bez hledání rolloutu. `INJECTED` zůstal beze změny, filtr je vedle něj (jeden regex na obou místech).
   - Testy: hook (žádné volání runneru, žádné rozhodnutí; historie), mcp (route bez klasifikátoru). Codex 110.
 
-- [ ] 4. Cena v `/router stats` pro Codex (30–60 min). GPT modely nejsou v `core/prices.ts`, stats ukazují $0. Doplnit GPT modely do ceníku (ceny API OpenAI), ať stats ukazují dolary jako v Claude Code. Soubory: `plugins/prompt-router/core/prices.ts`, `core/stats.ts:218-221`, `adapters/codex/stats.ts`. Ověření: `node --test adapters/codex/test/stats.test.ts` s turnem na `gpt-6.1-sol` ukazuje nenulovou cenu nebo tokeny.
+- [x] 4. Cena v `/router stats` pro Codex (30–60 min). GPT modely nejsou v `core/prices.ts`, stats ukazují $0. Doplnit GPT modely do ceníku (ceny API OpenAI), ať stats ukazují dolary jako v Claude Code. Soubory: `plugins/prompt-router/core/prices.ts`, `core/stats.ts:218-221`, `adapters/codex/stats.ts`. Ověření: `node --test adapters/codex/test/stats.test.ts` s turnem na `gpt-6.1-sol` ukazuje nenulovou cenu nebo tokeny.
+
+  Poznámky ke kroku 4 (hotovo):
+  - Ceny z https://developers.openai.com/api/docs/pricing (openai.com/api/pricing vrací 403, platform.openai.com/docs/pricing tam přesměruje), standard tier do 272K vstupu, USD za 1M (vstup / cached vstup / výstup): gpt-6-luna 0,10 / 0,01 / 0,50; gpt-6.1-terra 1 / 0,05 / 5; gpt-6.1-sol 2 / 0,10 / 10; gpt-6-sol 2 / 0,20 / 10; gpt-6-astra 10 / 1 / 50. Všechny čtyři používané modely mají cenu, nic nezůstalo bez ceny.
+  - `MODEL_PRICES` v `core/prices.ts`, `priceOf` hledá přesné id (bez ohledu na velikost písmen) nebo id s datovou příponou (`gpt-6.1-sol-2026-09-01`), jinak jako dřív Claude jména. `cacheWrite` = 0: OpenAI zápis do cache neúčtuje zvlášť (zapsané tokeny jsou vstup; Codex hlásí `cache_write_input_tokens` 0). Dlouhý kontext (2×) a Fast mode (dřív Priority, 2×) nejsou započtené, stejně jako Haiku nad 100K, README to říká.
+  - `compareWith` v Codexu (`strong-medium`) se teď porovnává s GPT modelem, na který tier míří v `models` (`gpt-6.1-sol`), za jeho cenu OpenAI, ne za Claude cenu Opusu. `routerCommand` v `hook.ts` přemapuje cíl, `statsReport(records, now, c, tier)` v `adapters/codex/stats.ts` píše „priced on gpt-6.1-sol, the strong tier (… OpenAI API list price …)“. `REFERENCE` (Opus medium, jen pro Claude Code) jsem neměnil, Codex ho neukazuje.
+  - Na skutečném logu `~/.codex` (3 prompty dnes): Actual $0.09, klasifikátor $0.01, net −$0.01, nic bez ceny.
+  - Testy: nový test cen (CC 203), Codex test compareWith přepsaný na GPT ceny (dřív testoval „Codex modely zůstávají bez ceny“, což je teď naopak), v testu tabulky nahrazen nepřeceněný model `gpt-6-luna` za `gpt-5-codex` (pořád testuje model bez ceny), nový test `/router stats` s `compareWith: strong-medium`. Codex 111.
+  - README: odrážka Codex v Savings stats přepsaná.
+
 - [ ] 5. Windows pro Codex (30–60 min). `codexBin` hledá `codex` bez `.cmd`/`.exe` (`hook.ts:257`), `isOurs` regex nezná zpětná lomítka (`install.ts:122`, druhý install vytvoří duplicitu a uninstall nic nenajde), quoting příkazu přes `JSON.stringify` (`install.ts:112`). Ověření: unit testy s `path.win32` cestami a `process.platform` přes deps.
 
 ### B. Claude Code
