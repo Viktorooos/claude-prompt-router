@@ -137,7 +137,7 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
 type PaneAnimate = '' | 'reply' | 'saved' | 'bar'
 let paneAnimate: PaneAnimate = ''
 // What the last draw showed, to tell whether a reply changed it.
-let shown: { saved: string; bar: string } | undefined
+let shown: { period: string; savedText: string; costShare: number | null; ctxText: string; ctxShare: number | null } | undefined
 const ANIMATES_ON_SAVE: Partial<Record<string, PaneAnimate>> = { compareWith: 'saved', newSessionAt: 'bar', sessionSuggestions: 'bar' }
 // An animated drawing stays the pane's drawing until the next one, and the app replays its animation
 // whenever it puts the image back (a hover, a scroll, a focus). So once the longest animation has
@@ -1182,19 +1182,12 @@ export const register: Register = (on, options) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
     const report = d.savings?.report[panePeriod] ?? null
-    const now = { saved: JSON.stringify([panePeriod, compareNow(), report && [usd(report.balanceUsd), usd(report.withoutUsd)]]), bar: JSON.stringify([d.share == null ? null : Math.round(d.share), d.at]) }
-    const reply = paneAnimate === 'reply' && shown !== undefined
-    const animateSaved = paneAnimate === 'saved' || (reply && now.saved !== shown!.saved)
-    const animateBar = paneAnimate === 'bar' || (reply && now.bar !== shown!.bar)
+    // A period or baseline change draws the whole saving in; a reply moves only what it changed, from
+    // where it was: a number fades in only when its text changed, a bar grows from its last length, the
+    // sparkline stays still. So a reply that adds a few cents does not replay the card from nothing.
+    const whole = paneAnimate === 'saved' || paneAnimate === 'bar' ? paneAnimate : ''
+    const before = paneAnimate === 'reply' ? shown : undefined
     paneAnimate = ''
-    shown = now
-    if (animateSaved || animateBar) {
-      settle?.cancel()
-      settle = $.clock.after(SETTLE_MS, () => {
-        settle = undefined
-        redraw($)
-      })
-    }
     const { Box, Text, Button, Svg, Select } = $.ui.resolve(e) as any
     const cols = e.props.bodyColumns ?? 40
     const px = Math.max(220, Math.min(460, cols * 7))
@@ -1296,6 +1289,28 @@ export const register: Register = (on, options) => {
     const savedPct = s && s.withoutUsd > 0 ? Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100) : 0
     const days = d.savings?.days.slice(panePeriod === 'week' ? -7 : -14) ?? []
     const trend = days.some(x => Math.abs(x.balanceUsd) >= 0.005) && panePeriod !== 'today'
+    const costShare = s && s.withoutUsd > 0 ? Math.min(100, Math.round((withUsd / s.withoutUsd) * 1000) / 10) : null
+    const ctxText = d.share == null ? '–' : `${Math.round(d.share)} %`
+    const ctxShare = d.share == null ? null : Math.round(d.share * 10) / 10
+    const now = { period: panePeriod, savedText, costShare, ctxText, ctxShare }
+    const moved = (k: 'savedText' | 'costShare' | 'ctxText' | 'ctxShare') => before !== undefined && before.period === now.period && before[k] !== now[k]
+    const anim = {
+      savedNum: whole === 'saved' || moved('savedText'),
+      cost: whole === 'saved' || moved('costShare'),
+      costFrom: whole === 'saved' ? 0 : (before?.costShare ?? 0),
+      spark: whole === 'saved',
+      ctxNum: whole === 'bar' || moved('ctxText'),
+      ctx: whole === 'bar' || moved('ctxShare'),
+      ctxFrom: whole === 'bar' ? 0 : (before?.ctxShare ?? 0),
+    }
+    shown = now
+    if (anim.savedNum || anim.cost || anim.spark || anim.ctxNum || anim.ctx) {
+      settle?.cancel()
+      settle = $.clock.after(SETTLE_MS, () => {
+        settle = undefined
+        redraw($)
+      })
+    }
     const stat = (key: string, label: string, value: string, color?: string) => (
       <Box key={key} flexDirection="column" flexGrow={1}>
         <Text dimColor>{label}</Text>
@@ -1328,11 +1343,11 @@ export const register: Register = (on, options) => {
           <Box key="saved-v" flexDirection="column" gap={1}>
             <Box flexDirection="row" alignItems="center" gap={2}>
               <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                <Svg source={bigNumberSvg(savedText, savedColor, px, 44, animateSaved)} alt={`${savedWord}: ${savedText}`} height={56} />
+                <Svg source={bigNumberSvg(savedText, savedColor, px, 44, anim.savedNum)} alt={`${savedWord}: ${savedText}`} height={56} />
               </Box>
               {savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
             </Box>
-            <Svg source={costBarSvg(withUsd, s.withoutUsd, animateSaved)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
+            <Svg source={costBarSvg(withUsd, s.withoutUsd, anim.cost, 10, anim.costFrom)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
           </Box>
         ),
       s.withoutUsd > 0 ? (
@@ -1344,7 +1359,7 @@ export const register: Register = (on, options) => {
       trend ? (
         <Box key="saved-trend" flexDirection="column" gap={0}>
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
-          <Svg source={sparkSvg(days.map(x => x.balanceUsd), days.map(x => `${x.day}: ${usd(x.balanceUsd)}`), px, 48, savedColor, animateSaved)} alt="Saved per day" height={48} />
+          <Svg source={sparkSvg(days.map(x => x.balanceUsd), days.map(x => `${x.day}: ${usd(x.balanceUsd)}`), px, 48, savedColor, anim.spark)} alt="Saved per day" height={48} />
         </Box>
       ) : null,
     ], { tint: `${savedColor}0d` })
@@ -1365,11 +1380,11 @@ export const register: Register = (on, options) => {
       <Box key="ctx" flexDirection="column" gap={1}>
         <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Svg source={bigNumberSvg(d.share == null ? '–' : `${Math.round(d.share)} %`, TONES[d.tone][0], px, 30, animateBar)} alt={used || 'Context unknown'} height={38} />
+            <Svg source={bigNumberSvg(d.share == null ? '–' : `${Math.round(d.share)} %`, TONES[d.tone][0], px, 30, anim.ctxNum)} alt={used || 'Context unknown'} height={38} />
           </Box>
           <Box flexShrink={0}><Text dimColor>{ctxRight}</Text></Box>
         </Box>
-        <Svg source={contextBarSvg(d.share, d.at, px, 10, animateBar)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={16} />
+        <Svg source={contextBarSvg(d.share, d.at, px, 10, anim.ctx, anim.ctxFrom)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={16} />
         <Text dimColor>{`${asks[0]!.toUpperCase()}${asks.slice(1)}. ${d.at ? 'The tick on the bar marks it.' : ''}`.trim()}</Text>
       </Box>,
     ])

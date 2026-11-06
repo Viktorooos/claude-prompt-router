@@ -247,6 +247,31 @@ test('a reply animates only what it changed, once, then a still redraw replaces 
   expect((await draw()).any).toBe(false)
 })
 
+test('a reply that changes the numbers does not replay the card from zero: the sparkline stays, bars grow from where they were', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const opts = { now, log: [TURN(now - 30 * HOUR), TURN(now - HOUR)].join('\n') }
+  const seen = engine(on, opts)
+  on('clock.after', () => new Promise<any>(() => {}))
+  on('turn.complete', () => ({ text: '' }))
+  await start($)
+  const svgs = async () => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const r = (await ui.findAll({ type: 'Svg' })).map((x: any) => String(x.props?.source ?? JSON.stringify(x)))
+    await ui.unmount()
+    return r
+  }
+  const first = await svgs()
+  expect(first.some((x: string) => x.includes('Saved per day') || x.includes('stroke-dashoffset'))).toBe(true)
+  opts.log = [TURN(now - 30 * HOUR), TURN(now - 2 * HOUR), TURN(now - HOUR)].join('\n')
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
+  seen.writes.clear()
+  const after = (await svgs()).join('\n')
+  // Something changed, so something moves, but nothing restarts from nothing.
+  expect(after).toMatch(/animation:/)
+  expect(after).not.toMatch(/@keyframes draw/)
+  expect(after).not.toMatch(/from\{width:0\}/)
+})
+
 test('a setting\'s line sits beside its control, not under it', async ($: any, on: any) => {
   engine(on)
   await start($)

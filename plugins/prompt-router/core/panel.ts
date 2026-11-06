@@ -32,7 +32,8 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 
 // The chat's context as a flat bar: filled to its share in the tone's colour, a tick at the threshold.
 // Still (no animation), so a redraw does not replay anything.
-export function contextBarSvg(share: number | null, at: number, _width = 280, height = 10, animate = false): string {
+// from: where the fill starts growing (a share 0…100): 0 draws it in, the last shown share moves it on.
+export function contextBarSvg(share: number | null, at: number, _width = 280, height = 10, animate = false, from = 0): string {
   // Percent lengths: the drawing fills whatever width the pane gives it, ends stay round.
   const p = share == null ? 0 : Math.min(1, Math.max(0, share / 100))
   const [a, b] = TONES[tone(share, at)]
@@ -42,8 +43,8 @@ export function contextBarSvg(share: number | null, at: number, _width = 280, he
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height + 6}" role="img"><title>Context ${label}${at ? `, new session at ${at}%` : ''}</title><style>
 .t{fill:#1d1f23;opacity:.08}.k{stroke:#1d1f23;stroke-width:2;stroke-linecap:round;opacity:.45}
 @media (prefers-color-scheme: dark){.t{fill:#f2f3f5;opacity:.1}.k{stroke:#f2f3f5;opacity:.6}}
-${animate ? `.f{animation:g .7s cubic-bezier(.2,.8,.2,1) both}@keyframes g{from{width:0}}
-.k{animation:o .5s .35s ease-out both}@keyframes o{from{opacity:0}}
+${animate ? `.f{animation:g .7s cubic-bezier(.2,.8,.2,1) both}@keyframes g{from{width:${n(Math.min(100, Math.max(0, from)))}%}}
+${from ? '' : '.k{animation:o .5s .35s ease-out both}@keyframes o{from{opacity:0}}'}
 ${STILL}` : ''}
 </style><defs><linearGradient id="s" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
 <rect class="t" y="3" width="100%" height="${height}" rx="${r}"/>${w ? `<rect class="f" y="3" width="${w}%" height="${height}" rx="${r}" fill="url(#s)"/>` : ''}${at ? `<line class="k" x1="${at}%" y1="1" x2="${at}%" y2="${height + 5}"/>` : ''}</svg>`
@@ -218,7 +219,8 @@ ${animate ? `.i{animation:p .55s cubic-bezier(.3,1.6,.5,1) both}@keyframes p{fro
 
 // With against without the router: the track is the cost without it, the fill what was spent with
 // it, the rest (the saving) a light band of the same colour. Over 100 %, the fill turns warm.
-export function costBarSvg(withUsd: number, withoutUsd: number, animate = false, height = 10): string {
+// from: where the fill starts growing (0…100 of the bar).
+export function costBarSvg(withUsd: number, withoutUsd: number, animate = false, height = 10, from = 0): string {
   const p = withoutUsd > 0 ? Math.max(0, withUsd / withoutUsd) : 0
   const over = p > 1
   const w = n(Math.min(1, p) * 100)
@@ -226,7 +228,7 @@ export function costBarSvg(withUsd: number, withoutUsd: number, animate = false,
   const r = n(height / 2)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><title>Spent ${Math.round(p * 100)}% of the cost without the router</title><style>
 .t{fill:${TONES.calm[1]};opacity:.22}${over ? '.t{fill:#8a8f98;opacity:.14}' : ''}
-${animate ? `.f{animation:c .8s cubic-bezier(.2,.8,.2,1) both}@keyframes c{from{width:0}}${STILL}` : ''}
+${animate ? `.f{animation:c .8s cubic-bezier(.2,.8,.2,1) both}@keyframes c{from{width:${n(Math.min(100, Math.max(0, from)))}%}}${STILL}` : ''}
 </style><defs><linearGradient id="c" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
 <rect class="t" width="100%" height="${height}" rx="${r}"/>${w ? `<rect class="f" width="${w}%" height="${height}" rx="${r}" fill="url(#c)"/>` : ''}</svg>`
 }
