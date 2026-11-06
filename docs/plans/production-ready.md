@@ -126,10 +126,14 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
   - Odznaky: verze 0.10.0, testy 417 (CC 213, node 6, Codex 118, OpenCode 74, shared 6), eval 132 případů. Poslední živý eval (Sonnet 369/369, Opus 123/123, Haiku 114/123) běžel na 123 případech; README to tak říká, 9 novějších živě nespuštěno.
   - Changelog: „Unreleased“ → 0.9.1, doplněný řádek 0.9.2 (panel), 0.10.0 přepsaný na celou větev (odhad podle ceníku, rychlá cesta, hash promptu, Codex: jedna klasifikace, lehký klasifikátor ~12k/4 s místo 23k/7,5 s, přeskočené požadavky appky, ceny GPT, Windows; CC: paralelní sessions, config složka).
   - Cena klasifikátoru v Codexu (Accuracy and cost, sekce Codex) podle kroku 1. Status: Codex Windows jen unit testy, OpenCode nikdy živě. OpenCode varování 70 → 74 testů, požadavky Codexu zmiňují Windows. Věta o starých záznamech `holdout`/`trial`/`wanted` přepsaná (vývojové buildy 0.10.0, ne vydání).
-- [ ] 12. `/done`, verze, commit (navazuje na otevřený krok 7 v `measured-savings.md`).
+- [x] 12. `/done`, verze, commit (navazuje na otevřený krok 7 v `measured-savings.md`).
 
-  Poznámka k verzi (krok 12, neodškrtnuto, `/done` pustí koordinátor):
+  Poznámka k verzi:
   - Verze zůstává 0.10.0: commit 8c9ec91 „Release 0.10.0“ nebyl nikdy pushnutý, takže celá práce této větve patří do 0.10.0. `marketplace.json` i `plugin.json` už 0.10.0 mají, nic se neměnilo.
+  - `/done` (velká feature, 8c9ec91..HEAD): testy OK (CC 213, node 8, codex 119, opencode 74, shared 6); check-tests: smazané assertions mají náhradu podle změněného chování (poznámka `checked` místo `null`, nové argumenty klasifikátoru, ceny GPT, prompt `x` jde rychlou cestou); tsc SKIP (TypeScript v prostředí není); UI SKIP (bez zařízení, panel ověří uživatel ručně).
+  - Code review high: opraveno v ceaf25d (append.mjs na Node bez `import.meta.main`, bez type strippingu se log nerotoval, `--ignore-user-config` ztrácel nastavení přihlášení), simplify c2a5434, text poznámky `checked`/`GO_ON` v Codexu říká provést odpověď na vlastní otázku agenta (996ae4f, dřív „do not mention the router“ mohlo přejít odpověď „1“).
+  - Nechané nálezy (na později): zámek v `scripts/append.mjs` (stale 30 s vs. čekání 5 s), dvojí zápis při zabití po timeoutu 15 s, `adapters/codex/stats.ts` zapisuje bez zámku, Codex debug log `~/.codex/log/prompt-router.log` ukládá 60 znaků promptu.
+  - Neověřeno živě: krok 2 a 3 v Codexu (jeden `pick` na prompt), Windows, OpenCode.
 
 ## Rozhodnutí, která čekají na uživatele
 
