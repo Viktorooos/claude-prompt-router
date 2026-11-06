@@ -171,7 +171,7 @@ export function statsReport(records: readonly Entry[], now: number, c: Compare =
   out.push(
     '',
     c
-      ? `An estimate from the list prices in core/prices.ts: the same tokens priced on the ${TIER_OF[c.model as Model] ?? c.model} tier at ${c.effort} effort (option compareWith, its Claude list price; the effort weights the output, a guess).`
+      ? `An estimate from the list prices in core/prices.ts: the same tokens priced on the ${TIER_OF[c.model as Model] ?? c.model} tier (option compareWith, its Claude list price; effort is not re-priced).`
       : 'An estimate from the list prices in core/prices.ts: the same tokens priced on the model the chat started on (the main chat model for a subagent; option compareWith: first).',
     'Net saving = saved minus the classifier cost. Extra cost (a stronger model) is shown apart, not in the net. Effort changes are only counted.',
     'Models missing from the price list (Codex models) are counted, not priced.',

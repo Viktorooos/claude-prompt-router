@@ -1,6 +1,6 @@
 // Savings summary from the stats log. Pure functions: the platforms write the records, this reads them.
 // Every dollar is an estimate from core/prices.ts. Honest by design: the classifier's cost comes off
-// the saving, a stronger model is shown as extra cost, an effort change is priced apart as a guess, and
+// the saving, a stronger model is shown as extra cost, an effort change is left to the trial, and
 // the balance takes all of them in.
 import { LEVELS, MODEL_NAMES, NAMES, above, asLevel, knownModel } from './router.ts'
 import type { Level } from './router.ts'
@@ -96,8 +96,6 @@ export type Summary = {
   savedUsd: number
   /** Turns on a stronger model: real price minus baseline. Shown apart, not in the net. */
   extraUsd: number
-  /** What the effort changes saved (+) or cost (−): an estimate from EFFORT_OUTPUT. */
-  effortUsd: number
   classifierUsd: number
   /** savedUsd minus classifierUsd. */
   netUsd: number
@@ -137,7 +135,7 @@ const DAY = 86_400_000
 function empty(): Summary {
   return {
     prompts: 0, modelChanges: 0, effortDown: 0, effortUp: 0, subagents: 0, sessions: 0, asked: 0, declined: 0,
-    actualUsd: 0, withoutUsd: 0, savedUsd: 0, extraUsd: 0, effortUsd: 0, classifierUsd: 0, netUsd: 0, netPct: 0, balanceUsd: 0, balancePct: 0,
+    actualUsd: 0, withoutUsd: 0, savedUsd: 0, extraUsd: 0, classifierUsd: 0, netUsd: 0, netPct: 0, balanceUsd: 0, balancePct: 0,
     referenceUsd: 0, vsReferenceUsd: 0, vsReferencePct: 0, pricedTurns: 0, perTurnUsd: 0,
     unknownTurns: 0, unpricedTurns: 0, routed: 0, rework: 0, accuracyPct: null, tokens: {},
   }
@@ -163,36 +161,19 @@ function classifierUsd(d: Decision) {
   return c ? (c.usd ?? cost(c.usage, c.model) ?? 0) : 0
 }
 
-// Rough weight of output tokens per effort level: more effort thinks longer, and thinking is billed as
-// output. A guess, not a measurement, so what it prices is shown apart as an estimate.
-export const EFFORT_OUTPUT: Record<Level, number> = { low: 0.5, medium: 0.75, high: 1, xhigh: 1.4, max: 2 }
-
-// A level EFFORT_OUTPUT knows; anything else (a hand-edited log) counts as no effort info.
-const knownEffort = (e: unknown): e is Level => (LEVELS as readonly unknown[]).includes(e)
-
-// How much more output the turn would have made at the person's own effort; 1 when it did not change or is unknown.
-function effortScale(t: Turn) {
-  return knownEffort(t.effort) && knownEffort(t.baseEffort) && t.effort !== t.baseEffort ? EFFORT_OUTPUT[t.baseEffort] / EFFORT_OUTPUT[t.effort] : 1
-}
-
 // The fixed yardstick: the balance above depends on the chat's own first pick (a Haiku-low chat
 // always looks like a loss when the router escalates), this one is the same for every chat. Opus at
 // medium effort is the default setup, so the number says whether routing beats leaving it alone.
 export const REFERENCE: { model: string; effort: Level } = { model: 'opus', effort: 'medium' }
 
-// The output the turn would have made at REFERENCE's effort; 1 when the turn's effort is unknown.
-function referenceScale(t: Turn) {
-  return knownEffort(t.effort) ? EFFORT_OUTPUT[REFERENCE.effort] / EFFORT_OUTPUT[t.effort] : 1
-}
-
-// The tokens the same work would have taken without the router (`scale`: the effort's share of the
-// output); the turn's own when nothing differs.
-function withoutUsage(t: Turn, u: Usage, scale = 1): Usage {
+// The tokens the same work would have taken without the router; the turn's own when nothing differs.
+// Effort is not re-priced: what it saves is only measured (trial()).
+function withoutUsage(t: Turn, u: Usage): Usage {
   const carried = (t.mainContext ?? 0) * (t.requests ?? 0)
-  if (!carried && !t.switched && scale === 1) return u
+  if (!carried && !t.switched) return u
   return {
     input: u.input ?? 0,
-    output: (u.output ?? 0) * scale,
+    output: u.output ?? 0,
     cacheRead: (u.cacheRead ?? 0) + carried + (t.switched ? (u.cacheWrite ?? 0) : 0),
     cacheWrite: t.switched ? 0 : (u.cacheWrite ?? 0),
   }
@@ -212,21 +193,17 @@ function against(t: Turn, c: Target | MixPart | null): Turn {
   return c ? { ...t, baseline: c.model, baseEffort: c.effort } : t
 }
 
-type Priced = { without: number; saved: number; extra: number; effort: number; unpriced: boolean }
+type Priced = { without: number; saved: number; extra: number; unpriced: boolean }
 
-// What one turn would have cost on its baseline, the model's part and the effort's part apart.
+// What one turn would have cost on its baseline model.
 function priceWithout(t: Turn, usage: Usage, actual: number, listActual: number | null): Priced {
-  const scale = effortScale(t)
-  const sameEffort = withoutUsage(t, usage)
-  if (t.model === t.baseline && sameEffort === usage && scale === 1) return { without: actual, saved: 0, extra: 0, effort: 0, unpriced: false }
+  const same = withoutUsage(t, usage)
+  if (t.model === t.baseline && same === usage) return { without: actual, saved: 0, extra: 0, unpriced: false }
   // The saving compares list prices on both sides; without one of them, no saving is claimed.
-  const listModel = cost(sameEffort, t.baseline)
-  const listWithout = scale === 1 ? listModel : cost(withoutUsage(t, usage, scale), t.baseline)
-  if (listActual === null || listModel === null || listWithout === null) return { without: actual, saved: 0, extra: 0, effort: 0, unpriced: true }
-  // The model's part and the effort's part apart: the effort's is the guess.
-  const diff = listModel - listActual
-  const effortDiff = listWithout - listModel
-  return { without: actual + diff + effortDiff, saved: Math.max(diff, 0), extra: Math.max(-diff, 0), effort: effortDiff, unpriced: false }
+  const listWithout = cost(same, t.baseline)
+  if (listActual === null || listWithout === null) return { without: actual, saved: 0, extra: 0, unpriced: true }
+  const diff = listWithout - listActual
+  return { without: actual + diff, saved: Math.max(diff, 0), extra: Math.max(-diff, 0), unpriced: false }
 }
 
 function addTurn(s: Summary, turn: Turn, c: Compare) {
@@ -244,7 +221,7 @@ function addTurn(s: Summary, turn: Turn, c: Compare) {
   }
   s.actualUsd += actual
   s.pricedTurns++
-  s.referenceUsd += cost(withoutUsage(turn, turn.usage, referenceScale(turn)), REFERENCE.model) ?? actual
+  s.referenceUsd += cost(withoutUsage(turn, turn.usage), REFERENCE.model) ?? actual
   // A mix prices the turn on each part and weights the results by the parts' shares.
   const parts: [Turn, number][] = c && 'mix' in c ? c.mix.map(p => [against(turn, p), p.share]) : [[against(turn, c), 1]]
   const priced = parts.map(([t, w]) => [priceWithout(t, turn.usage!, actual, listActual), w] as const)
@@ -257,7 +234,6 @@ function addTurn(s: Summary, turn: Turn, c: Compare) {
     s.withoutUsd += p.without * w
     s.savedUsd += p.saved * w
     s.extraUsd += p.extra * w
-    s.effortUsd += p.effort * w
   }
 }
 
@@ -609,6 +585,88 @@ export function balances(records: readonly Entry[], now: number): Balances {
   return { today: balance(records, startOfDay(now)), week: balance(records, now - 7 * DAY), total: balance(records) }
 }
 
+// The trial: tasks drawn into the router group or the control group when they started (`trial` on the
+// first decision; an older holdout record counts as control). A task costs every turn of it (later
+// prompts, re-work, subagents, a session it started) and, in the router group, the classifier: without
+// the router it would not run. Nothing here calls a model.
+export type TaskKind = 'cheaper' | 'dearer' | 'subagent' | 'session'
+export type ArmStats = { tasks: number; usd: number }
+/** saving: control mean − router mean per task (+ = the router saves), with its 95 % interval; null below MIN_TRIAL. */
+export type TrialRow = { kind: 'all' | TaskKind; router: ArmStats; control: ArmStats; saving: Range | null }
+
+// Tasks each group needs before a saving is shown.
+export const MIN_TRIAL = 5
+// How long after `start_session` the new session's first prompt may come to belong to the task.
+const SPAWN_WINDOW = 15 * 60_000
+
+// Where the router sent the task (or wanted to, in control): a fresh context, or here cheaper or dearer.
+// A chat with no effort set runs at the reference's.
+function kindOf(d: Decision, control: boolean): TaskKind {
+  const where = control ? (d.wantedWhere ?? 'here') : d.where
+  if (where === 'subagent' || where === 'session') return where
+  const to = (control ? d.wanted : d.to) ?? d.to
+  const from = { model: d.from.model, effort: d.from.effort || REFERENCE.effort }
+  const eff = to.effort || from.effort
+  return above(from.model, to.model) || (from.model === to.model && above(from.effort, eff)) ? 'cheaper' : 'dearer'
+}
+
+function armOf(d: Decision): 'router' | 'control' | null {
+  if (d.trial) return d.trial
+  return d.holdout && d.wanted ? 'control' : null
+}
+
+const mean = (xs: readonly number[]) => xs.reduce((n, x) => n + x, 0) / xs.length
+const variance = (xs: readonly number[]) => {
+  const m = mean(xs)
+  return xs.reduce((n, x) => n + (x - m) ** 2, 0) / (xs.length - 1)
+}
+
+// Welch: the difference of two means and its normal-approximation 95 % interval.
+function welch(control: readonly number[], router: readonly number[]): Range | null {
+  if (control.length < MIN_TRIAL || router.length < MIN_TRIAL) return null
+  const value = mean(control) - mean(router)
+  const half = 1.96 * Math.sqrt(variance(control) / control.length + variance(router) / router.length)
+  return { value, low: value - half, high: value + half }
+}
+
+export function trial(records: readonly Entry[], since = -Infinity): TrialRow[] {
+  const eps = episodes(records).filter(e => e.decisions.length)
+  // A session the task started: its first prompt has the spawn's words, within SPAWN_WINDOW.
+  const child = new Map<Episode, Episode>()
+  for (const s of records) {
+    if (s.kind !== 'spawn') continue
+    const parent = eps.filter(e => e.chat === s.chat && e.start <= s.ts).at(-1)
+    const kid = eps.find(e => e.chat !== s.chat && !child.has(e) && e.decisions[0]!.key === s.key && e.start >= s.ts && e.start - s.ts <= SPAWN_WINDOW)
+    if (parent && kid) child.set(kid, parent)
+  }
+  const price = new Map<Episode, { usd: number; cls: number }>()
+  for (const e of eps) {
+    const owner = child.get(e) ?? e
+    const c = price.get(owner) ?? { usd: 0, cls: 0 }
+    c.usd += turnsUsd(e.turns)
+    c.cls += e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
+    price.set(owner, c)
+  }
+  const groups = new Map<'all' | TaskKind, { router: number[]; control: number[] }>()
+  const group = (k: 'all' | TaskKind) => groups.get(k) ?? (groups.set(k, { router: [], control: [] }), groups.get(k)!)
+  group('all')
+  for (const e of eps) {
+    if (child.has(e) || e.start < since) continue
+    const d = e.decisions[0]!
+    const arm = armOf(d)
+    if (!arm) continue
+    const c = price.get(e)!
+    const usd = arm === 'router' ? c.usd + c.cls : c.usd
+    for (const k of ['all', kindOf(d, arm === 'control')] as const) group(k)[arm].push(usd)
+  }
+  const stats = (xs: number[]): ArmStats => ({ tasks: xs.length, usd: xs.length ? mean(xs) : 0 })
+  const order = ['all', 'cheaper', 'dearer', 'subagent', 'session'] as const
+  return order.filter(k => groups.has(k)).map(k => {
+    const g = groups.get(k)!
+    return { kind: k, router: stats(g.router), control: stats(g.control), saving: welch(g.control, g.router) }
+  })
+}
+
 function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>, c: Compare) {
   if (r.kind === 'turn') addTurn(s, r, c)
   else if (r.kind === 'decision') {
@@ -729,7 +787,6 @@ export const STATS_ROWS: readonly [string, (s: Summary) => string][] = [
   ['Cost with router', s => usd(s.actualUsd + s.classifierUsd)],
   ['Saved (cheaper model)', s => usd(s.savedUsd)],
   ['Extra cost (stronger model)', s => usd(-s.extraUsd)],
-  ['Effort (estimate)', s => usd(s.effortUsd)],
   ['Classifier', s => usd(-s.classifierUsd)],
   ['Balance', s => `${usd(s.balanceUsd)} (${Math.round(s.balancePct)} %)`],
   [`Vs. always ${REFERENCE.model} ${REFERENCE.effort}`, s => `${usd(s.vsReferenceUsd)} (${Math.round(s.vsReferencePct)} %)`],
@@ -743,15 +800,15 @@ const FALLBACK = {
 }
 
 const NOTE_COMPARE = (c: Compare) => c && 'mix' in c
-  ? `Compared with ${compareLabel(c)}: the models and efforts you ran before the router, weighted by their tokens (option compareWith: history). Each turn is priced on every part and the results weighted by its share; the output weighted to each part's effort (a guess).`
+  ? `Compared with ${compareLabel(c)}: the models and efforts you ran before the router, weighted by their tokens (option compareWith: history). Each turn is priced on every part's model and the results weighted by its share; effort is not re-priced.`
   : c?.fallback
   ? FALLBACK[c.fallback]
   : c
-  ? `Compared with ${compareLabel(c)} for every turn (option compareWith; first = the chat's first model): the same tokens priced on it, the output weighted to its effort (a guess); a turn with no known effort is priced at its own output.`
+  ? `Compared with ${compareLabel(c)} for every turn (option compareWith; first = the chat's first model): the same tokens priced on its model; effort is not re-priced.`
   : "Compared with the chat's first model (option compareWith: first)."
 
 const NOTE =
-  "An estimate: tokens × list prices in core/prices.ts. Cost without router prices each turn on the model and effort it would have run at without the router; a routed subagent also counts the main chat's context its requests did not read; a turn after the router switched models counts the cache it rewrote. Balance = cost without router − cost with router (the work plus the classifier). Vs. always Opus medium prices the same work on Opus at medium effort for every chat, whatever its own pick, minus the cost with router; cost per turn is the cost with router over the priced turns. Effort is a guess (output tokens weighted per level); work moved to a new session is not priced."
+  "An estimate: tokens × list prices in core/prices.ts. Cost without router prices each turn on the model it would have run on without the router; a routed subagent also counts the main chat's context its requests did not read; a turn after the router switched models counts the cache it rewrote. Balance = cost without router − cost with router (the work plus the classifier). Vs. always Opus medium prices the same tokens on Opus for every chat, whatever its own pick, minus the cost with router; cost per turn is the cost with router over the priced turns. Effort is not re-priced: what it saves, and work moved to a subagent or a new session, only the trial (router vs. control tasks) measures."
 
 export const STATS_COLUMNS = ['Today', '7 days', 'Total'] as const
 

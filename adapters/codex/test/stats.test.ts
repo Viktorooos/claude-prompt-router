@@ -257,5 +257,5 @@ test('statsReport with compareWith: every priced turn on the chosen tier and eff
   assert.match(row(strong, 'Saved'), /\$2\.00\s+\$2\.00\s+\$2\.00$/)
   assert.match(row(strong, 'Extra cost'), /\$0\.00\s+\$0\.00\s+\$0\.00$/)
   assert.match(row(strong, 'Turns without a price'), /1\s+1\s+1$/)
-  assert.match(strong, /priced on the strong tier at medium effort/)
+  assert.match(strong, /priced on the strong tier \(option compareWith[^)]*effort is not re-priced\)/)
 })
