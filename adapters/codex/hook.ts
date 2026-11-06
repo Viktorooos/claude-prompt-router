@@ -154,6 +154,8 @@ export type History = { id: string; users: string[]; reply: string; isFirst: boo
 // as user messages: no user typed them.
 const APP_REQUEST = /^\s*This is an? (app|system|automatically)[- ]generated request\b/i
 export const isAppRequest = (text: string) => APP_REQUEST.test(text)
+// A click in the app's question window (request_user_input) arrives as a new prompt in this wrapper.
+export const isQuestionReply = (text: string) => text.trimStart().startsWith('<send_user_message_question_reply>')
 
 const INJECTED = /^\s*(<[a-z_]+[\s>/]|<\/[a-z_]+>|# AGENTS\.md instructions|\[Prompt Router|Codex could not read)/
 
@@ -539,7 +541,7 @@ async function classify(input: Input, deps: Deps, home: string, ran: { on: boole
   // "yes", "option 2", "díky": nothing to route, no classifier call. The hook still answers (CHECKED),
   // so the agent does not ask route instead.
   const key = promptKey(text)
-  if (quickReply(text)) {
+  if (quickReply(text) || isQuestionReply(text)) {
     Object.assign(ran, { on: true, key, ts: deps.now ?? Date.now() })
     return null
   }

@@ -82,7 +82,7 @@ test('ask mode: the agent asks in text whether to switch', async () => {
   const { context, system } = await send('rename that variable', { reply: PICK.here })
   assert.match(system, /`\/model gpt-6\.1-sol low`/)
   assert.match(context, /suggests effort low instead of medium/)
-  assert.match(context, /ask the user in one short message/)
+  assert.match(context, /ask the user: if you have a request_user_input or request_user_input_async tool, call it .*otherwise write one short message/)
   assert.match(context, /"Switch \(Low\)", "Keep as is"/)
   assert.doesNotMatch(context, /AskUserQuestion/)
 })
@@ -310,7 +310,7 @@ test('here on a cheaper model (ask): offers a subagent or staying here, switches
   const { context, system } = await send('rename the keys we just found', { reply: OTHER.lower, options: { effortMode: 'ask', modelMode: 'ask' } })
   assert.match(context, /^\[Prompt Router/)
   assert.match(context, /fits gpt-6\.1-terra · low better than this chat's gpt-6\.1-sol, because: a mechanical edit/)
-  assert.match(context, /ask the user in one short message/)
+  assert.match(context, /ask the user: .*request_user_input.*numbered list/)
   assert.match(context, /"Subagent \(gpt-6\.1-terra · low\)", "Stay here \(Low\)", "Stay here \(keep Medium\)"/)
   assert.match(context, /spawn_agent tool with model "gpt-6\.1-terra" and reasoning_effort "low"/)
   assert.match(context, /give it everything it needs from this chat/)
@@ -393,7 +393,7 @@ test('midChatModelDetection off: no Subagent / Stay here question, only the effo
 
 test('midChatModelDetection auto: no question, the agent decides between spawn_agent and here', async () => {
   const { context } = await send('rename the keys we just found', { reply: OTHER.lower, options: { midChatModelDetection: 'auto', effortDetection: 'auto' } })
-  assert.doesNotMatch(context, /ask the user in one short message|Where should this go/)
+  assert.doesNotMatch(context, /ask the user:|request_user_input|Where should this go/)
   assert.match(context, /Do not ask the user; decide yourself/)
   assert.match(context, /only when it is worth it: a larger self-contained piece of work/)
   assert.match(context, /a quick question, a short answer or a short message stays here/)
@@ -405,7 +405,7 @@ test('midChatModelDetection auto: no question, the agent decides between spawn_a
 
 test('midChatModelDetection auto with effortDetection off: staying here changes nothing', async () => {
   const { context } = await send('rename the keys we just found', { reply: OTHER.lower, options: { midChatModelDetection: 'auto', effortDetection: 'off' } })
-  assert.doesNotMatch(context, /ask the user in one short message|\/model /)
+  assert.doesNotMatch(context, /ask the user:|request_user_input|\/model /)
   assert.match(context, /Here = handle the prompt normally/)
 })
 
@@ -600,4 +600,12 @@ test('a plain reply ("yes", "option 2") gets the neutral note with no classifier
     // route reuses that answer.
     assert.equal(await recentAnswer(h, 's1', prompt, Date.now()), CHECKED)
   }
+})
+
+test('a click in the app question window is a plain reply: neutral note, no classifier call', async () => {
+  const prompt = '<send_user_message_question_reply>\n[{"questionItemId":"[\\"request_user_input_async\\",\\"call_1\\",0]","question":"Prompt Router: Kde chceš na aplikaci pracovat? Doporučuji novou relaci, protože je to nový úkol.","answer":"Tady v tomto chatu (Medium)"}]\n</send_user_message_question_reply>'
+  const { r, calls, home: h } = await send(prompt)
+  assert.equal(calls.length, 0)
+  assert.equal(checked(r), true)
+  assert.deepEqual(readStats(h), [])
 })

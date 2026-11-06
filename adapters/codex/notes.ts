@@ -24,8 +24,9 @@ export function line(ctx: NoteCtx, slug: string, l: Level, why: string) {
   return `Prompt Router: for this, switch with \`${slash(ctx, slug, l)}\`${why ? ` (${why})` : ''}`
 }
 
+// The desktop app has a question tool that shows the options as buttons; the CLI gets a numbered list.
 function ask(question: string) {
-  return `ask the user in one short message (start it with "Prompt Router:", the question "${question}" with the reason in one sentence, the options as a numbered list, the recommended one first) and wait for the answer`
+  return `ask the user: if you have a request_user_input or request_user_input_async tool, call it (title starting with "Prompt Router:", the question "${question}" with the reason in one sentence, the options as choices, the recommended one first); otherwise write one short message (start it with "Prompt Router:", the question "${question}" with the reason in one sentence, the options as a numbered list, the recommended one first). Wait for the answer`
 }
 
 export function sessionCommand(ctx: NoteCtx, p: Pick) {
