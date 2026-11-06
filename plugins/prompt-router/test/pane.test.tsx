@@ -485,3 +485,31 @@ test('a fold stays open while a value under it changes', async ($: any, on: any)
   await draw(ui => ui.select({ key: 'pick-newSessionAt', value: '60%' }))
   expect(await draw()).toEqual({ more: true, details: true })
 })
+
+test('You saved with too little data says so instead of a figure', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  engine(on, { now, log: '' })
+  await start($)
+  for (const surface of ['desktop', 'terminal']) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const texts = await textsOf(ui)
+    expect(texts).toMatch(/Not enough data yet/)
+    expect(JSON.stringify(await ui.find({ key: 'saved' }))).not.toMatch(/You saved|Cost extra|\$0\.00/)
+    await ui.unmount()
+  }
+})
+
+test('a negative balance says the router cost more, never You saved', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const FABLE = JSON.stringify({ kind: 'turn', ts: now - HOUR, platform: 'claude-code', chat: 'c', model: 'claude-fable-5-1', baseline: 'claude-opus-5-5', usage: { input: 100_000, output: 2_000, cacheRead: 0, cacheWrite: 0 } })
+  engine(on, { now, log: FABLE })
+  await start($)
+  for (const surface of ['desktop', 'terminal']) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const texts = await textsOf(ui)
+    expect(texts).toMatch(/The router cost more/)
+    expect(texts).toMatch(/Stronger models cost more than the cheaper ones saved/)
+    expect(texts).not.toMatch(/You saved/)
+    await ui.unmount()
+  }
+})

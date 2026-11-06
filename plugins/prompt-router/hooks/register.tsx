@@ -1260,7 +1260,15 @@ export const register: Register = (on, options) => {
     // You saved: the work's cost without the router (everything on the compareWith model) less its cost with it.
     const against = c ? `running every prompt on ${compareLabel(c)}` : "keeping each chat's first model"
     const withUsd = s ? s.actualUsd + s.classifierUsd : 0
-    const savedWord = s && money(s.balanceUsd) === 'down' ? 'Cost extra' : 'You saved'
+    // Too little data: no priced turn, or less than a cent of work, where both figures would read $0.00 and the percent is noise.
+    const few = !!s && (s.pricedTurns === 0 || s.withoutUsd < 0.01)
+    const down = !few && !!s && money(s.balanceUsd) === 'down'
+    const savedWord = few ? 'Not enough data yet' : down ? 'The router cost more' : 'You saved'
+    const savedSub = few ? 'Use the router for a few prompts and the saving shows here.' : down ? `than ${against}` : `compared with ${against}`
+    // Why it cost more: stronger picks outweighed the cheaper ones, or the classifier ate the saving.
+    const why = !down || !s ? null : s.actualUsd > s.withoutUsd
+      ? 'Stronger models cost more than the cheaper ones saved. Raising the bar for a stronger model in Model & effort lowers it.'
+      : 'The classifier cost more than routing saved. It pays off over longer tasks.'
     const savedText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : usd(Math.abs(s.balanceUsd))) : ''
     const savedColor = money(s?.balanceUsd ?? 0) === 'up' ? GREEN : MONEY_COLOR[money(s?.balanceUsd ?? 0)] ?? TONES.idle[0]
     const savedPct = s && s.withoutUsd > 0 ? Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100) : 0
@@ -1275,25 +1283,26 @@ export const register: Register = (on, options) => {
     const saved = !s ? null : term ? section('saved',
       tabs,
       title('saved-title', savedWord),
-      s.withoutUsd <= 0
-        ? <Text key="saved-none" dimColor>No priced work in this period yet.</Text>
+      few
+        ? <Text key="saved-none" dimColor>{savedSub}</Text>
         : (
           <Box key="saved-v" flexDirection="column">
             <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
-            <Text dimColor>{`compared with ${against}`}</Text>
+            <Text dimColor>{savedSub}</Text>
+            {why ? <Text dimColor>{why}</Text> : null}
           </Box>
         ),
-      s.withoutUsd > 0 ? (
+      !few ? (
         <Box key="saved-vs" flexDirection={narrow ? 'column' : 'row'} gap={narrow ? 0 : 3}>
           <Box flexDirection="column"><Text dimColor>Without router</Text><Text>{usd(s.withoutUsd)}</Text></Box>
           <Box flexDirection="column"><Text dimColor>With router</Text><Text>{usd(withUsd)}</Text></Box>
         </Box>
       ) : null,
     ) : card('saved', [
-      head('saved-head', 'coin', savedColor, savedWord, `compared with ${against}`, { strong: true }),
+      head('saved-head', 'coin', savedColor, savedWord, savedSub, { strong: true }),
       tabs,
-      s.withoutUsd <= 0
-        ? <Text key="saved-none" dimColor>No priced work in this period yet.</Text>
+      few
+        ? null
         : (
           <Box key="saved-v" flexDirection="column" gap={1}>
             <Box flexDirection="row" alignItems="center" gap={2}>
@@ -1303,9 +1312,10 @@ export const register: Register = (on, options) => {
               {savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
             </Box>
             <Svg source={costBarSvg(withUsd, s.withoutUsd)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
+            {why ? <Text dimColor>{why}</Text> : null}
           </Box>
         ),
-      s.withoutUsd > 0 ? (
+      !few ? (
         <Box key="saved-vs" flexDirection="row" gap={3}>
           {stat('saved-without', 'Without router', usd(s.withoutUsd))}
           {stat('saved-with', 'With router', usd(withUsd), savedColor)}
