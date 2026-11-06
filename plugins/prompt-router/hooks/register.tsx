@@ -381,6 +381,12 @@ function runAgentNote(p: Pick, other?: Model) {
   return `${head}${p.why ? `, because: ${p.why}` : ''}. ${RUN_SUBAGENT} Call the Agent tool with model "${p.model}" and effort "${p.effort}"${brief} and have it return only a short result.${other ? " Never switch this chat's model for it." : ''}`
 }
 
+// sessionSuggestions auto: the chat is long, so the task goes to a new session with no question.
+function autoSessionNote(p: Pick) {
+  const label = `${MODEL_NAMES[p.model]} · ${p.effort}`
+  return `Prompt Router: this chat is long${p.why ? `, because: ${p.why}` : ''}, so run this prompt in a new session (${label}) without asking. Then: ${sessionThen(p, true)}`
+}
+
 // A prompt that stays here but fits another model: a subagent on that model, or here on the chat's
 // model with only the effort judged again. The chat's model never changes mid-chat.
 function otherNote(p: Pick, from: Model, now: Level | '') {
@@ -648,10 +654,14 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     await noteRun($, p, now)
     return { ...e, text: `${e.text}\n\n[${runAgentNote(p)}]` }
   }
+  const inApp = p.where === 'session' ? await canStartSession($) : true
+  if (p.where === 'session' && p.long && cfg.sessionSuggestions === 'auto' && inApp) {
+    lastAsked = { ts: await noteDecision($, 'session', { model: p.model, effort: p.effort }, 'applied', now, p), where: 'session', model: p.model }
+    return { ...e, text: `${e.text}\n\n[${autoSessionNote(p)}]` }
+  }
   await noteAsked($, p.where, p, now)
   // A mod's own dialog does not open at prompt time in the app, so Claude asks with the same options.
   // `context` does not reach the model for prompts from the app, so the note rides on the text.
-  const inApp = p.where === 'session' ? await canStartSession($) : true
   return ({ ...e, text: `${e.text}\n\n[${askNote(p, now, !!e.turnId, inApp)}]` })
 }
 
@@ -1358,14 +1368,15 @@ export const register: Register = (on, options) => {
         key: 'newSessionAt',
         icon: 'window',
         name: 'Start a new session at',
-        what: 'Once the chat fills this much of its context, new work is offered as a fresh session. Long chats get expensive.',
-        values: same(CHOICES.find(x => x.key === 'newSessionAt')?.values ?? []),
+        what: 'Once the chat fills this much of its context, new work goes to a fresh session. Long chats get expensive. Ask or auto below.',
+        values: same(['off', ...(CHOICES.find(x => x.key === 'newSessionAt')?.values ?? []).filter(v => v !== 'off')]),
         now: () => (cfg.sessionSuggestions === 'off' ? 'off' : cfg.newSessionAt),
         pick: async v => {
           if (v !== 'off' && cfg.sessionSuggestions === 'off') await saveOption($, 'sessionSuggestions', 'ask')
           await saveOption($, 'newSessionAt', v)
         },
       },
+      opt('sessionSuggestions', 'window', 'New session: ask or auto', 'Ask: you confirm the new session. Auto: it starts by itself when the chat reaches the share. Off: never.'),
       opt('notifications', 'bell', 'Notifications', 'Shows a short note when the router changes something.'),
     ]
     const more: Setting[] = [
@@ -1429,7 +1440,7 @@ export const register: Register = (on, options) => {
     // model and effort choices, the session ones. Each has an icon heading with a line of its current values.
     const SETTING_GROUPS = [
       { key: 'model', name: 'Model & effort', icon: 'sliders' as CardIcon, color: BLUE, keys: ['firstChatDetection', 'midChatModelDetection', 'effortDetection', 'subagentSuggestions'] },
-      { key: 'session', name: 'Session', icon: 'window' as CardIcon, color: TEAL, keys: ['newSessionAt', 'notifications'] },
+      { key: 'session', name: 'Session', icon: 'window' as CardIcon, color: TEAL, keys: ['newSessionAt', 'sessionSuggestions', 'notifications'] },
     ]
     const settingRows = main.flatMap((x, i) => [i ? rule(`rule-${x.key}`, false) : null, setting(x, i)])
     const valueOf = (x: Setting) => x.values.find(([v]) => v === x.now())?.[1] ?? x.now()

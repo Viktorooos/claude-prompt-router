@@ -494,3 +494,14 @@ test('a negative balance says the router cost more, never You saved', async ($: 
     await ui.unmount()
   }
 })
+
+test('new session at offers exactly 10 … 100 %, and session suggestions offer ask, auto, off', async ($: any, on: any) => {
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const pct = JSON.stringify(await ui.find({ type: 'Select', key: 'pick-newSessionAt' }))
+  for (let n = 10; n <= 100; n += 10) expect(pct).toContain(`"value":"${n}%"`)
+  const mode = JSON.stringify(await ui.find({ type: 'Select', key: 'pick-sessionSuggestions' }))
+  for (const v of ['ask', 'auto', 'off']) expect(mode).toContain(`"value":"${v}"`)
+  await ui.unmount()
+})
