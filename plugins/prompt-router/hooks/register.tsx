@@ -14,8 +14,6 @@ import type { Balance, Balances, Compare, Decision, Entry, History, Report, Usag
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
 const MODEL_HOLD = { plugin: 'prompt-router', key: 'model' } as const
-// The pane's open folds: saving an option reloads the mod, and a reload keeps $.state only.
-const PANE_OPEN = { plugin: 'prompt-router', key: 'paneOpen' } as const
 const TEST_TOOL = `mcp__${NAME}__test`
 const SWITCH_TOOL = `mcp__${NAME}__switch`
 const SHORT: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
@@ -79,8 +77,6 @@ let manualUp = false
 let paneOpened = false
 // The period the pane's savings show (a pane button picks it).
 let panePeriod: 'today' | 'week' | 'total' = 'week'
-// The pane's open parts: a section's "?" (help-<id>) and the old token re-pricing (legacy).
-const paneOpen = new Set<string>()
 
 // Adds text to a log beside other sessions' writes: scripts/append.mjs appends under a lock, so
 // parallel sessions keep each other's lines. Without Node, the old whole-file rewrite (one write at
@@ -931,8 +927,6 @@ export const register: Register = (on, options) => {
     if (kept && enabled) hold = { level: kept, base: '' }
     const keptModel = (await $.state.get(MODEL_HOLD)).value
     if (keptModel && enabled) modelHold = { model: keptModel, base: '' }
-    const keptOpen = (await $.state.get(PANE_OPEN)).value
-    if (Array.isArray(keptOpen)) for (const id of keptOpen) paneOpen.add(String(id))
     paneOpened = false
     await openPaneUnasked($, false)
     return next(e)
@@ -1161,7 +1155,7 @@ export const register: Register = (on, options) => {
 
   // The pane beside the chat, kept to what people look for: how much the router saved, this chat's
   // context and when it asks for a new session, and the settings, each with one line on what it does.
-  // The rest (the strict balance, accuracy, the models) is folded under Details.
+  // The rest (the strict balance, accuracy, the models) is under Details, always open.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
@@ -1172,11 +1166,6 @@ export const register: Register = (on, options) => {
     const cells = Math.max(8, Math.min(24, cols - 8))
     // A narrow pane puts each setting's control under its name instead of beside it.
     const narrow = cols < 34
-    const flip = (id: string) => async () => {
-      if (!paneOpen.delete(id)) paneOpen.add(id)
-      await $.state.set(PANE_OPEN, [...paneOpen])
-      redraw($)
-    }
     const pickPeriod = (k: typeof panePeriod) => async () => {
       if (panePeriod === k) return
       panePeriod = k
@@ -1205,8 +1194,6 @@ export const register: Register = (on, options) => {
       ))
     // A hairline between sections (strong) and between settings (faint); the terminal leaves the gap.
     const rule = (key: string, strong = true) => (term ? null : <Svg key={key} source={ruleSvg(px, strong)} alt="" height={1} />)
-    // A fold: on the app surfaces its own card with an icon heading that says what is inside, so it reads
-    // as something to open; open, the card takes the accent outline. Inline, it is a card within a card.
     // A card's heading on the app surfaces: the icon on its tile, the name in the app's heading type, a
     // footnote under it, and anything given on the right (a button), centred on both lines.
     const head = (key: string, icon: CardIcon | null, color: string, name: string, sub: string, o: { right?: unknown; strong?: boolean; alt?: string } = {}) => (
@@ -1235,17 +1222,13 @@ export const register: Register = (on, options) => {
         {children}
       </Box>
     )
-    const fold = (id: string, label: string, sub: string, icon: CardIcon, color: string, body: () => unknown, inline = false) => {
-      const open = paneOpen.has(id)
+    // A block that used to fold: always open, under a plain heading (the terminal) or an icon heading.
+    const block = (id: string, label: string, sub: string, icon: CardIcon, color: string, body: () => unknown, inline = false) => {
       if (term) {
         const wrap = inline ? (key: string, ...c: unknown[]) => <Box key={key} flexDirection="column" gap={0}>{c}</Box> : section
-        return wrap(id, <Button key={`fold-${id}`} plain label={`${open ? '▾' : '▸'} ${label}`} onPress={flip(id)} />, open ? body() : null)
+        return wrap(id, title(`${id}-title`, label), body())
       }
-      const button = <Button key={`fold-${id}`} label={open ? 'Hide' : 'Show'} variant={open ? 'secondary' : 'primary'} onPress={flip(id)} />
-      return card(id, [
-        head(`fold-row-${id}`, icon, color, label, sub, { right: button, strong: open, alt: `${label}${open ? '' : ', closed'}` }),
-        open ? body() : null,
-      ], { borderColor: open ? color : undefined })
+      return card(id, [head(`${id}-head`, icon, color, label, sub, { strong: true }), body()], { borderColor: color })
     }
 
     const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
@@ -1436,7 +1419,7 @@ export const register: Register = (on, options) => {
     }
     // More settings: in the terminal folded inside Settings; on the app surfaces a card of its own beside
     // Settings and Details, so every card has the same inset and the rows line up.
-    const moreFold = fold('more', 'More settings', `Classifier, savings baseline, auto-open`, 'sliders', ACCENT, () => (
+    const moreFold = block('more', 'More settings', `Classifier, savings baseline, auto-open`, 'sliders', ACCENT, () => (
       <Box key="more-body" flexDirection="column" gap={term ? 0 : 1}>
         {more.map((x, i) => setting(x, main.length + i))}
         {d.savings ? null : <Button key="stats-on" label="Turn the savings stats on" onPress={() => saveOption($, 'stats', 'on')} />}
@@ -1489,7 +1472,7 @@ export const register: Register = (on, options) => {
     const byTasks = b ? [...b.byModel].sort((x, y) => y.tasks - x.tasks) : []
     const shade = (i: number) => VIOLETS[Math.min(i, VIOLETS.length - 1)]!
     const pctOf = (k: number) => `${allTasks ? Math.round((k / allTasks) * 100) : 0} %`
-    const details = b ? fold('details', 'Details', `Balance ${signed(b.usd)} · ${accuracyText(b).split(' (')[0]} right`, 'chart', VIOLET, () => (term
+    const details = b ? block('details', 'Details', `Balance ${signed(b.usd)} · ${accuracyText(b).split(' (')[0]} right`, 'chart', VIOLET, () => (term
       ? (
         <Box key="details-body" flexDirection="column" gap={0}>
           <Box flexDirection="column">
