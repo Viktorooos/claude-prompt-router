@@ -202,21 +202,35 @@ test('each draw animates once only what changed: a period or baseline the saving
   await d.ui.unmount()
 })
 
-test('a reply animates the pane once, then a still redraw replaces it, so a host that redraws the image never replays it', async ($: any, on: any) => {
+test('a reply animates only what it changed, once, then a still redraw replaces it, so nothing replays', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
-  const seen = engine(on, { now, log: TURN(now - HOUR) })
+  const opts = { now, log: TURN(now - HOUR) }
+  const seen = engine(on, opts)
   const waits: { ms: number; release: () => void }[] = []
   on('clock.after', (_: unknown, e: any) => new Promise<any>(r => waits.push({ ms: e.ms, release: () => r({ value: undefined }) })))
   on('turn.complete', () => ({ text: '' }))
   await start($)
-  const moving = async () => {
+  const draw = async () => {
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    const m = /animation:/.test(JSON.stringify(await ui.findAll({ type: 'Svg' })))
+    const moves = async (key: string) => /animation:/.test(JSON.stringify(await ui.find({ key })))
+    const svgs = JSON.stringify(await ui.findAll({ type: 'Svg' }))
+    // The tiles' pop is `animation:p ` (the sparkline's dots use `animation:pop`).
+    const r = { any: /animation:/.test(svgs), saved: await moves('saved'), bar: await moves('chat'), heads: /animation:p /.test(svgs) }
     await ui.unmount()
-    return m
+    return r
   }
+  expect((await draw()).any).toBe(false)
+  // A reply that changes neither the saving nor the context moves nothing and asks for no redraw.
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' })
-  expect(await moving()).toBe(true)
+  seen.writes.clear()
+  expect((await draw()).any).toBe(false)
+  expect(waits.length).toBe(0)
+  // A reply that changes the saving animates the saving only, never the settings' tiles.
+  opts.log = [TURN(now - 2 * HOUR), TURN(now - HOUR)].join('\n')
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer' })
+  seen.writes.clear()
+  const d = await draw()
+  expect([d.saved, d.bar, d.heads]).toEqual([true, false, false])
   // Once the animation has played, the pane draws itself again, still.
   expect(waits.length).toBe(1)
   expect(waits[0].ms).toBeGreaterThanOrEqual(2000)
@@ -224,12 +238,13 @@ test('a reply animates the pane once, then a still redraw replaces it, so a host
   waits[0].release()
   await new Promise(r => setTimeout(r, 0))
   expect(seen.redraws).toBe(before + 1)
-  expect(await moving()).toBe(false)
-  // A still draw asks for no further redraw, so nothing loops.
+  expect((await draw()).any).toBe(false)
   expect(waits.length).toBe(1)
   // A subagent's turn does not animate the pane.
-  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't2', reason: 'answer', agentId: 'a1' })
-  expect(await moving()).toBe(false)
+  opts.log = [TURN(now - 3 * HOUR), TURN(now - 2 * HOUR), TURN(now - HOUR)].join('\n')
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't3', reason: 'answer', agentId: 'a1' })
+  seen.writes.clear()
+  expect((await draw()).any).toBe(false)
 })
 
 test('a setting\'s line sits beside its control, not under it', async ($: any, on: any) => {

@@ -131,11 +131,13 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
   }
 }
 
-// What the next draw animates, once: after Claude's reply ends everything (the stats changed);
-// a new period or savings baseline only the saving; a new session threshold only the context bar.
-// Every other draw is still.
-type PaneAnimate = '' | 'all' | 'saved' | 'bar'
+// What the next draw animates, once: after Claude's reply only the saving or the context bar whose
+// value changed since the last draw (the settings' tiles never); a new period or savings baseline the
+// saving; a new session threshold the context bar. Every other draw is still.
+type PaneAnimate = '' | 'reply' | 'saved' | 'bar'
 let paneAnimate: PaneAnimate = ''
+// What the last draw showed, to tell whether a reply changed it.
+let shown: { saved: string; bar: string } | undefined
 const ANIMATES_ON_SAVE: Partial<Record<string, PaneAnimate>> = { compareWith: 'saved', newSessionAt: 'bar', sessionSuggestions: 'bar' }
 // An animated drawing stays the pane's drawing until the next one, and the app replays its animation
 // whenever it puts the image back (a hover, a scroll, a focus). So once the longest animation has
@@ -1031,7 +1033,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (!e.agentId) {
-      paneAnimate = 'all'
+      paneAnimate = 'reply'
       redraw($)
     }
     if (!enabled || cfg.stats !== 'on') return r
@@ -1179,10 +1181,13 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
-    const animate = paneAnimate === 'all'
-    const animateSaved = animate || paneAnimate === 'saved'
-    const animateBar = animate || paneAnimate === 'bar'
+    const report = d.savings?.report[panePeriod] ?? null
+    const now = { saved: JSON.stringify([panePeriod, compareNow(), report && [usd(report.balanceUsd), usd(report.withoutUsd)]]), bar: JSON.stringify([d.share == null ? null : Math.round(d.share), d.at]) }
+    const reply = paneAnimate === 'reply' && shown !== undefined
+    const animateSaved = paneAnimate === 'saved' || (reply && now.saved !== shown!.saved)
+    const animateBar = paneAnimate === 'bar' || (reply && now.bar !== shown!.bar)
     paneAnimate = ''
+    shown = now
     if (animateSaved || animateBar) {
       settle?.cancel()
       settle = $.clock.after(SETTLE_MS, () => {
@@ -1236,7 +1241,7 @@ export const register: Register = (on, options) => {
     // footnote under it, and anything given on the right (a button), centred on both lines.
     const head = (key: string, icon: CardIcon | null, color: string, name: string, sub: string, o: { right?: unknown; strong?: boolean; alt?: string } = {}) => (
       <Box key={key} flexDirection="row" alignItems="center" gap={2}>
-        {icon ? <Box flexShrink={0}><Svg source={tileSvg(icon, color, o.strong, animate)} alt={o.alt ?? name} width={36} height={36} /></Box> : null}
+        {icon ? <Box flexShrink={0}><Svg source={tileSvg(icon, color, o.strong)} alt={o.alt ?? name} width={36} height={36} /></Box> : null}
         <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
           <Text bold>{name}</Text>
           {sub ? <Text dimColor wrap={narrow ? 'wrap' : 'truncate-end'}>{sub}</Text> : null}
