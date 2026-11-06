@@ -480,7 +480,7 @@ async function saveTask(home: string, chat: string, task: ChatTask | undefined, 
 
 // The note of a prompt the router checked and left as it is (keep, nothing to switch, or a classifier
 // failure). It is there so the agent does not call MCP `route` for the prompt again (AGENTS.md).
-export const CHECKED = '[Prompt Router: checked, nothing to switch. Answer the prompt as usual and do not mention the router.]'
+export const CHECKED = '[Prompt Router: checked, nothing to switch. Answer the prompt as usual; if it answers a question you asked, act on that answer.]'
 
 // How long the hook's answer stands for MCP `route` on the same prompt.
 export const REUSE_MS = 120_000

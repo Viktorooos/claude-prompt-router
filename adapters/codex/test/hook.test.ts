@@ -140,6 +140,9 @@ test('a failing classifier or an unparsed reply leaves only the neutral note', a
 test('the neutral note names no decision and no model', () => {
   assert.match(CHECKED, /^\[Prompt Router: /)
   assert.doesNotMatch(CHECKED, /gpt|model|effort|subagent|session/i)
+  // A quick reply such as "1" may answer a question the agent asked: the note must not hide it.
+  assert.match(CHECKED, /answers a question you asked, act on/i)
+  assert.doesNotMatch(CHECKED, /do not mention/i)
 })
 
 test('the hook remembers its answer for MCP route, by chat and prompt key, for REUSE_MS', async () => {

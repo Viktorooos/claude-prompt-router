@@ -92,6 +92,7 @@ test('nothing to switch tells the agent to go on', async () => {
   rollout(sessions(h), 'a', 'ok', { model: 'gpt-6.1-sol' })
   const r = await route({ prompt: 'ok' }, { codexHome: h, runner: async () => PICK.keep })
   assert.match(r, /nothing to switch/i)
+  assert.match(r, /answers a question you asked, act on/i)
 })
 
 test('a classifier failure never breaks the turn', async () => {

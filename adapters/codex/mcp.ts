@@ -12,7 +12,7 @@ import { quickReply, typed } from '../../plugins/prompt-router/core/router.ts'
 import { CHECKED, codexHome, handle, isAppRequest, readHistory, recentAnswer } from './hook.ts'
 import type { Deps } from './hook.ts'
 
-const GO_ON = 'Prompt Router: nothing to switch. Answer the prompt now and do not mention the router.'
+const GO_ON = 'Prompt Router: nothing to switch. Answer the prompt now; if it answers a question you asked, act on that answer.'
 
 // Rollout folders of today and yesterday, newest files first.
 async function recentRollouts(home: string) {
