@@ -316,6 +316,18 @@ test('a press on a value saves the option the way /config does, and the pane sho
   expect(String((await $.command.run({ command: 'router', args: '' })).text)).toMatch(/effortDetection: auto \(set\)/)
 })
 
+test('every setting says which value is recommended, on both surfaces', async ($: any, on: any) => {
+  engine(on)
+  await start($)
+  const want = [/suggests a better model[^\n]*Recommended: ask\./, /offers to switch[^\n]*Recommended: ask\./, /thinking effort[^\n]*Recommended: ask\./, /cheaper subagent[^\n]*Recommended: ask\./, /fresh session[^\n]*Recommended: 50%\./, /short note[^\n]*Recommended: on\./, /decides[^\n]*Recommended: haiku\./, /measured against[^\n]*Recommended: history\./, /by itself[^\n]*Recommended: off\./, /cheapest model[^\n]*Recommended: on\./]
+  for (const surface of ['desktop', 'terminal']) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const texts = await textsOf(ui)
+    for (const w of want) expect(texts).toMatch(w)
+    await ui.unmount()
+  }
+})
+
 test('the terminal steps a setting to its next value, numbers from low to high', async ($: any, on: any) => {
   const seen = engine(on)
   await start($)

@@ -700,6 +700,21 @@ const CHOICES = [
   ...(Object.keys(SWITCHES) as Switch[]).filter(k => k !== 'compareWith').map(k => ({ key: k as Option, values: stepOrder(SWITCHES[k]) })),
   { key: 'classifier' as Option, values: CLASSIFIERS as readonly string[] },
 ]
+// The value the pane marks "Recommended" for each setting, by the setting's key. The only place that names them:
+// the defaults of the config schema, except the classifier (Haiku is cheaper) and the savings baseline (history).
+const RECOMMENDED: Record<string, string> = {
+  enabled: 'on',
+  firstChatDetection: 'ask',
+  midChatModelDetection: 'ask',
+  effortDetection: 'ask',
+  subagentSuggestions: 'ask',
+  newSessionAt: '50%',
+  notifications: 'on',
+  classifier: 'haiku',
+  compareModel: 'history',
+  compareEffort: 'medium',
+  openPane: 'off',
+}
 const TEXT_OPTIONS = OPTIONS.filter(k => !(k in SWITCHES) && k !== 'classifier')
 
 // compareWith split in two: its models (with `first`) and its efforts, in LEVELS order.
@@ -1379,6 +1394,9 @@ export const register: Register = (on, options) => {
     const setting = (x: Setting, i: number, color = ACCENT, bare = false) => {
       const current = x.now()
       const label = x.values.find(([v]) => v === current)?.[1] ?? current
+      const rec = RECOMMENDED[x.key]
+      const recLabel = x.values.find(([v]) => v === rec)?.[1]
+      const what = [x.what, recLabel ? `Recommended: ${recLabel}.` : ''].filter(Boolean).join(' ')
       // Read again on the press: the pane may not have redrawn since the last one.
       const step = () => {
         const v = x.now()
@@ -1388,7 +1406,7 @@ export const register: Register = (on, options) => {
         return (
           <Box key={`set-${x.key}`} flexDirection="column">
             <Button key={`toggle-${x.key}`} hotkey={i < 9 ? String(i + 1) : undefined} plain label={`${x.name}: ${label}`} onPress={step} />
-            {x.what ? <Text dimColor>{x.what}</Text> : null}
+            {what ? <Text dimColor>{what}</Text> : null}
           </Box>
         )
       }
@@ -1397,7 +1415,7 @@ export const register: Register = (on, options) => {
         ? <Button key={`toggle-${x.key}-${current === 'on' ? 'off' : 'on'}`} label={current === 'on' ? 'On' : 'Off'} variant={current === 'on' ? 'primary' : 'secondary'} onPress={() => x.pick(current === 'on' ? 'off' : 'on')} />
         : Select && (e.surface === 'desktop' || e.surface === 'vscode')
           // One native picker per setting; a value it cannot name still shows as the current one.
-          ? <Select key={`pick-${x.key}`} value={current} options={[...x.values.map(([v, l]) => ({ value: v, label: l })), ...(x.values.some(([v]) => v === current) ? [] : [{ value: current, label }])]} onSelect={(v: string) => x.pick(v)} />
+          ? <Select key={`pick-${x.key}`} value={current} options={[...x.values.map(([v, l]) => ({ value: v, label: v === rec ? `${l} (recommended)` : l })), ...(x.values.some(([v]) => v === current) ? [] : [{ value: current, label }])]} onSelect={(v: string) => x.pick(v)} />
           : (
             <Box flexDirection="row" gap={0}>
               {x.values.map(([v, l]) => <Button key={`toggle-${x.key}-${v}`} label={l} variant={v === current ? 'primary' : 'secondary'} dimColor={v !== current} onPress={() => x.pick(v)} />)}
@@ -1412,7 +1430,7 @@ export const register: Register = (on, options) => {
       const tint = live ? color : TONES.idle[0]
       return (
         <Box key={`set-${x.key}`} flexDirection={narrow ? 'column' : 'row'} justifyContent="space-between" alignItems={narrow ? 'flex-start' : 'center'} gap={narrow ? 1 : 3} borderStyle="round" borderColor={`${tint}38`} backgroundColor={`${tint}0f`} paddingX={narrow ? 1 : 2} paddingY={1}>
-          {item(`set-${x.key}-what`, x.icon, color, live, x.name, x.what)}
+          {item(`set-${x.key}-what`, x.icon, color, live, x.name, what)}
           <Box flexShrink={0}>{control}</Box>
         </Box>
       )
