@@ -599,6 +599,45 @@ export function rotate(text: string, now: number, maxBytes = MAX_BYTES): string 
   return lines.length ? `${lines.join('\n')}\n` : ''
 }
 
+// The log needs rotating: past maxBytes, or its first (oldest) line older than KEEP_DAYS.
+export function needsRotate(firstLine: string, size: number, now: number, maxBytes = MAX_BYTES): boolean {
+  if (size > maxBytes) return true
+  try {
+    const ts = JSON.parse(firstLine)?.ts
+    return typeof ts !== 'number' || ts < now - KEEP_DAYS * DAY
+  } catch {
+    return firstLine.trim() !== ''
+  }
+}
+
+// Records not written yet: one write at a time, in order, and a record leaves only once a write that
+// carried it succeeded (a failed write keeps it for the next flush). Past max the oldest go.
+export class Pending<T> {
+  items: T[] = []
+  private chain: Promise<void> = Promise.resolve()
+  private max: number
+  constructor(max = 5000) {
+    this.max = max
+  }
+
+  push(r: T) {
+    this.items.push(r)
+    if (this.items.length > this.max) this.items = this.items.slice(-this.max)
+  }
+
+  flush(write: (batch: T[]) => Promise<void>): Promise<void> {
+    const run = this.chain.then(async () => {
+      const batch = this.items.slice()
+      if (!batch.length) return
+      await write(batch)
+      const done = new Set(batch)
+      this.items = this.items.filter(r => !done.has(r))
+    })
+    this.chain = run.catch(() => {})
+    return run
+  }
+}
+
 export const usd = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`
 
 // "Opus medium" for a compare target, "the chat's first model" for null.

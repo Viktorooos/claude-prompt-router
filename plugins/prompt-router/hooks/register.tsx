@@ -6,7 +6,7 @@ import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWi
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
+import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, UsageScan } from '../core/stats.ts'
@@ -54,7 +54,7 @@ let modelHold: { model: Model; base: string } | null = null
 // Stats: records not written yet, this chat's id, the model the chat would run on without the router
 // and the one the router put on the model setting, the last classifier call's tokens, the last
 // decision that asked the user, the router's subagents (their baseline), and today's footer line.
-let pending: Entry[] = []
+const pending = new Pending<Entry>()
 let chatId = ''
 let baseline = ''
 let routed = ''
@@ -81,12 +81,34 @@ let panePeriod: 'today' | 'week' | 'total' = 'week'
 // The pane's open parts: a section's "?" (help-<id>) and the old token re-pricing (legacy).
 const paneOpen = new Set<string>()
 
+// Adds text to a log beside other sessions' writes: scripts/append.mjs appends under a lock, so
+// parallel sessions keep each other's lines. Without Node, the old whole-file rewrite (one write at
+// a time here; a parallel session's write can still be lost).
+let rewriting: Promise<unknown> = Promise.resolve()
+async function appendLog($: EngineInterface, path: string, text: string, mode: 'stats' | 'tail') {
+  try {
+    const r = await $.process.run(['node', `${$.plugin.root}/scripts/append.mjs`, path, mode], { stdin: text, timeoutMs: 15_000 })
+    if (r.exitCode === 0) return
+  } catch {
+    // No Node: rewrite below.
+  }
+  const run = rewriting.then(async () => {
+    let old = ''
+    try {
+      old = String(await $.fs.read(path))
+    } catch {
+      // No log yet.
+    }
+    await $.fs.write(path, mode === 'tail' ? `${old.slice(-20_000)}${text}` : rotate(old + text, await $.clock.now()))
+  })
+  rewriting = run.catch(() => {})
+  await run
+}
+
 async function log($: EngineInterface, what: string, err: unknown) {
   try {
-    const path = `${home}/.claude/mods-logs/prompt-router.log`
-    const old = (await $.fs.exists(path)) ? String(await $.fs.read(path)) : ''
     const msg = err instanceof Error ? err.message : String(err)
-    await $.fs.write(path, `${old.slice(-20_000)}${new Date(await $.clock.now()).toISOString()} ${what}: ${msg}\n`)
+    await appendLog($, `${home}/.claude/mods-logs/prompt-router.log`, `${new Date(await $.clock.now()).toISOString()} ${what}: ${msg}\n`, 'tail')
   } catch {
     // Nowhere left to report it.
   }
@@ -540,15 +562,11 @@ async function readStats($: EngineInterface) {
   }
 }
 
-// Writes the pending records (the log trimmed to 90 days / 5 MB) and refreshes the footer line.
+// Appends the pending records (the log trimmed to 90 days / 5 MB); they stay pending until written.
 async function flush($: EngineInterface) {
-  if (cfg.stats !== 'on' || !pending.length) return
-  const add = pending.map(r => `${JSON.stringify(r)}\n`).join('')
-  pending = []
+  if (cfg.stats !== 'on' || !pending.items.length) return
   try {
-    const now = await $.clock.now()
-    const text = rotate((await readStats($)) + add, now)
-    await $.fs.write(statsPath(), text)
+    await pending.flush(batch => appendLog($, statsPath(), batch.map(r => `${JSON.stringify(r)}\n`).join(''), 'stats'))
   } catch (err) {
     await log($, 'stats', err)
   }
@@ -797,7 +815,7 @@ async function paneData($: EngineInterface) {
   const effort = await currentLevel($)
   let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances } | null = null
   if (cfg.stats === 'on') {
-    const records = [...parseLog(await readStats($)), ...pending]
+    const records = [...parseLog(await readStats($)), ...pending.items]
     const c = compareNow()
     savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now) }
   }
@@ -832,7 +850,7 @@ export const register: Register = (on, options) => {
     } catch {
       sessionId = ''
     }
-    pending = []
+    pending.items = []
     baseline = ''
     routed = ''
     effortBase = ''

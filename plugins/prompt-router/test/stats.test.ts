@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -205,6 +205,64 @@ test('rotate drops lines older than 90 days and the oldest lines over the size c
   expect(rotate(`${old}\n${a}\nbroken\n${b}\n`, NOW)).toBe(`${a}\n${b}\n`)
   expect(rotate(`${a}\n${b}\n`, NOW, b.length + 5)).toBe(`${b}\n`)
   expect(rotate('', NOW)).toBe('')
+})
+
+test('needsRotate: only past the size cap or with a first line older than 90 days', () => {
+  const fresh = JSON.stringify(turn('haiku', 'opus', { ts: NOW - DAY }))
+  const old = JSON.stringify(turn('haiku', 'opus', { ts: NOW - 91 * DAY }))
+  expect(needsRotate(fresh, 1000, NOW)).toBe(false)
+  expect(needsRotate(fresh, 6_000_000, NOW)).toBe(true)
+  expect(needsRotate(old, 1000, NOW)).toBe(true)
+  expect(needsRotate('broken', 1000, NOW)).toBe(true)
+  expect(needsRotate('', 0, NOW)).toBe(false)
+})
+
+// A store that rewrites the whole file, slowly: two writes at once lose one of them.
+function slowFile() {
+  const f = { text: '', writes: 0 }
+  const write = async (batch: string[]) => {
+    const old = f.text
+    await new Promise(r => setTimeout(r, 5))
+    f.text = old + batch.map(l => `${l}\n`).join('')
+    f.writes++
+  }
+  return { f, write }
+}
+
+test('Pending: two flushes at once keep both records', async () => {
+  const { f, write } = slowFile()
+  const p = new Pending<string>()
+  p.push('a')
+  const one = p.flush(write)
+  p.push('b')
+  const two = p.flush(write)
+  await Promise.all([one, two])
+  expect(f.text).toBe('a\nb\n')
+  expect(p.items).toEqual([])
+})
+
+test('Pending: a failed write keeps its records for the next flush', async () => {
+  const p = new Pending<string>()
+  p.push('a')
+  let fail = true
+  const got: string[][] = []
+  const write = async (batch: string[]) => {
+    if (fail) throw new Error('disk full')
+    got.push(batch)
+  }
+  await expect(p.flush(write)).rejects.toThrow('disk full')
+  expect(p.items).toEqual(['a'])
+  fail = false
+  p.push('b')
+  await p.flush(write)
+  expect(got).toEqual([['a', 'b']])
+  expect(p.items).toEqual([])
+})
+
+test('Pending: past its cap the oldest records go', () => {
+  const p = new Pending<number>(2)
+  for (const n of [1, 2, 3]) p.push(n)
+  expect(p.items).toEqual([2, 3])
 })
 
 test('statsText shows the three periods, the balance and its parts apart', () => {
