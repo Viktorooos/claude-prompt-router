@@ -1,11 +1,5 @@
-import { expect, test as base } from 'claude-code/testing'
-import { SWITCHES, TEMPLATE, compactWindow, describeOptions, heldWhere, inHoldout, isRedo, namesSetting, trialExempt, wantsChange, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
-
-// The routing tests run without the control group (holdoutPct 0), so no prompt lands in it by chance;
-// the holdout tests below turn it on.
-const OFF = { holdoutPct: '0' }
-const test = ((name: string, a: any, b?: any) =>
-  typeof a === 'function' ? base(name, { options: OFF } as any, a) : base(name, { ...a, options: { ...OFF, ...a.options } }, b)) as typeof base
+import { expect, test } from 'claude-code/testing'
+import { TEMPLATE, compactWindow, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -1090,149 +1084,6 @@ test('stats: a turn after the person moved the picker above what the router set 
   expect(ts.map((t: any) => t.manual)).toEqual([undefined, true, undefined])
 })
 
-test('inHoldout: the same seed lands the same way, and about pct % of seeds land in the control group', () => {
-  const share = (pct: number) => Array.from({ length: 20_000 }, (_, i) => inHoldout(`chat-${i % 97}:${i * 7919}:prompt ${i}`, pct)).filter(Boolean).length / 20_000
-  expect(share(0)).toBe(0)
-  for (const pct of [5, 10, 20]) {
-    expect(Math.abs(share(pct) - pct / 100)).toBeLessThan(0.01)
-  }
-  expect(inHoldout('a:1:fix it', 10)).toBe(inHoldout('a:1:fix it', 10))
-})
-
-test('namesSetting: a prompt that asks for a model or effort', () => {
-  for (const t of ['use opus for this', 'Sonnet je na to dost', 'high effort please', 'ultrathink about the cache']) expect(namesSetting(t)).toBe(true)
-  for (const t of ['fix the empty search', 'run the tests', 'the magnum layout']) expect(namesSetting(t)).toBe(false)
-})
-
-test('namesSetting: inflected model names count too (Czech and other languages)', () => {
-  for (const t of ['udělej to s opusem', 'pusť to na sonnetu', 'zkus to přes haikem', 'použij fablem', 'efforts high', 'víc effortu']) expect(namesSetting(t)).toBe(true)
-  for (const t of ['the opusculum', 'fabled layout', 'a sonnets list screen']) expect(namesSetting(t)).toBe(false)
-})
-
-test('holdout: a share of lowering prompts keeps its setting and is noted as the control group', { options: { effortDetection: 'auto', holdoutPct: '20' } } as any, async ($: any, on: any) => {
-  const seen = engine(on, PICK.here)
-  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
-  await start($)
-  const prompts = Array.from({ length: 40 }, (_, i) => `fix the empty search in list ${i}`)
-  for (const t of [...prompts, 'use opus, fix the empty search in list 99']) {
-    await submit($, t)
-    await $.turn.complete(TURN_DONE)
-  }
-  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
-  expect(ds.length).toBe(41)
-  const held = ds.filter((d: any) => d.holdout)
-  // Each prompt lands where its seed says; some do, most do not.
-  for (const d of ds.slice(0, 40)) expect(!!d.holdout).toBe(inHoldout(`${d.chat}:0:${d.key}`, 20))
-  expect(held.length).toBeGreaterThan(0)
-  expect(held.length).toBeLessThan(20)
-  for (const d of held) {
-    expect(d.where).toBe('keep')
-    expect(d.to).toEqual(d.from)
-    expect(d.wanted).toEqual({ model: 'opus', effort: 'low' })
-  }
-  // The effort moved only for the prompts outside the control group.
-  expect(seen.sets.length).toBe(41 - held.length)
-  // A prompt that names a model is never held back.
-  expect(ds[40].holdout).toBeUndefined()
-  expect(ds[40].where).toBe('here')
-})
-
-test('holdout: never a raise or an xhigh pick', { options: { effortDetection: 'auto', holdoutPct: '20' } } as any, async ($: any, on: any) => {
-  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "xhigh", "why": "hard"}')
-  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
-  await start($)
-  for (let i = 0; i < 30; i++) {
-    await submit($, `rework the cache layer ${i}`)
-    await $.turn.complete(TURN_DONE)
-  }
-  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
-  expect(ds.length).toBe(30)
-  expect(ds.some((d: any) => d.holdout)).toBe(false)
-})
-
-test('holdout: a chat with no effort set yet can land in the control group', { options: { effortDetection: 'auto', holdoutPct: '30' } } as any, async ($: any, on: any) => {
-  const seen = engine(on, PICK.here, { noEffortRow: true })
-  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
-  await start($)
-  for (let i = 0; i < 40; i++) {
-    await submit($, `fix the empty search in list ${i}`)
-    await $.turn.complete(TURN_DONE)
-  }
-  const held = statsLines(seen).filter((x: any) => x.kind === 'decision' && x.holdout)
-  expect(held.length).toBeGreaterThan(0)
-  for (const d of held) {
-    expect(d.from.effort).toBe('')
-    expect(d.wanted).toEqual({ model: 'opus', effort: 'low' })
-  }
-})
-
-test('holdout: the whole task lands in one group, decided at its first prompt', { options: { effortDetection: 'auto', holdoutPct: '30' } } as any, async ($: any, on: any) => {
-  let n = 0
-  const seen = engine(on, () => `{"where": "here", "model": "opus", "effort": "${n % 3 === 1 ? 'high' : 'low'}", "why": "w", "follows": "${n++ % 3 === 0 ? 'new' : 'continues'}"}`)
-  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
-  await start($)
-  for (let i = 0; i < 90; i++) {
-    await submit($, `step ${i % 3} of task ${Math.floor(i / 3)}`)
-    await $.turn.complete(TURN_DONE)
-  }
-  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
-  expect(ds.length).toBe(90)
-  let control = 0
-  for (let t = 0; t < 30; t++) {
-    const [first, ...rest] = ds.slice(t * 3, t * 3 + 3)
-    expect(['router', 'control']).toContain(first.trial)
-    for (const d of rest) expect(d.trial).toBeUndefined()
-    const held = first.trial === 'control'
-    if (held) control++
-    // Every prompt of a control task keeps its setting, a raise included.
-    for (const d of [first, ...rest]) expect(!!d.holdout).toBe(held)
-    for (const d of [first, ...rest]) if (held) expect(d.where).toBe('keep')
-  }
-  expect(control).toBeGreaterThan(0)
-  expect(control).toBeLessThan(30)
-})
-
-test('holdout: a suggested subagent or session in a control task is not offered', { options: { holdoutPct: '30' } } as any, async ($: any, on: any) => {
-  const seen = engine(on, PICK.session)
-  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
-  await start($)
-  for (let i = 0; i < 30; i++) {
-    await submit($, `build the export screen ${i}`)
-    await $.turn.complete(TURN_DONE)
-  }
-  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
-  const held = ds.map((d: any, i: number) => [d, i] as const).filter(([d]) => d.holdout)
-  expect(held.length).toBeGreaterThan(0)
-  for (const [d, i] of held) {
-    expect(d.where).toBe('keep')
-    expect(d.wanted).toEqual({ model: 'sonnet', effort: 'medium' })
-    expect(d.wantedWhere).toBe('session')
-    expect(seen.sent[i]).toBe(`build the export screen ${i}`)
-  }
-  for (const d of ds.filter((d: any) => !d.holdout)) expect(d.trial).toBe('router')
-})
-
-test('holdout: a prompt typed over a running turn is never drawn (the router leaves it alone anyway)', { options: { effortDetection: 'auto', holdoutPct: '30' } } as any, async ($: any, on: any) => {
-  const seen = engine(on, PICK.here)
-  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
-  await start($)
-  for (let i = 0; i < 30; i++) await $.prompt.submit({ text: `and push branch ${i}`, wait: false, origin: { kind: 'composer' }, turnId: 't1' })
-  await $.turn.complete(TURN_DONE)
-  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
-  expect(ds.length).toBe(30)
-  for (const d of ds) {
-    expect(d.where).toBe('keep')
-    expect(d.trial).toBeUndefined()
-    expect(d.holdout).toBeUndefined()
-  }
-})
-
-test('holdout: the control group is 30 % by default, 10 % one step away', () => {
-  expect(toConfig({}).holdoutPct).toBe('30')
-  expect(SWITCHES.holdoutPct[0]).toBe('30')
-  expect(SWITCHES.holdoutPct).toContain('10')
-})
-
 const USED = { text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }
 
 test('stats: a router question answered without a switch is noted as declined', async ($: any, on: any) => {
@@ -1263,7 +1114,7 @@ test('stats: an asked question that was never shown is not a decline', async ($:
   expect(statsLines(seen).filter((x: any) => x.kind === 'accept')).toEqual([])
 })
 
-test('stats: a started session is noted with its prompt and takes the session offer', async ($: any, on: any) => {
+test('stats: a started session takes the session offer (no spawn record)', async ($: any, on: any) => {
   const seen = engine(on, PICK.session)
   on('tool.call', () => ({ result: {} }))
   on('turn.complete', () => USED)
@@ -1274,13 +1125,11 @@ test('stats: a started session is noted with its prompt and takes the session of
   await $.turn.complete(TURN_DONE)
   const lines = statsLines(seen)
   const d = lines.find((x: any) => x.kind === 'decision')
-  const spawn = lines.find((x: any) => x.kind === 'spawn')
-  expect(spawn.chat).toBe(d.chat)
-  expect(spawn.key).toBe('build the export screen')
+  expect(lines.filter((x: any) => x.kind === 'spawn')).toEqual([])
   expect(lines.filter((x: any) => x.kind === 'accept').map((a: any) => [a.decision, a.outcome])).toEqual([[d.ts, undefined]])
 })
 
-test('stats: a start_session that failed (isError in its result) is no spawn and takes no offer', async ($: any, on: any) => {
+test('stats: a start_session that failed (isError in its result) takes no offer', async ($: any, on: any) => {
   const seen = engine(on, PICK.session)
   on('tool.call', (_: unknown, e: any) => (/start_session$/.test(e.tool) ? { result: { isError: true, content: [{ type: 'text', text: 'no such project' }] } } : { result: {} }))
   on('turn.complete', () => USED)
@@ -1593,36 +1442,4 @@ test('/router stats with compareWith history and no history file falls back to O
   const r = await $.command.run({ command: 'router', args: 'stats' })
   expect(r.text).toMatch(/Cost on Opus medium\s+\$20\.00/)
   expect(r.text).toMatch(/compareWith is history, but .*compared with Opus medium/)
-})
-
-test('wantsChange: a subagent, a session, another model, or a new model or effort the switches allow', () => {
-  const on = { firstChatDetection: 'ask', effortDetection: 'auto' }
-  const p = { where: 'here', model: 'opus', effort: 'medium', why: '' } as const
-  expect(wantsChange(p, 'medium', on)).toBe(false)
-  expect(wantsChange(p, 'low', on)).toBe(true)
-  expect(wantsChange(p, '', on)).toBe(true)
-  expect(wantsChange(p, 'low', { ...on, effortDetection: 'off' })).toBe(false)
-  expect(wantsChange({ ...p, first: { now: 'sonnet' } }, 'medium', on)).toBe(true)
-  expect(wantsChange({ ...p, first: { now: 'sonnet' } }, 'medium', { ...on, firstChatDetection: 'off' })).toBe(false)
-  expect(wantsChange({ ...p, first: { now: '' } }, 'medium', on)).toBe(false)
-  expect(wantsChange({ ...p, other: { now: 'sonnet' } }, 'medium', on)).toBe(true)
-  expect(wantsChange({ ...p, where: 'subagent' }, 'medium', on)).toBe(true)
-  expect(wantsChange({ ...p, where: 'session' }, 'medium', on)).toBe(true)
-})
-
-test('trialExempt: no pick, a prompt that names a setting, or an xhigh / max pick stays out of the trial', () => {
-  const p = { where: 'here', model: 'opus', effort: 'low', why: '' } as const
-  expect(trialExempt('fix it', p)).toBe(false)
-  expect(trialExempt('fix it', null)).toBe(true)
-  expect(trialExempt('fix it with opus', p)).toBe(true)
-  expect(trialExempt('fix it', { ...p, effort: 'xhigh' })).toBe(true)
-  expect(trialExempt('fix it', { ...p, effort: 'max' })).toBe(true)
-})
-
-test('heldWhere: where a held-back prompt would have gone when not here', () => {
-  const p = { where: 'here', model: 'opus', effort: 'low', why: '' } as const
-  expect(heldWhere(p)).toBe(undefined)
-  expect(heldWhere({ ...p, other: { now: 'sonnet' } })).toBe('subagent')
-  expect(heldWhere({ ...p, where: 'subagent' })).toBe('subagent')
-  expect(heldWhere({ ...p, where: 'session' })).toBe('session')
 })

@@ -29,14 +29,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, heldWhere, inHoldout, isRedo, preferSession, describeOptions, knownModel, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, trialExempt, typed, wantsChange } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, isRedo, preferSession, describeOptions, knownModel, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import { SESSION_TOOL, STATS_TOOL, SWITCH_TOOL, agentFor, askNote, modelName, otherAutoNote, otherNote, switchNote } from './notes.ts'
 import { TIER_NAMES, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
 import type { NoteCtx } from './notes.ts'
 import { statsLog, statsTable } from './stats.ts'
-import { placeTask } from '../../plugins/prompt-router/core/stats.ts'
-import type { Accept, Decision, TaskState, Turn } from '../../plugins/prompt-router/core/stats.ts'
+import type { Accept, Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
 
 // `tool` from @opencode-ai/plugin: the shim hands it in, since the repo has no node_modules.
@@ -58,9 +57,7 @@ type ChatState = {
   // What the picker sent with the last message.
   cur: { model: string; variant: string }
   last: Pick | null
-  // The chat's current task for the trial, and the router's open offer (its decision's time stamp)
-  // until the user takes it or another offer replaces it.
-  task: TaskState | null
+  // The router's open offer (its decision's time stamp) until the user takes it or another offer replaces it.
   offer: { ts: number; where: Decision['where'] } | null
 }
 
@@ -97,9 +94,7 @@ export function routerPlugin(tool: ToolFn) {
   return async (input: { client: Client }, options?: Record<string, unknown>) => {
     const client = input.client
     const home = process.env.HOME || homedir()
-    // draw: the control-group draw (inHoldout); tests pin it. Not an option of the router.
-    const { draw: drawOpt, ...opts0 } = options ?? {}
-    const draw = typeof drawOpt === 'function' ? (drawOpt as (seed: string, pct: number) => boolean) : inHoldout
+    const opts0 = options ?? {}
     const dir = typeof opts0.stateDir === 'string' ? opts0.stateDir : `${home}/.config/opencode/prompt-router`
     const optionsFile = typeof opts0.optionsFile === 'string' ? opts0.optionsFile : `${home}/.config/opencode/prompt-router.json`
     const timeoutMs = typeof opts0.timeoutMs === 'number' ? opts0.timeoutMs : 20_000
@@ -184,7 +179,7 @@ export function routerPlugin(tool: ToolFn) {
     function chat(sid: string) {
       let st = chats.get(sid)
       if (!st) {
-        st = { seen: '', seenModel: '', turnLevel: null, hold: null, modelHold: null, cur: { model: '', variant: '' }, last: null, task: null, offer: null }
+        st = { seen: '', seenModel: '', turnLevel: null, hold: null, modelHold: null, cur: { model: '', variant: '' }, last: null, offer: null }
         chats.set(sid, st)
       }
       return st
@@ -304,8 +299,6 @@ export function routerPlugin(tool: ToolFn) {
         const st = chats.get(sid)
         const base = st?.modelHold?.base
         if (base) baseline = modelID(base)
-        // The end of a main-chat turn moves its task's end, as in Claude Code: a long turn does not split it.
-        if (st?.task) st.task.end = Date.now()
       }
       const usage = usageOf(info.tokens)
       const any = usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0
@@ -461,19 +454,12 @@ export function routerPlugin(tool: ToolFn) {
       const redo = isRedo(text)
       // A prompt typed over a running turn belongs to that work.
       const midTurn = !!p && (await isBusy(sid))
-      // The trial: the prompt's task, and whether the router stays quiet in it (a control task). A here
-      // prompt over a running turn is left alone below whatever the group, so it is not drawn.
-      const eligible = !!p && !(p.where === 'here' && midTurn) && wantsChange(p, now, cfg) && !trialExempt(text, p)
-      const placed = placeTask(st.task, { ts, key, follows }, { eligible, control: () => draw(`${sid}:${ts}:${key}`, Number(cfg.holdoutPct)) })
-      st.task = placed.task
-      // held: a control-group prompt, what the router wanted instead.
-      const note = async (where: Decision['where'], outcome: Decision['outcome'], to: Decision['to'], held?: { wanted: Decision['to']; where?: Decision['wantedWhere'] }) => {
+      const note = async (where: Decision['where'], outcome: Decision['outcome'], to: Decision['to']) => {
         if (where !== 'keep') st.offer = outcome === 'asked' ? { ts, where } : null
-        await record({ kind: 'decision', ts, platform: 'opencode', chat: sid, where, from: fromSide, to, ...(follows ? { follows } : {}), outcome, key, classifier, ...(held ? { holdout: true as const, wanted: held.wanted } : {}), ...(held?.where ? { wantedWhere: held.where } : {}), ...(placed.trial ? { trial: placed.trial } : {}), ...(redo ? { redo: true as const } : {}) })
+        await record({ kind: 'decision', ts, platform: 'opencode', chat: sid, where, from: fromSide, to, ...(follows ? { follows } : {}), outcome, key, classifier, ...(redo ? { redo: true as const } : {}) })
       }
       // No pick (an approval, or a reply that could not be read): the classifier still cost.
       if (!p) return note('keep', 'applied', fromSide)
-      if (placed.quiet) return note('keep', 'applied', fromSide, { wanted: { model: p.model, effort: p.effort }, where: heldWhere(p) })
       st.last = p
       const proposed = { model: p.model as string, effort: p.effort }
 

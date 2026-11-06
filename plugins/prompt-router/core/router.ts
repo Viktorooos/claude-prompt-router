@@ -47,10 +47,6 @@ export const SWITCHES = {
   stats: ['on', 'off'],
   // Claude Code: open the Prompt Router pane by itself when a session starts.
   openPane: ['off', 'on'],
-  // Share of tasks the router wants to act on that run without it, as a control group for the savings
-  // stats (drawn at a task's first prompt). 30 % for now to gather data faster; 10 % is enough later.
-  // 0 turns it off.
-  holdoutPct: ['30', '0', '5', '10', '20'],
   // What the savings are measured against: a model at an effort for every chat, or `first`, the
   // chat's first model (the main chat's for a subagent). Read from the tokens, so it reprices old data.
   compareWith: COMPARE_VALUES,
@@ -98,50 +94,13 @@ export function mappedModel(models: Partial<Record<Model, string>>, id: string):
 }
 
 // Whether effort level or model `a` is above `b` (low … max, haiku … fable); false when either is unknown.
-// `models`: the platform's mapping (Codex slugs, OpenCode ids), so its model ids rank by their tier too.
-export function above(a: unknown, b: unknown, models?: Partial<Record<Model, string>>): boolean {
+export function above(a: unknown, b: unknown): boolean {
   const la = asLevel(a)
   const lb = asLevel(b)
   if (la && lb) return LEVELS.indexOf(la) > LEVELS.indexOf(lb)
-  const tier = (v: unknown) => (models && typeof v === 'string' && mappedModel(models, v)) || knownModel(v)
-  const ma = tier(a)
-  const mb = tier(b)
+  const ma = knownModel(a)
+  const mb = knownModel(b)
   return !!ma && !!mb && ALL_MODELS.indexOf(ma) > ALL_MODELS.indexOf(mb)
-}
-
-// Whether a prompt falls in the control group: the same seed always lands the same way, and about pct %
-// of seeds land in it (FNV-1a hash).
-export function inHoldout(seed: string, pct: number): boolean {
-  if (!(pct > 0)) return false
-  let h = 0x811c9dc5
-  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 0x01000193)
-  return (h >>> 0) % 10_000 < pct * 100
-}
-
-// Whether the prompt itself asks for a model or an effort; the router then never holds it back.
-// The names take Czech case endings too (s opusem, na sonnetu, víc effortu).
-export function namesSetting(text: string): boolean {
-  return /\b(haik(u|em)|sonnet(u|em|y|a)?|opus(u|em|y|a)?|fabl(e|u|em)|effort(s|u|em|y)?|ultrathink|think (hard|harder|deeply))\b/i.test(text)
-}
-
-// What the router would change for this prompt: the model or effort here (as far as the switches let
-// it), another model mid-chat, or a subagent or a session.
-export function wantsChange(p: Pick, now: Level | '', cfg: { firstChatDetection: string; effortDetection: string }): boolean {
-  if (p.where === 'subagent' || p.where === 'session' || p.other) return true
-  const from = p.first?.now
-  return (!!from && p.model !== from && cfg.firstChatDetection !== 'off') || (p.effort !== now && cfg.effortDetection !== 'off')
-}
-
-// A prompt the savings trial leaves out (never held back, never starts a control task): no pick, a
-// prompt that names a model or effort itself, or an xhigh or max pick (quality first).
-export function trialExempt(text: string, p: Pick | null): boolean {
-  return !p || p.effort === 'xhigh' || p.effort === 'max' || namesSetting(text)
-}
-
-// Where a held-back prompt would have gone when not here (a mid-chat model change runs as a subagent).
-export function heldWhere(p: Pick): 'subagent' | 'session' | undefined {
-  if (p.where === 'here' && !p.other) return undefined
-  return p.where === 'session' ? 'session' : 'subagent'
 }
 
 // Whether the prompt says the last answer did not do the job (a re-work sign that needs no model):

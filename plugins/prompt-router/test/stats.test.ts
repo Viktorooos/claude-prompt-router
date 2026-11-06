@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, MIN_TRIAL, measuredLabel, trial, trialText, withTranscripts, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, placeTask, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -98,7 +98,7 @@ test('a turn the router switched models on: the cache it rewrote counts against 
   close(s.extraUsd, cost(U, 'opus')! - without)
 })
 
-test('a lower effort is not re-priced by a guess: only the trial measures what effort saves', () => {
+test('a lower effort is not re-priced by a guess', () => {
   const s = summarize([turn('opus', 'opus', { effort: 'low', baseEffort: 'high' })], NOW).today
   close(s.withoutUsd, cost(U, 'opus')!)
   expect(s.savedUsd).toBe(0)
@@ -463,39 +463,30 @@ function task(chat: string, d: Partial<Decision>, turns: Partial<Turn>[], later:
   })
   return out
 }
-const CONTROL = (n: number) => Array.from({ length: n }, (_, i) =>
-  task(`k${i}`, { where: 'keep', holdout: true, wanted: { model: 'haiku', effort: 'low' } }, [{ model: 'opus', usd: i + 1, durationMs: (i + 1) * 60 * SEC }])).flat()
-
-test('balance: routed tasks against the control medians of their class, with quartiles, parts and accuracy', () => {
+test('balance: routed tasks priced by the token re-pricing, with parts and accuracy', () => {
   const down = { to: { model: 'haiku', effort: 'low' as const } }
   const records = [
-    ...CONTROL(5), // control $1…$5 and 1…5 min: median $3 / 3 min, quartiles $2–$4 / 2–4 min
     ...task('a', down, [{ usd: 1, durationMs: 60 * SEC }]),
     ...task('b', down, [{ usd: 1, durationMs: 60 * SEC }], [{ d: { follows: 'corrects' }, turns: [{ usd: 0.5, durationMs: 30 * SEC }] }]),
     ...task('c', { from: { model: 'sonnet', effort: 'medium' }, to: { model: 'opus', effort: 'medium' } }, [{ model: 'opus', baseline: 'sonnet' }]),
   ]
   const b = balance(records)
-  expect([b.routed, b.control, b.measured, b.estimated]).toEqual([3, 5, 2, 1])
+  expect(b.routed).toBe(3)
+  // Each haiku turn would have cost the gap to Opus more. a: one turn. b: two turns, its correction
+  // (0.7 × 0.5 = 0.35) is re-work. c: sonnet − opus, an escalation. Four prompts' classifier: 0.04.
+  const gap = cost(U, 'opus')! - cost(U, 'haiku')!
   const esc = cost(U, 'sonnet')! - cost(U, 'opus')!
-  // a: 3 − 1 = 2. b: 3 − (1.5 − 0.7 × 0.5) = 1.85, its correction 0.35 is re-work. c (no control for
-  // opus): the re-pricing, sonnet − opus. Nine prompts' classifier: 0.09.
-  close(b.parts.cheaper, 3.85)
+  close(b.parts.cheaper, 3 * gap + 0.35)
   close(b.parts.rework, -0.35)
   close(b.parts.escalation, esc)
-  close(b.parts.classifier, -0.09)
-  close(b.usd.value, 3.41 + esc)
-  close(b.usd.low, (2 - 1) + (2 - 1.5) + esc - 0.09)
-  close(b.usd.high, (4 - 1) + (4 - 1.5) + esc - 0.09)
-  // Minutes: a 3 − 1, b 3 − 1.5, c no control time; nine classifier seconds.
-  close(b.minutes.value, 2 + 1.5 - 0.15)
-  close(b.minutes.low, 1 + 0.5 - 0.15)
-  close(b.minutes.high, 3 + 2.5 - 0.15)
+  close(b.parts.classifier, -0.04)
+  close(b.usd, 3 * gap + esc - 0.04)
   close(b.accuracy!.pct, (1 - 0.7 / 3) * 100)
   const w = wilson(3 - 0.7, 3)
   close(b.accuracy!.low, w.low * 100)
   close(b.accuracy!.high, w.high * 100)
   const haiku = b.byModel.find(r => r.model === 'haiku')!
-  expect([haiku.tasks, haiku.control]).toEqual([2, 5])
+  expect(haiku.tasks).toBe(2)
   close(haiku.usdPerTask, (1.01 + 1.52) / 2)
   close(haiku.reworkPct, 35)
   close(haiku.minutesPerTask, (61 + 92) / 2 / 60)
@@ -504,38 +495,11 @@ test('balance: routed tasks against the control medians of their class, with qua
   expect(opus.minutesPerTask).toBeNull()
 })
 
-test('balance: control tasks count only for the class the router wanted: a subagent, or a move up, is not a cheaper here', () => {
-  const sub = Array.from({ length: MIN_CONTROL }, (_, i) =>
-    task(`ks${i}`, { where: 'keep', holdout: true, wanted: { model: 'haiku', effort: 'low' }, wantedWhere: 'subagent' }, [{ model: 'opus', usd: 50 }])).flat()
-  const up = Array.from({ length: MIN_CONTROL }, (_, i) =>
-    task(`ku${i}`, { where: 'keep', holdout: true, from: { model: 'haiku', effort: 'low' }, wanted: { model: 'opus', effort: 'high' } }, [{ model: 'haiku', usd: 50 }])).flat()
-  const hereHaiku = task('r1', { trial: 'router', to: { model: 'haiku', effort: 'low' } }, [{ usd: 1 }])
-  const fableToOpus = task('r2', { trial: 'router', from: { model: 'fable', effort: 'medium' }, to: { model: 'opus', effort: 'medium' } }, [{ model: 'opus', usd: 1 }])
-  const b = balance([...sub, ...up, ...hereHaiku, ...fableToOpus])
-  expect(b.control).toBe(2 * MIN_CONTROL)
-  expect([b.measured, b.estimated]).toEqual([0, 2])
-  // A subagent to Haiku is measured against the control tasks that wanted that subagent.
-  const subRouted = task('r3', { trial: 'router', where: 'subagent', to: { model: 'haiku', effort: 'low' } }, [{ usd: 1 }])
-  expect(balance([...sub, ...subRouted]).measured).toBe(1)
-})
-
-test('balance: fewer control tasks than MIN_CONTROL fall back to the re-pricing, with no time saved', () => {
-  const records = [...CONTROL(MIN_CONTROL - 1), ...task('a', { to: { model: 'haiku', effort: 'low' } }, [{ usd: 1, durationMs: 60 * SEC }])]
-  const b = balance(records)
-  expect([b.measured, b.estimated]).toEqual([0, 1])
-  // The re-pricing: the turn's own price plus the list-price gap to the baseline.
-  const without = 1 + cost(U, 'opus')! - cost(U, 'haiku')!
-  close(b.usd.value, without - 1 - 0.05)
-  close(b.usd.low, b.usd.value)
-  close(b.usd.high, b.usd.value)
-  close(b.minutes.value, -5 / 60)
-})
-
 test('balance: nothing routed has no accuracy; prompts the router left alone cost only the classifier', () => {
   const b = balance(task('a', {}, [{ usd: 1 }]))
-  expect([b.routed, b.control]).toEqual([0, 0])
+  expect(b.routed).toBe(0)
   expect(b.accuracy).toBeNull()
-  close(b.usd.value, -0.01)
+  close(b.usd, -0.01)
 })
 
 test('wilson: the 95 % interval of a share', () => {
@@ -545,52 +509,36 @@ test('wilson: the 95 % interval of a share', () => {
   expect(wilson(0, 0)).toEqual({ low: 0, high: 1 })
 })
 
-test('minutes and timeText: plain words for time, saved or lost', () => {
-  expect([minutes(0.4), minutes(45), minutes(60), minutes(130)]).toEqual(['0 min', '45 min', '1 h', '2 h 10 min'])
-  expect([timeText(130), timeText(-3), timeText(0.2)]).toEqual(['2 h 10 min saved', '3 min lost', 'no time'])
-})
-
-test('balanceLabel: money, then time once measured; "~" while rough', () => {
+test('balanceLabel: the money; "~" while it stands on few tasks', () => {
   const down = { to: { model: 'haiku', effort: 'low' as const } }
   const routed = (n: number) => Array.from({ length: n }, (_, i) => task(`r${i}`, down, [{ usd: 1, durationMs: 60 * SEC }])).flat()
   expect(balanceLabel(balance([]))).toBe('')
-  // One routed task against the control: $3 − $1, less six prompts' classifier ($0.06); 3 − 1 min, less 6 s.
-  const few = balance([...CONTROL(5), ...routed(1)])
-  expect(balanceLabel(few)).toBe('~+$1.94 · 2 min saved')
-  const many = balance([...CONTROL(5), ...routed(ROUGH_BELOW)])
-  expect(balanceLabel(many).startsWith('+$')).toBe(true)
-  // No control: no time, and rough.
-  expect(balanceLabel(balance(routed(1)))).toMatch(/^~[+−]\$\d+\.\d\d$/)
+  // One routed task: the gap to Opus, less its classifier ($0.01).
+  const gap = cost(U, 'opus')! - cost(U, 'haiku')!
+  expect(balanceLabel(balance(routed(1)))).toBe(`~+$${(gap - 0.01).toFixed(2)}`)
+  expect(balanceLabel(balance(routed(ROUGH_BELOW))).startsWith('+$')).toBe(true)
 })
 
-test('balances: today, 7 days and total count tasks by when they started; the control medians use all', () => {
+test('balances: today, 7 days and total count tasks by when they started', () => {
   const old = task('old', { ts: NOW - 10 * DAY, to: { model: 'haiku', effort: 'low' } }, [{ ts: NOW - 10 * DAY + 1, usd: 1 }])
-  const b = balances([...CONTROL(5), ...old], NOW)
+  const b = balances(old, NOW)
   expect([b.today.routed, b.week.routed, b.total.routed]).toEqual([0, 0, 1])
-  expect(b.total.measured).toBe(1)
 })
 
 test('balanceText and statsText: the per-task section under the token table', () => {
-  const records = [...CONTROL(5), ...task('a', { to: { model: 'haiku', effort: 'low' } }, [{ usd: 1, durationMs: 60 * SEC }])]
+  const records = task('a', { to: { model: 'haiku', effort: 'low' } }, [{ usd: 1, durationMs: 60 * SEC }])
   const b = balance(records)
+  const gap = cost(U, 'opus')! - cost(U, 'haiku')!
   const t = balanceText(b)
-  expect(t).toMatch(/^Per task, against the control group \(total\)\nMoney      \+\$1\.94 \(\+\$0\.94 to \+\$2\.94\)\nTime       2 min saved \(1 min saved to 3 min saved\)/)
-  expect(t).toMatch(/  Cheaper picks  \+\$2\.00/)
+  expect(t.startsWith(`Per task (total, estimated)\nMoney      +$${(gap - 0.01).toFixed(2)}\n`)).toBe(true)
+  expect(t).toContain(`  Cheaper picks  +$${gap.toFixed(2)}`)
   expect(t).toMatch(/Accuracy   100 % \(95 %: 21–100 %\)/)
-  expect(t).toMatch(/haiku  1 +5 +\$1\.01/)
+  expect(t).toMatch(/1 routed task · few tasks, rough/)
+  expect(t).toMatch(/haiku  1 +\$1\.01/)
   const all = statsText(summarize(records, NOW), null, b)
   expect(all).toContain(t)
   expect(statsText(summarize(records, NOW))).not.toMatch(/Per task/)
-  expect(statsHtml(summarize(records, NOW), [], null, b)).toMatch(/<h2>Per task, against the control group<\/h2>/)
-})
-
-test('balance: an older routed task without turn times saves no time, even where control times exist', () => {
-  const b = balance([...CONTROL(5), ...task('old', { to: { model: 'haiku', effort: 'low' } }, [{ usd: 1 }])])
-  expect(b.measured).toBe(1)
-  expect(b.timed).toBe(0)
-  // Only the six prompts' classifier seconds.
-  close(b.minutes.value, -0.1)
-  expect(b.byModel.find(r => r.model === 'haiku')!.minutesPerTask).toBeNull()
+  expect(statsHtml(summarize(records, NOW), [], null, b)).toMatch(/<h2>Per task<\/h2>/)
 })
 
 test('balance: a subagent on a stronger model is an escalation, not a cheaper pick', () => {
@@ -609,7 +557,7 @@ test('compareWith reprices old turns on the chosen model and effort, whatever ba
   const first = summarize([t], NOW).today
   expect(first.balanceUsd < 0).toBe(true)
   const s = summarize([t], NOW, { model: 'opus', effort: 'medium' }).today
-  // Same model: nothing to re-price (effort is measured by the trial, not guessed).
+  // Same model: nothing to re-price (effort is not re-priced by a guess).
   close(s.withoutUsd, cost(U, 'opus')!)
   close(s.balanceUsd, 0)
   expect(s.savedUsd).toBe(0)
@@ -649,12 +597,10 @@ test('the rows name the comparison and drop the reference row when it is the sam
   expect(statsText(r)).toMatch(/compareWith: first/)
 })
 
-test('balance: an escalation never uses the control group, it falls back to the re-pricing with no time saved', () => {
-  // Control: opus chats the router wanted on haiku. The routed task went haiku low → haiku high, a step up.
+test('balance: an effort-only step up is an escalation the re-pricing prices at nothing', () => {
   const up = { from: { model: 'haiku', effort: 'low' as const }, to: { model: 'haiku', effort: 'high' as const } }
-  const records = [...CONTROL(MIN_CONTROL), ...task('a', up, [{ baseline: 'haiku', effort: 'high', baseEffort: 'low', durationMs: 60 * SEC }])]
-  const b = balance(records)
-  expect([b.routed, b.measured, b.estimated, b.timed]).toEqual([1, 0, 1, 0])
+  const b = balance(task('a', up, [{ baseline: 'haiku', effort: 'high', baseEffort: 'low', durationMs: 60 * SEC }]))
+  expect(b.routed).toBe(1)
   // Same model, effort only: the re-pricing claims nothing either way.
   close(b.parts.escalation, 0)
   expect(b.parts.cheaper).toBe(0)
@@ -671,12 +617,6 @@ test('a turn with an unknown effort level gets no effort re-pricing instead of N
   close(s.referenceUsd, 2 * cost(U, 'opus')!)
   expect(Number.isFinite(s.balanceUsd)).toBe(true)
   expect(Number.isFinite(s.vsReferenceUsd)).toBe(true)
-})
-
-test('balance: a cheaper model at a higher effort is partly an escalation, so it is not measured against the control group either', () => {
-  const mixed = { from: { model: 'opus', effort: 'medium' as const }, to: { model: 'haiku', effort: 'high' as const } }
-  const b = balance([...CONTROL(MIN_CONTROL), ...task('a', mixed, [{ effort: 'high', baseEffort: 'medium', durationMs: 60 * SEC }])])
-  expect([b.routed, b.measured, b.estimated, b.timed]).toEqual([1, 0, 1, 0])
 })
 
 test('history: tokens per model and effort become shares, biggest first, medium when the transcript had none', () => {
@@ -724,142 +664,16 @@ test('a prompt that redoes the last answer marks its task as failed (corrected),
   expect(failureOf(e!).reasons).toEqual(['corrected'])
 })
 
-test('a spawn record is kept by parseLog and is no turn of any task', () => {
-  const log = [JSON.stringify(decision({ key: 'a' })), JSON.stringify({ kind: 'spawn', ts: NOW - HOUR + 5, platform: 'claude-code', chat: 'c1', key: 'build it' })].join('\n')
+test('older records parse: a spawn line is skipped, a held-back prompt (holdout, wanted, trial) is a keep', () => {
+  const held = { ...decision({ key: 'a', where: 'keep', classifier: { model: 'haiku', usage: { input: 0, output: 0 }, usd: 0.01 } }), holdout: true, wanted: { model: 'haiku', effort: 'low' }, wantedWhere: 'subagent', trial: 'control' }
+  const log = [JSON.stringify(held), JSON.stringify({ kind: 'spawn', ts: NOW - HOUR + 5, platform: 'claude-code', chat: 'c1', key: 'build it' })].join('\n')
   const rs = parseLog(log)
-  expect(rs.map(r => r.kind)).toEqual(['decision', 'spawn'])
-  const [e] = episodes(rs)
-  expect(e!.turns).toEqual([])
-  expect(summarize(rs, NOW).today.prompts).toBe(1)
-})
-
-// Trial fixtures: one task per chat. `down` = the router (or, in control, its wish) goes to Haiku low.
-const DOWN = { to: { model: 'haiku', effort: 'low' as const } }
-const routerTask = (chat: string, usd: number[], d: Partial<Decision> = {}) => task(chat, { trial: 'router', ...DOWN, ...d }, usd.map(u => ({ usd: u })))
-const controlTask = (chat: string, usd: number[], d: Partial<Decision> = {}) =>
-  task(chat, { trial: 'control', where: 'keep', holdout: true, wanted: DOWN.to, ...d }, usd.map(u => ({ model: 'opus', usd: u })))
-
-test('trial: below MIN_TRIAL tasks in either group there is no saving, only the means', () => {
-  expect(MIN_TRIAL).toBe(5)
-  const records = [...routerTask('r0', [1]), ...controlTask('k0', [2]), ...controlTask('k1', [4])]
-  const all = trial(records)[0]!
-  expect(all.kind).toBe('all')
-  expect([all.router.tasks, all.control.tasks]).toEqual([1, 2])
-  // The router task pays its classifier ($0.01); a control task does not (no router, no classifier).
-  close(all.router.usd, 1.01)
-  close(all.control.usd, 3)
-  expect(all.saving).toBe(null)
-})
-
-test('trial: the saving is control mean − router mean with a Welch 95 % interval', () => {
-  const records = [
-    ...[1, 2, 3, 4, 5].map((u, i) => routerTask(`r${i}`, [u - 0.01])).flat(),
-    ...[2, 4, 6, 8, 10].map((u, i) => controlTask(`k${i}`, [u])).flat(),
-  ]
-  const all = trial(records)[0]!
-  close(all.router.usd, 3)
-  close(all.control.usd, 6)
-  // Sample variances 2.5 and 10: se = √(2.5/5 + 10/5) = √2.5.
-  const half = 1.96 * Math.sqrt(2.5)
-  close(all.saving!.value, 3)
-  close(all.saving!.low, 3 - half)
-  close(all.saving!.high, 3 + half)
-})
-
-test('trial: a task costs all its prompts, subagents and the session it started; that session is not a task of its own', () => {
-  const r = task('r', { trial: 'router', where: 'session', to: { model: 'opus', effort: 'medium' } }, [{ usd: 1 }, { usd: 0.5, agentId: 'a1' }],
-    [{ d: { follows: 'continues' }, turns: [{ usd: 2 }] }])
-  const t0 = NOW - DAY
-  // The new session's prompt may end differently (a note added): the first 60 characters decide.
-  const words = 'do the thing in the settings screen and keep the old layout as it is'
-  const spawn: Entry = { kind: 'spawn', ts: t0 + 50, platform: 'claude-code', chat: 'r', key: words }
-  const child = task('s', { ts: t0 + 60, key: `${words}, context: the plan`, where: 'here', to: { model: 'opus', effort: 'medium' } }, [{ ts: t0 + 70, usd: 3 }])
-  // A session with the same words but started much later is its own task.
-  const late = task('s2', { ts: t0 + 60 * 60_000, key: 'do the thing', trial: 'router', ...DOWN }, [{ ts: t0 + 60 * 60_000 + 1, usd: 7 }])
-  const rows = trial([...r, spawn, ...child, ...late])
-  const session = rows.find(x => x.kind === 'session')!
-  expect(session.router.tasks).toBe(1)
-  // 1 + 0.5 + 2 + 3, and three classifier calls of $0.01.
-  close(session.router.usd, 6.53)
-  expect(rows[0]!.router.tasks).toBe(2)
-})
-
-test('trial: a declined offer stays in the router group, and tasks outside the trial do not count', () => {
-  const declined: Entry = { kind: 'accept', ts: NOW - DAY + 5, platform: 'claude-code', chat: 'r', decision: NOW - DAY, outcome: 'declined' }
-  const records = [
-    ...task('r', { trial: 'router', where: 'subagent', outcome: 'asked', to: { model: 'haiku', effort: 'low' } }, [{ usd: 2 }]), declined,
-    ...task('x', DOWN, [{ usd: 100 }]),
-  ]
-  const rows = trial(records)
-  expect(rows[0]!.router.tasks).toBe(1)
-  expect(rows.find(x => x.kind === 'subagent')!.router.tasks).toBe(1)
-})
-
-test('trial: kinds come from where the router sent (or wanted to send) the task; an unknown effort counts as medium', () => {
-  const records = [
-    ...routerTask('down', [1]),
-    ...routerTask('up', [1], { from: { model: 'haiku', effort: 'low' }, to: { model: 'opus', effort: 'high' } }),
-    // No effort in the chat: medium → low is cheaper.
-    ...routerTask('noEffort', [1], { from: { model: 'opus' }, to: { model: 'opus', effort: 'low' } }),
-    ...controlTask('sub', [1], { wantedWhere: 'subagent' }),
-    // An older control record without `trial` still counts as control.
-    ...task('old', { where: 'keep', holdout: true, wanted: DOWN.to }, [{ usd: 1 }]),
-  ]
-  const rows = trial(records)
-  const n = (kind: string) => { const r = rows.find(x => x.kind === kind); return r ? [r.router.tasks, r.control.tasks] : null }
-  expect(n('all')).toEqual([3, 2])
-  expect(n('cheaper')).toEqual([2, 1])
-  expect(n('dearer')).toEqual([1, 0])
-  expect(n('subagent')).toEqual([0, 1])
-  expect(n('session')).toBe(null)
-})
-
-test('trial: a router task that kept the setting (or moved neither way) is in no cheaper/dearer row, only in all', () => {
-  const records = [
-    ...routerTask('kept', [1], { where: 'keep', to: { model: 'opus', effort: 'medium' } }),
-    ...routerTask('same', [1], { outcome: 'asked', to: { model: 'opus', effort: 'medium' } }),
-    // No effort in the chat and none in the pick: the same setting.
-    ...routerTask('blank', [1], { where: 'keep', from: { model: 'opus', effort: '' }, to: { model: 'opus', effort: '' } }),
-  ]
-  const rows = trial(records)
-  expect(rows.find(x => x.kind === 'all')!.router.tasks).toBe(3)
-  expect(rows.find(x => x.kind === 'cheaper')).toBeUndefined()
-  expect(rows.find(x => x.kind === 'dearer')).toBeUndefined()
-})
-
-test('trial: Codex and OpenCode model ids rank by the tier the platform maps them to', () => {
-  const codex = { haiku: 'gpt-6-luna', sonnet: 'gpt-6.1-terra', opus: 'gpt-6.1-sol', fable: 'gpt-6-astra' }
-  const records = [
-    ...routerTask('down', [1], { platform: 'codex', from: { model: 'gpt-6.1-sol', effort: 'medium' }, to: { model: 'gpt-6-luna', effort: 'medium' } }),
-    ...routerTask('up', [1], { platform: 'codex', from: { model: 'gpt-6-luna', effort: 'medium' }, to: { model: 'gpt-6-astra', effort: 'medium' } }),
-    ...controlTask('kdown', [1], { platform: 'codex', from: { model: 'gpt-6-astra', effort: 'low' }, wanted: { model: 'gpt-6.1-terra', effort: 'low' } }),
-  ]
-  const rows = trial(records, -Infinity, codex)
-  const n = (kind: string) => { const r = rows.find(x => x.kind === kind); return r ? [r.router.tasks, r.control.tasks] : null }
-  expect(n('cheaper')).toEqual([1, 1])
-  expect(n('dearer')).toEqual([1, 0])
-})
-
-test('trial: a session started from a started session still counts for the task at the root', () => {
-  const t0 = NOW - DAY
-  const a = task('a', { trial: 'router', where: 'session', to: { model: 'opus', effort: 'medium' } }, [{ usd: 1 }])
-  const toB = 'build the export screen with the csv writer and the column picker'
-  const toC = 'write the tests for the csv writer of the export screen in the app'
-  const spawnB: Entry = { kind: 'spawn', ts: t0 + 50, platform: 'claude-code', chat: 'a', key: toB }
-  const b = task('b', { ts: t0 + 60, key: toB, where: 'here', to: { model: 'opus', effort: 'medium' } }, [{ ts: t0 + 70, usd: 2 }])
-  const spawnC: Entry = { kind: 'spawn', ts: t0 + 80, platform: 'claude-code', chat: 'b', key: toC }
-  const c = task('c', { ts: t0 + 90, key: toC, where: 'here', to: { model: 'opus', effort: 'medium' } }, [{ ts: t0 + 95, usd: 4 }])
-  const rows = trial([...a, spawnB, ...b, spawnC, ...c])
-  const all = rows.find(x => x.kind === 'all')!
-  expect(all.router.tasks).toBe(1)
-  // 1 + 2 + 4, and three classifier calls of $0.01.
-  close(all.router.usd, 7.03)
-})
-
-test('trial: `since` keeps the tasks that started then or later', () => {
-  const records = [...routerTask('r', [1]), ...controlTask('k', [1])]
-  expect(trial(records, NOW).length).toBe(1)
-  expect(trial(records, NOW)[0]!.router.tasks + trial(records, NOW)[0]!.control.tasks).toBe(0)
+  expect(rs.map(r => r.kind)).toEqual(['decision'])
+  const s = summarize(rs, NOW).today
+  expect([s.prompts, s.routed, s.modelChanges, s.subagents]).toEqual([1, 0, 0, 0])
+  const b = balance(rs)
+  expect(b.routed).toBe(0)
+  close(b.usd, -0.01)
 })
 
 // Transcript fixtures: chat c1 is transcript s1; requests of 1 000 output tokens each on Opus.
@@ -891,50 +705,4 @@ test('withTranscripts: a cut-off turn gets the tokens of the main-chat requests 
 test('withTranscripts: a chat with no transcript id or no scan stays as it is', () => {
   const records: Entry[] = [decision({ chat: 'c2' }), turn('opus', 'opus', { chat: 'c2', usage: undefined })]
   expect(withTranscripts(records, [{ session: 's1', requests: [REQ(NOW - HOUR)] }])).toEqual(records)
-})
-
-test('trialText: per kind the tasks and mean cost of each group, the saving with its interval, or too little data', () => {
-  const records = [
-    ...[1, 2, 3, 4, 5].map((u, i) => routerTask(`r${i}`, [u - 0.01])).flat(),
-    ...[2, 4, 6, 8, 10].map((u, i) => controlTask(`k${i}`, [u])).flat(),
-    ...controlTask('sub', [1], { wantedWhere: 'subagent' }),
-  ]
-  const t = trialText(trial(records))
-  expect(t).toMatch(/Measured per task/)
-  expect(t).toMatch(/All tasks\s+5 · \$3\.00\s+6 · \$5\.17\s+/)
-  expect(t).toMatch(/Cheaper here\s+5 · \$3\.00\s+5 · \$6\.00\s+\+\$3\.00 \(−\$0\.10 to \+\$6\.10\)/)
-  expect(t).toMatch(/Subagent\s+0 · –\s+1 · \$1\.00\s+too little data/)
-  expect(trialText(trial([]))).toMatch(/no tasks in the trial yet/)
-  const html = statsHtml(summarize(records, NOW), [], null, undefined, trial(records))
-  expect(html).toMatch(/Measured per task/)
-  expect(html).toMatch(/Cheaper here/)
-  expect(statsText(summarize(records, NOW), null, undefined, trial(records))).toMatch(/All tasks/)
-})
-
-test('measuredLabel: the pane\'s short line for the whole trial', () => {
-  const enough = [...[1, 2, 3, 4, 5].map((u, i) => routerTask(`r${i}`, [u - 0.01])).flat(), ...[2, 4, 6, 8, 10].map((u, i) => controlTask(`k${i}`, [u])).flat()]
-  expect(measuredLabel(trial(enough)[0]!)).toBe('+$3.00 per task (−$0.10 to +$6.10)')
-  expect(measuredLabel(trial(routerTask('r', [1]))[0]!)).toBe('1 router / 0 control tasks, too little data')
-})
-
-test('placeTask: the first prompt of a task draws the group once; later prompts of the task keep it', () => {
-  let draws = 0
-  const control = () => (draws++, true)
-  const a = placeTask(null, { ts: 0, key: 'fix the bug' }, { eligible: true, control })
-  expect(a).toEqual({ task: { end: 0, keys: ['fix the bug'], control: true }, trial: 'control', quiet: true })
-  // Goes on with it: no new draw, no trial mark, still quiet while the router wants to act.
-  const b = placeTask(a.task, { ts: 60_000, key: 'still broken', follows: 'corrects' }, { eligible: true, control })
-  expect(b).toEqual({ task: { end: 60_000, keys: ['fix the bug', 'still broken'], control: true }, quiet: true })
-  // A later prompt the router would not change (or that is exempt) is not held back.
-  expect(placeTask(b.task, { ts: 70_000, key: 'ok', follows: 'continues' }, { eligible: false, control }).quiet).toBe(false)
-  expect(draws).toBe(1)
-  // New work starts a new task: a router task when the draw says so.
-  const c = placeTask(b.task, { ts: 80_000, key: 'add dark mode', follows: 'new' }, { eligible: true, control: () => false })
-  expect(c).toEqual({ task: { end: 80_000, keys: ['add dark mode'], control: false }, trial: 'router', quiet: false })
-  // A task that starts with nothing to change is outside the trial, with no draw.
-  const d = placeTask(null, { ts: 0, key: 'ok' }, { eligible: false, control })
-  expect(d).toEqual({ task: { end: 0, keys: ['ok'], control: false }, quiet: false })
-  expect(draws).toBe(1)
-  // Past 30 minutes the same chat starts over.
-  expect(placeTask(a.task, { ts: 31 * 60_000, key: 'x', follows: 'continues' }, { eligible: true, control: () => false }).trial).toBe('router')
 })

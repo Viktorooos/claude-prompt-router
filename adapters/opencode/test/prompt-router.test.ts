@@ -217,7 +217,7 @@ test('options come from the JSON file when the plugin gets none', async () => {
   const dir = tmp()
   writeFileSync(join(dir, 'opts.json'), JSON.stringify({ effortMode: 'auto', classifier: 'opus' }))
   const { client, calls } = mockClient({ reply: PICK.here, history: ongoing(S) })
-  const hooks: any = await routerPlugin(tool)({ client }, { stateDir: dir, optionsFile: join(dir, 'opts.json'), draw: () => false })
+  const hooks: any = await routerPlugin(tool)({ client }, { stateDir: dir, optionsFile: join(dir, 'opts.json') })
   const out = await send(hooks, S, 'rename that variable')
   assert.equal(out.message.variant, 'low')
   assert.equal(named(calls, 'session.prompt')[0].args.body.model.modelID, 'claude-opus-5-5')
@@ -376,7 +376,7 @@ async function fromFile(o: Parameters<typeof setup>[0], options: Record<string, 
   const dir = tmp()
   writeFileSync(join(dir, 'prompt-router.json'), JSON.stringify(options))
   const { client, calls } = mockClient(o)
-  const hooks: any = await routerPlugin(tool)({ client }, { stateDir: dir, optionsFile: join(dir, 'prompt-router.json'), draw: () => false })
+  const hooks: any = await routerPlugin(tool)({ client }, { stateDir: dir, optionsFile: join(dir, 'prompt-router.json') })
   const config: any = {}
   await hooks.config(config)
   return { hooks, client, calls, dir, config }

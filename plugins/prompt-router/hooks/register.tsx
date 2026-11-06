@@ -2,14 +2,14 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, heldWhere, inHoldout, isRedo, promptKey, trialExempt, wantsChange, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, isRedo, promptKey, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, measuredLabel, placeTask, trial, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
+import { REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CardIcon } from '../core/panel.ts'
-import type { Balance, Balances, Compare, Decision, Entry, History, Report, TaskState, TrialRow, UsageScan } from '../core/stats.ts'
+import type { Balance, Balances, Compare, Decision, Entry, History, Report, UsageScan } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -493,12 +493,11 @@ let routerAsked = false
 
 // Notes one routing decision (with what the classifier cost); returns its time stamp. Every result of
 // decide() passes here once, so the pane's last decision is written here too.
-async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick, wanted?: Decision['to'], wantedWhere?: Decision['wantedWhere']) {
+async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick) {
   const ts = await $.clock.now()
   if (cfg.stats === 'on') {
-    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(wanted ? { holdout: true as const, wanted } : {}), ...(wantedWhere ? { wantedWhere } : {}), ...(lastTrial ? { trial: lastTrial } : {}), ...(sessionId ? { session: sessionId } : {}), ...(lastRedo ? { redo: true as const } : {}) })
+    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(sessionId ? { session: sessionId } : {}), ...(lastRedo ? { redo: true as const } : {}) })
   }
-  lastTrial = undefined
   lastClassifier = null
   lastFollows = undefined
   const last: LastDecision = { where: p?.other ? 'other' : where, outcome: outcome === 'asked' ? 'asked' : 'applied', model: to.model, effort: to.effort, why: p?.why ?? '', from: { model: pickedFrom, effort: now }, ts, ...lastCtx }
@@ -555,23 +554,6 @@ async function flush($: EngineInterface) {
   }
 }
 
-// The control group for the savings stats, drawn per task (a prompt and the prompts that go on with
-// it, by the same rule as the stats' tasks): when the router wants to act on a task's first prompt,
-// holdoutPct % of such tasks run with no router at all. A prompt that names a model or effort, or that
-// wants xhigh or max, is never held back (and never starts a control task).
-let task: TaskState | null = null
-let lastTrial: Decision['trial']
-
-// Places the prompt in its task; true when the router must leave it alone (a control task).
-async function holdsOut($: EngineInterface, text: string, p: Pick | null, now: Level | '') {
-  const ts = await $.clock.now()
-  const eligible = !!p && wantsChange(p, now, cfg) && !trialExempt(text, p)
-  const r = placeTask(task, { ts, key: lastPromptKey, follows: lastFollows }, { eligible, control: () => inHoldout(`${chatId}:${ts}:${lastPromptKey}`, Number(cfg.holdoutPct)) })
-  task = r.task
-  lastTrial = r.trial
-  return r.quiet
-}
-
 // A tool call that did not run: denied, or an error result (at the top or in `result`).
 function failed(r: unknown) {
   if (!r || typeof r !== 'object') return false
@@ -606,16 +588,10 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     }
   }
   if (!p) {
-    if (lastClassifier) await holdsOut($, text, null, now)
     if (lastClassifier) await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now)
     return e
   }
 
-  // A here prompt typed over a running turn is left alone below whatever the group, so it is not drawn.
-  if (await holdsOut($, text, p.where === 'here' && e.turnId ? null : p, now)) {
-    await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now, p, { model: p.model, effort: p.effort }, heldWhere(p))
-    return e
-  }
   if (p.where === 'here') {
     // A prompt typed over a running turn belongs to that work: its model and effort stay.
     if (e.turnId) {
@@ -701,12 +677,11 @@ const LABELS: Record<Option, string> = {
   notifications: 'Notifications',
   stats: 'Savings stats',
   openPane: 'Open pane by itself',
-  holdoutPct: 'Control group',
   compareWith: 'Compare with',
 }
 
-// The order a press steps through: numbers from low to high with off last (40%, 50% … off; 0, 5, 10,
-// 20), any other list as it stands (its default first).
+// The order a press steps through: numbers from low to high with off last (40%, 50% … off), any
+// other list as it stands (its default first).
 function stepOrder(values: readonly string[]): readonly string[] {
   const at = (v: string) => (v === 'off' ? Infinity : Number.parseFloat(v))
   return values.every(v => !Number.isNaN(at(v))) ? [...values].sort((a, b) => at(a) - at(b)) : values
@@ -730,8 +705,6 @@ function nextCompare(part: 'model' | 'effort'): string {
   const v = model === 'first' || model === 'history' ? model : `${model}-${effort}`
   return (SWITCHES.compareWith as readonly string[]).includes(v) ? v : SWITCHES.compareWith.find(x => x.startsWith(`${model}-`)) ?? SWITCHES.compareWith[0]
 }
-
-const shown = (k: Option, v: string) => (k === 'holdoutPct' ? (v === '0' ? 'off' : `${v} %`) : v)
 
 // Where settings.json keeps the mod's options: the entry loadOptions reads them from.
 function optionsEntry(all: Record<string, unknown>) {
@@ -822,11 +795,11 @@ async function paneData($: EngineInterface) {
   const at = cfg.sessionSuggestions === 'off' ? 0 : Number.parseInt(cfg.newSessionAt, 10) || 0
   const model = knownModel(seenModel || (await chatModel($)))
   const effort = await currentLevel($)
-  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances; measured: TrialRow } | null = null
+  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances } | null = null
   if (cfg.stats === 'on') {
     const records = [...parseLog(await readStats($)), ...pending]
     const c = compareNow()
-    savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now), measured: trial(records)[0]! }
+    savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now) }
   }
   return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
 }
@@ -854,7 +827,6 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     home = $.plugin.root.split('/.claude/')[0] ?? ''
     chatId = `${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
-    task = null
     try {
       sessionId = String((await $.session.id()) ?? '')
     } catch {
@@ -1034,7 +1006,6 @@ export const register: Register = (on, options) => {
       // The router moved this chat to another model since the last turn (not the person's own switch).
       const switched = !e.agentId && !!lastTurnModel && !!model && model !== lastTurnModel && model !== base
       if (!e.agentId && model) lastTurnModel = model
-      if (!e.agentId && task) task.end = await $.clock.now()
       // The router asked and the turn ended with no switch, subagent or session: the person kept their setting.
       if (!e.agentId && routerAsked && lastAsked) {
         pending.push({ kind: 'accept', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, decision: lastAsked.ts, outcome: 'declined' })
@@ -1058,18 +1029,14 @@ export const register: Register = (on, options) => {
     return r
   })
 
-  // The router's question was shown, or a session started (its prompt is noted, so the new session's
-  // work counts for this task, and an offered session counts as taken).
+  // The router's question was shown, or a session started (an offered session counts as taken).
   on('tool.call', async ($, e, next) => {
     const r = await next(e)
     try {
-      const a = e as { tool?: unknown; questions?: unknown; prompt?: unknown }
+      const a = e as { tool?: unknown; questions?: unknown }
       const name = String(a.tool ?? '')
       if (name === 'AskUserQuestion' && Array.isArray(a.questions) && a.questions.some(q => (q as { header?: unknown })?.header === 'Prompt Router')) routerAsked = true
-      if (/(^|__)start_session$/.test(name) && !failed(r)) {
-        if (lastAsked?.where === 'session') await noteAccept($)
-        if (enabled && cfg.stats === 'on') pending.push({ kind: 'spawn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, key: promptKey(String(a.prompt ?? '')) })
-      }
+      if (/(^|__)start_session$/.test(name) && !failed(r) && lastAsked?.where === 'session') await noteAccept($)
     } catch (err) {
       await log($, 'stats', err)
     }
@@ -1141,16 +1108,15 @@ export const register: Register = (on, options) => {
       const c = compareNow()
       const report = summarize(records, now, c)
       const perTask = balance(records)
-      const measured = trial(records)
       const page = `${home}/.claude/mods-logs/prompt-router-stats.html`
       let link = ''
       try {
-        await $.fs.write(page, statsHtml(report, byDay(records, now, 30, c), c, perTask, measured))
+        await $.fs.write(page, statsHtml(report, byDay(records, now, 30, c), c, perTask))
         link = `\n\nWith a graph of the last 30 days: file://${page}`
       } catch (err) {
         await log($, 'stats page', err)
       }
-      return { text: `${statsText(report, c, perTask, measured)}${link}` }
+      return { text: `${statsText(report, c, perTask)}${link}` }
     }
     const now = await currentLevel($)
     const { value } = await $.state.get(OVERRIDE)
@@ -1204,9 +1170,6 @@ export const register: Register = (on, options) => {
     }
     const s = d.savings?.report[panePeriod] ?? null
     const b: Balance | null = d.savings?.balance[panePeriod] ?? null
-    // The trial over all time: a period would leave too few tasks.
-    const m = d.savings?.measured
-    const measured = m && m.router.tasks + m.control.tasks ? m : null
     const c = compareNow()
     const money = (v: number) => (Math.abs(v) < 0.005 ? 'none' : v > 0 ? 'up' : 'down')
     const MONEY_COLOR = { up: TONES.calm[0], down: TONES.over[0], none: undefined }
@@ -1502,16 +1465,15 @@ export const register: Register = (on, options) => {
     const byTasks = b ? [...b.byModel].sort((x, y) => y.tasks - x.tasks) : []
     const shade = (i: number) => VIOLETS[Math.min(i, VIOLETS.length - 1)]!
     const pctOf = (k: number) => `${allTasks ? Math.round((k / allTasks) * 100) : 0} %`
-    const details = b ? fold('details', 'Details', `Balance ${signed(b.usd.value)} · ${accuracyText(b).split(' (')[0]} right`, 'chart', VIOLET, () => (term
+    const details = b ? fold('details', 'Details', `Balance ${signed(b.usd)} · ${accuracyText(b).split(' (')[0]} right`, 'chart', VIOLET, () => (term
       ? (
         <Box key="details-body" flexDirection="column" gap={0}>
           <Box flexDirection="column">
-            {row('balance', balanceName, signed(b.usd.value), { bold: true, color: MONEY_COLOR[money(b.usd.value)] })}
+            {row('balance', balanceName, signed(b.usd), { bold: true, color: MONEY_COLOR[money(b.usd)] })}
             <Text dimColor>{balanceWhat}</Text>
           </Box>
           {row('accuracy', 'Decisions right', accuracyText(b))}
           {t.length > 1 ? row('tasks', 'Tasks', tasksText) : null}
-          {measured ? row('measured', 'Measured vs. control', measuredLabel(measured)) : null}
           <Text dimColor>Full table: /router stats.</Text>
         </Box>
       )
@@ -1521,7 +1483,7 @@ export const register: Register = (on, options) => {
             <Box flexDirection="row" alignItems="center" gap={2}>
               <Box key="balance" flexDirection="column" gap={0} flexGrow={1} flexShrink={1} minWidth={0}>
                 <Text dimColor>{balanceName}</Text>
-                <Svg source={bigNumberSvg(signed(b.usd.value), MONEY_COLOR[money(b.usd.value)] ?? TONES.idle[0], px, 30)} alt={`${balanceName} ${signed(b.usd.value)}`} height={38} />
+                <Svg source={bigNumberSvg(signed(b.usd), MONEY_COLOR[money(b.usd)] ?? TONES.idle[0], px, 30)} alt={`${balanceName} ${signed(b.usd)}`} height={38} />
                 <Text dimColor>vs. your own picks, classifier included</Text>
               </Box>
               <Box key="accuracy" flexShrink={0}>
@@ -1529,7 +1491,6 @@ export const register: Register = (on, options) => {
               </Box>
             </Box>
             <Text dimColor>{b.accuracy ? `Decisions right · 95 %: ${Math.round(b.accuracy.low)}–${Math.round(b.accuracy.high)} %` : 'Decisions right · not enough tasks yet'}</Text>
-            {measured ? <Text dimColor>{`Measured vs. control: ${measuredLabel(measured)}`}</Text> : null}
           </Box>
           {byTasks.length ? (
             <Box key="tasks" flexDirection="column" gap={1}>

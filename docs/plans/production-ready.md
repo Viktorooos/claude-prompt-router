@@ -1,0 +1,72 @@
+# Production ready: opravy z analýzy 2026-11-06
+
+Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí data a funguje na macOS, Linuxu i Windows. Pořadí podle dopadu: Codex teď spíš tokeny spotřebovává (bod A), Claude Code funguje, ale ztrácí statistiky (bod B), OpenCode nikdy neběžel (bod C).
+
+## Výchozí stav (naměřeno)
+
+- Testy: 410/410 (CC 226, Codex 101, OpenCode 76, shared 6, usage-scan 1). Živý eval v CC: 24 vzorků, 22 správně, obě chyby kvůli uživatelovým `rules` a `newSessionAt`, ne kvůli klasifikátoru.
+- Codex, prompt „ahoj co umis“ na gpt-6.1-sol ultra (rollout `~/.codex/sessions/2026/11/06/rollout-2026-11-06T21-28-08-01a1b28c-….jsonl`), celkem ~41 s:
+  - 0–9,5 s: hook `UserPromptSubmit` (klasifikace přes `codex exec`), prompt čeká,
+  - 14–22 s: agent volá MCP `route` (druhá klasifikace, 7,7 s), protože hook v kontrolní skupině mlčel a `~/.codex/AGENTS.md` říká volat `route`, když chybí poznámka „[Prompt Router: …“,
+  - 22–41 s: sol ultra přemýšlí a hledá na webu (router chtěl gpt-6-luna low, kontrolní skupina ho umlčela).
+  - Jedna klasifikace = 69–75k tokenů (`codex exec` načte celý kontext Codexu), dvě klasifikace ~145k, samotná odpověď ~173k.
+  - Interní požadavek desktopové appky („This is an app-generated request for a suggested next user message…“) se klasifikoval taky (~47k tokenů) a router na něj „applied“ rozhodnutí.
+
+## Kroky
+
+### 0. Zrušit kontrolní skupinu (nejdřív, před A–C)
+
+- [x] 0. Odstranit kontrolní skupinu a měřenou úsporu (60–90 min, kdyžtak rozdělit na jádro + Claude Code a adaptéry). Pryč: volba `holdoutPct` (`plugin.json`, `adapters/codex/install.ts`, `adapters/opencode/install.ts:26`), losování a mlčení (`inHoldout` v `core/router.ts:114`, `placeTask`/`trialExempt`/`heldWhere`/`wantsChange`, pokud je nepotřebuje nic jiného), `trial()` a Welch interval v `core/stats.ts`, sekce „Measured saving“ v `/router stats`, na stránce a v panelu (`core/panel.ts`, `register.tsx`), totéž v `adapters/codex/hook.ts`, `adapters/codex/stats.ts`, `adapters/opencode/prompt-router.ts`, `adapters/opencode/stats.ts`. Zůstává: odhad úspor podle ceníku (chování z 0.9.0). U ostatních novinek z 0.10.0 (odmítnuté nabídky, redo, cena úlohy se subagenty, `scripts/usage-scan.mjs` pro useknuté tahy) ověřit, jestli je odhad používá: co ano, zůstává, co ne, pryč. Staré řádky logu s poli `holdout`, `trial`, `wanted` se musí dál načíst (pole se ignorují). README: sekce „Measured saving: router vs. control“ (ř. 275), volba v Options, FAQ, řádek 0.10.0 v changelogu. Ověření: `grep -rn -i 'holdout\|trial(' plugins adapters README.md` nic nenajde (kromě čtení starých záznamů), testy z „Jak ověřit“ zelené (testy kontrolní skupiny smazat spolu s funkcí, ostatní nesmí oslabit), `/router stats` na skutečném logu ukáže odhad bez chyby.
+
+  Poznámky ke kroku 0 (hotovo):
+  - Pryč: volba `holdoutPct` (plugin.json, install.ts v Codexu i OpenCode, README), `inHoldout`, `namesSetting`, `wantsChange`, `trialExempt`, `heldWhere` (router.ts), `placeTask`/`TaskState`, `trial()` s Welchem a celý jeho text (`trialText`, `trialHtml`, `measuredLabel`), mediány kontrolní skupiny, kvartily, ušetřený čas (`minutes`, `timeText`), `classOf`, `moveOf`, `MIN_CONTROL`. Záznamy `spawn` se už nepíšou (sloužily jen trialu), takže cena session spuštěné z úkolu se k úkolu nepřičítá. V Codexu zůstal soubor úkolů jen kvůli `offer` (párování přijaté nabídky) a vypršení po `end`.
+  - Zůstalo: váhy re-worku a selhání, části (cheaper/escalation/rework/classifier), přesnost (Wilson), odmítnuté nabídky, redo, náklady úkolu včetně subagentů, `usage-scan.mjs` pro useknuté tahy, `minutesPerTask` v tabulce modelů. `balance()` teď každý routovaný úkol ocení přeceněním tokenů na baseline (jako odhad tokenů), effort se nepřeceňuje.
+  - `~` (rough) znamená jen „méně než 12 routovaných úkolů“.
+  - Staré řádky logu s `holdout`/`trial`/`wanted`/`wantedWhere` a záznamy `spawn` se načtou a pole se ignorují; rozhodnutí s `holdout: true` je obyčejný keep (test v `stats.test.ts`).
+  - Na skutečném logu (720 záznamů, 74 routovaných úkolů) vychází bilance −$7.82.
+  - Pro další kroky: krok 2 už nemusí řešit kontrolní skupinu v Codexu (poznámka „i v kontrolní skupině“ odpadá). Krok 8: `namesSetting` už neexistuje. Krok 9: trial už nepáruje session podle prvních 60 znaků `promptKey`, rozhodnutí o zkrácení/hashování je volnější. Klíče `holdoutPct` v `~/.claude/settings.json` a `~/.codex/prompt-router.json` smaže uživatel (konfigurace se v kroku neměnila).
+  - Testy: CC 202, node 1, codex 99, opencode 73, shared 6 (smazané jen testy odstraněné funkce).
+
+### A. Codex
+
+- [ ] 1. Zlehčit klasifikační `codex exec` (30–60 min). Nejdřív měření: spustit klasifikátor ručně s variantami a zapsat `input`/`cacheRead` z `--json` usage: dnešní argumenty; `+ --ignore-user-config` (bez MCP serverů, pluginů a apps z config.toml, auth zůstává); `+ -c` pro vypnutí AGENTS.md (zjistit klíč, např. `project_doc_max_bytes=0`, v `codex exec --help` / dokumentaci 0.166); `--ignore-rules`. Vybrat nejmenší variantu, která pořád vrací JSON podle schématu. Soubory: `adapters/codex/hook.ts:265-268` (`codexRunner` args). Ověření: unit test na argumenty v `adapters/codex/test/hook.test.ts`; živě jedna klasifikace pod ~10k vstupních tokenů a pod ~4 s (cíl upřesnit podle měření).
+- [ ] 2. Jen jedna klasifikace na prompt (30–60 min). (a) Hook vrací neutrální poznámku vždy, když proběhl, i v kontrolní skupině, u `keep` a při chybě (např. `[Prompt Router: checked]`), aby agent podle AGENTS.md `route` nevolal. Poznámka nesmí prozradit rozhodnutí kontrolní skupiny. (b) `route` v `mcp.ts` nejdřív hledá rozhodnutí hooku pro stejný chat a stejný `promptKey` za posledních ~120 s (`prompt-router-tasks.json` / stats) a vrátí ho bez volání klasifikátoru. (c) Upravit text bloku v AGENTS.md v `install.ts`. Soubory: `adapters/codex/hook.ts:459,493` (návraty `null`), `hook.ts:336`, `adapters/codex/mcp.ts:52`, `adapters/codex/install.ts` (AGENTS.md text). Ověření: unit testy (holdout → poznámka bez rozhodnutí; route s čerstvým rozhodnutím nevolá runner); živě jeden prompt = jeden řádek `pick` v `~/.codex/log/prompt-router.log`.
+- [ ] 3. Přeskočit interní požadavky appky (30 min). Přidat „This is an app-generated request“ (a podobné prefixy appky) do `INJECTED` v `adapters/codex/hook.ts:154` a stejný filtr v `mcp.ts`. Ověření: unit test; živě po tahu v desktopové appce žádný `pick` na tenhle text.
+- [ ] 4. Cena v `/router stats` pro Codex (30–60 min). GPT modely nejsou v `core/prices.ts`, stats ukazují $0. Doplnit GPT modely do ceníku (ceny API OpenAI), ať stats ukazují dolary jako v Claude Code. Soubory: `plugins/prompt-router/core/prices.ts`, `core/stats.ts:218-221`, `adapters/codex/stats.ts`. Ověření: `node --test adapters/codex/test/stats.test.ts` s turnem na `gpt-6.1-sol` ukazuje nenulovou cenu nebo tokeny.
+- [ ] 5. Windows pro Codex (30–60 min). `codexBin` hledá `codex` bez `.cmd`/`.exe` (`hook.ts:257`), `isOurs` regex nezná zpětná lomítka (`install.ts:122`, druhý install vytvoří duplicitu a uninstall nic nenajde), quoting příkazu přes `JSON.stringify` (`install.ts:112`). Ověření: unit testy s `path.win32` cestami a `process.platform` přes deps.
+
+### B. Claude Code
+
+- [ ] 6. Statistiky a log bez ztrát při paralelních sessions (30–60 min). `flush()` a `log()` dělají read-modify-write bez zámku a `pending` se maže před zápisem. Varianta: append-only zápis nových řádků (zjistit, jestli `$.fs` má append), rotace jen občas se zápisem přes tmp + rename (jako `scripts/usage-scan.mjs:59-60`); `pending` mazat až po úspěšném zápisu. Soubory: `plugins/prompt-router/hooks/register.tsx:84-92`, `register.tsx:545-556`, `core/stats.ts` (`rotate`). Ověření: test se dvěma souběžnými `flush()`, oba záznamy v souboru; `claude plugin test plugins/prompt-router`.
+- [ ] 7. Domovská složka bez `split('/.claude/')` (30 min). Brát HOME/USERPROFILE a `CLAUDE_CONFIG_DIR` z prostředí modu (zjistit, co `$` nabízí), ne z cesty pluginu; před `session.start` nezapisovat do `/.claude/mods-logs`. Soubory: `register.tsx:35`, `register.tsx:847`. Ověření: unit test s Windows rootem (`C:\Users\x\.claude\plugins\…`) a s vlastním config direm.
+- [ ] 8. Rychlá cesta bez klasifikátoru (30–60 min). „yes“, „ok“, „d“, „option 2“, čísla a velmi krátké odpovědi na otázku agenta → `keep` bez volání modelu. Sdílené pro všechny platformy v `core/router.ts`, napojit v `register.tsx:576-591`, `adapters/codex/hook.ts`, `adapters/opencode/prompt-router.ts`. Ověření: unit testy (žádné volání runneru); živý eval `test/cases.json` případy `yes`, `option2`, `thanks`, `cz_yes`, `es_yes` dál `keep`; README ř. 96 a 592 sedí s kódem.
+- [ ] 9. Soukromí ve statistikách (30 min). `promptKey` ukládá 200 znaků promptu na 90 dní (`register.tsx:499`, `register.tsx:1063`). Podle rozhodnutí níže zkrátit nebo hashovat (trial páruje session podle prvních 60 znaků, commit d45e3d9), a popsat v README v sekci Savings stats, co se ukládá.
+
+### C. OpenCode
+
+- [ ] 10. První živý běh (60 min, jen se souhlasem s instalací OpenCode). Nainstalovat OpenCode, porovnat použité hooky a klienta (`chat.message`, `chat.params`, `client.session.*`, `client.tui.showToast`) s typy `@opencode-ai/plugin`/`@opencode-ai/sdk`, opravit názvy a tvary, upravit mock v `adapters/opencode/test/helpers.ts:34-50` podle skutečných odpovědí. Cesty konfigurace přes `XDG_CONFIG_HOME` a Windows (`install.ts:36`, `prompt-router.ts:103-104`), import shimu na Windows přes `file://` URL (`install.ts:40-43`). Ověření: plugin se načte, jeden prompt zaloguje rozhodnutí, `router_stats` vrátí tabulku; `node --test adapters/opencode/test/`.
+
+### D. Vydání
+
+- [ ] 11. Dokumentace (30 min). README: odznak verze, počty testů (410) a případů evaluace (132), řádek „Unreleased“ v changelogu patří k 0.9.1, řádek o ceně klasifikátoru v Codexu podle měření z kroku 1, tabulka Status.
+- [ ] 12. `/done`, verze, commit (navazuje na otevřený krok 7 v `measured-savings.md`).
+
+## Rozhodnutí, která čekají na uživatele
+
+- `promptKey`: hash, nebo zkrátit na 60 znaků?
+- Instalovat OpenCode kvůli kroku 10?
+
+## Rozhodnutí
+
+- Kontrolní skupina (holdout) a měřená úspora se ruší úplně, úspory jen jako odhad podle ceníku (pokyn uživatele 2026-11-06, krok 0). Do té doby je vypnutá v nastavení: `holdoutPct: "0"` v `~/.claude/settings.json` a `~/.codex/prompt-router.json`; po kroku 0 tyhle klíče smazat. Verze 0.10.0 (krok 7 v `measured-savings.md`) se tím mění: changelog 0.10.0 přepsat podle toho, co z ní zůstane.
+- Codex se má chovat stejně jako v Claude desktop (pokyn uživatele 2026-11-06): stejné funkce i výchozí hodnoty a statistiky v dolarech podle ceníku API OpenAI (krok 4). Kde Codex pluginu něco nedovolí (sám přepnout model nebo effort), co nejbližší náhrada a v README to přiznat.
+- Codex: obě vrstvy proti dvojí klasifikaci (poznámka z hooku i deduplikace v `route`), protože desktopová appka teď spouští hook i MCP nástroj.
+- Rychlá cesta patří do `core/router.ts`, aby se platformy nerozešly.
+
+## Paralelně
+
+Krok 0 udělej první a samostatně, protože sahá do stejných souborů jako A, B i C. Potom jsou bloky A (Codex), B (Claude Code) a C (OpenCode) na sobě nezávislé a můžou běžet jako samostatné sessions ve vlastních worktree. Výjimka: krok 8 sahá do všech adaptérů a do `core/router.ts`, takže ho dělej až po A a C, nebo v jedné session s nimi.
+
+## Jak ověřit
+
+Z kořene repa: `claude plugin test plugins/prompt-router`, `node --test plugins/prompt-router/test/node/`, `node --test adapters/codex/test/`, `node --test adapters/opencode/test/`, `node --test adapters/shared/test/`. Živě: `~/.codex/log/prompt-router.log` (jeden `pick` na prompt), `~/.codex/log/prompt-router-stats.jsonl` (`classifier.usage`), časová osa z rolloutu v `~/.codex/sessions/`.

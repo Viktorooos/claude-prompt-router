@@ -5,7 +5,7 @@ import { test } from 'node:test'
 
 import { findTranscript, route, serve } from '../mcp.ts'
 import { readStats } from '../stats.ts'
-import { PICK, home, never } from './helpers.ts'
+import { PICK, home } from './helpers.ts'
 
 // A rollout of a chat whose current turn (t9) is still open, the prompt already in it.
 function rollout(dir: string, name: string, prompt: string, o: { model?: string; replied?: boolean } = {}) {
@@ -55,7 +55,7 @@ test('route reads the model from the chat and suggests the switch', async () => 
   const h = home({ effortMode: 'auto', modelMode: 'auto' })
   rollout(sessions(h), 'a', 'napiš zprávu pro kolegu')
   const seen: string[] = []
-  const r = await route({ prompt: 'napiš zprávu pro kolegu' }, { codexHome: h, draw: never, runner: async (_p, x) => (seen.push(x.model), PICK.subagent.replace('subagent', 'here')) })
+  const r = await route({ prompt: 'napiš zprávu pro kolegu' }, { codexHome: h, runner: async (_p, x) => (seen.push(x.model), PICK.subagent.replace('subagent', 'here')) })
   assert.match(r, /Prompt Router: for this, switch with `\/model gpt-6-luna low`/)
   assert.deepEqual(seen, ['gpt-6-luna'])
 })
@@ -63,7 +63,7 @@ test('route reads the model from the chat and suggests the switch', async () => 
 test('the open turn of the routed prompt does not count as a running turn', async () => {
   const h = home({ effortMode: 'auto', modelMode: 'auto' })
   rollout(sessions(h), 'a', 'drobnost', { replied: true })
-  const r = await route({ prompt: 'drobnost' }, { codexHome: h, draw: never, runner: async () => PICK.here })
+  const r = await route({ prompt: 'drobnost' }, { codexHome: h, runner: async () => PICK.here })
   assert.match(r, /switch with `\/model/)
 })
 
@@ -72,7 +72,7 @@ test('the desktop skips the subagent offer for here on another model', async () 
   const h = home({ effortMode: 'auto', modelMode: 'auto' })
   rollout(sessions(h), 'a', 'přejmenuj ty klíče', { model: 'gpt-6.1-sol', replied: true })
   const prompts: string[] = []
-  const r = await route({ prompt: 'přejmenuj ty klíče' }, { codexHome: h, draw: never, runner: async p => (prompts.push(p), '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}') })
+  const r = await route({ prompt: 'přejmenuj ty klíče' }, { codexHome: h, runner: async p => (prompts.push(p), '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}') })
   assert.match(r, /switch with `\/model gpt-6\.1-sol low`/)
   assert.doesNotMatch(r, /Subagent|spawn_agent/)
   assert.match(prompts[0], /for here use the current one/)
@@ -81,7 +81,7 @@ test('the desktop skips the subagent offer for here on another model', async () 
 test('the desktop skips the feature with midChatModelDetection auto too', async () => {
   const h = home({ midChatModelDetection: 'auto', effortDetection: 'auto' })
   rollout(sessions(h), 'a', 'přejmenuj ty klíče', { model: 'gpt-6.1-sol', replied: true })
-  const r = await route({ prompt: 'přejmenuj ty klíče' }, { codexHome: h, draw: never, runner: async () => '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}' })
+  const r = await route({ prompt: 'přejmenuj ty klíče' }, { codexHome: h, runner: async () => '{"where": "here", "model": "sonnet", "effort": "low", "why": "a mechanical edit"}' })
   assert.match(r, /switch with `\/model gpt-6\.1-sol low`/)
   assert.doesNotMatch(r, /Subagent|spawn_agent|decide yourself/)
 })
@@ -89,14 +89,14 @@ test('the desktop skips the feature with midChatModelDetection auto too', async 
 test('nothing to switch tells the agent to go on', async () => {
   const h = home()
   rollout(sessions(h), 'a', 'ok', { model: 'gpt-6.1-sol' })
-  const r = await route({ prompt: 'ok' }, { codexHome: h, draw: never, runner: async () => PICK.keep })
+  const r = await route({ prompt: 'ok' }, { codexHome: h, runner: async () => PICK.keep })
   assert.match(r, /nothing to switch/i)
 })
 
 test('a classifier failure never breaks the turn', async () => {
   const h = home()
   rollout(sessions(h), 'a', 'ok')
-  const r = await route({ prompt: 'ok' }, { codexHome: h, draw: never, runner: async () => { throw new Error('boom') } })
+  const r = await route({ prompt: 'ok' }, { codexHome: h, runner: async () => { throw new Error('boom') } })
   assert.match(r, /nothing to switch/i)
 })
 
@@ -127,7 +127,7 @@ test('the server answers initialize, lists route and skips notifications', async
 test('tools/call route returns the note as text', async () => {
   const h = home({ effortMode: 'auto', modelMode: 'auto' })
   rollout(sessions(h), 'a', 'napiš zprávu')
-  const out = await rpc([{ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'route', arguments: { prompt: 'napiš zprávu' } } }], { codexHome: h, draw: never, runner: async () => PICK.subagent.replace('subagent', 'here') })
+  const out = await rpc([{ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'route', arguments: { prompt: 'napiš zprávu' } } }], { codexHome: h, runner: async () => PICK.subagent.replace('subagent', 'here') })
   assert.equal(out[0].id, 7)
   assert.match(out[0].result.content[0].text, /switch with `\/model gpt-6-luna low`/)
 })
@@ -137,9 +137,9 @@ test('the desktop never offers a subagent, with subagentSuggestions ask or auto'
   for (const subagentSuggestions of ['ask', 'auto']) {
     const h = home({ subagentSuggestions })
     rollout(sessions(h), 'a', 'spusť testy', { model: 'gpt-6.1-sol', replied: true })
-    const r = await route({ prompt: 'spusť testy' }, { codexHome: h, draw: never, runner: async () => PICK.subagent })
+    const r = await route({ prompt: 'spusť testy' }, { codexHome: h, runner: async () => PICK.subagent })
     assert.doesNotMatch(r, /Subagent|spawn_agent/)
-    const s = await route({ prompt: 'spusť testy' }, { codexHome: h, draw: never, runner: async () => PICK.session })
+    const s = await route({ prompt: 'spusť testy' }, { codexHome: h, runner: async () => PICK.session })
     assert.match(s, /New session/)
     assert.doesNotMatch(s, /Subagent|spawn_agent/)
   }
@@ -148,7 +148,7 @@ test('the desktop never offers a subagent, with subagentSuggestions ask or auto'
 test('the desktop logs each decision under the chat id from the rollout', async () => {
   const h = home()
   rollout(sessions(h), 'chat-42', 'napiš zprávu pro kolegu')
-  await route({ prompt: 'napiš zprávu pro kolegu' }, { codexHome: h, draw: never, runner: async () => PICK.first })
+  await route({ prompt: 'napiš zprávu pro kolegu' }, { codexHome: h, runner: async () => PICK.first })
   const d = readStats(h).find(r => r.kind === 'decision')
   assert.equal(d?.kind === 'decision' && d.chat, 'chat-42')
 })

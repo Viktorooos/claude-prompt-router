@@ -34,11 +34,10 @@ import { fileURLToPath } from 'node:url'
 import { fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, heldWhere, inHoldout, isRedo, mappedModel, preferSession, describeOptions, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, trialExempt, typed, wantsChange } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, isRedo, mappedModel, preferSession, describeOptions, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
-import { placeTask } from '../../plugins/prompt-router/core/stats.ts'
-import type { Decision, TaskState, Turn } from '../../plugins/prompt-router/core/stats.ts'
+import type { Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
 import { appendStats, classifierUsage, readStats, spawnedAgent, statsReport, turnUsage } from './stats.ts'
 import { askNote, autoNote, line, otherAutoNote, otherNote, runAgentLine, runAgentNote, statusNote, switchNote } from './notes.ts'
 import type { NoteCtx } from './notes.ts'
@@ -54,8 +53,8 @@ export type Output = { hookSpecificOutput?: { hookEventName: 'UserPromptSubmit';
 // onUsage: what the classifier call cost in tokens, when the runner can tell (for the statistics).
 export type Runner = (prompt: string, o: { model: string; effort: string; timeoutMs: number; onUsage?: (u: Usage) => void }) => Promise<string>
 // noSubagent: the client has no spawn_agent (the ChatGPT desktop through mcp.ts), so a here prompt
-// that fits another model is not offered to a subagent. draw: the control-group draw (inHoldout; tests pin it).
-export type Deps = { codexHome?: string; runner?: Runner; noSubagent?: boolean; now?: number; draw?: (seed: string, pct: number) => boolean }
+// that fits another model is not offered to a subagent.
+export type Deps = { codexHome?: string; runner?: Runner; noSubagent?: boolean; now?: number }
 
 export function codexHome() {
   return process.env.CODEX_HOME || join(process.env.HOME || homedir(), '.codex')
@@ -364,10 +363,10 @@ async function routerCommand(home: string, o: Options, arg: string, cur: { model
   ].join('\n')
 }
 
-// Each chat's current task for the trial, plus its open subagent offer (the decision's time stamp,
-// until the Stop hook sees spawn_agent or another offer replaces it). The hook is a new process per
-// prompt, so this lives in a small file next to the stats log; chats idle for a day are dropped.
-type ChatTask = TaskState & { offer?: number }
+// Each chat's open subagent offer (the decision's time stamp, until the Stop hook sees spawn_agent or
+// another offer replaces it) and when it was last active. The hook is a new process per prompt, so
+// this lives in a small file next to the stats log; chats idle for a day are dropped.
+type ChatTask = { end: number; offer?: number }
 
 async function readTasks(home: string, now: number): Promise<Record<string, ChatTask>> {
   try {
@@ -445,14 +444,13 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   const follows = parseFollows(reply)
   const redo = isRedo(text)
   const tasks = await readTasks(home, ts)
-  let trial: Decision['trial']
-  // held: a control-group prompt, what the router wanted instead.
-  const decide = async (where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'] = 'applied', held?: { wanted: Decision['to']; where?: Decision['wantedWhere'] }) => {
-    const d: Decision = { kind: 'decision', ts, platform: 'codex', chat, where, from, to, ...(follows ? { follows } : {}), outcome, key, ...(usage ? { classifier: { model: classifier, usage } } : {}), ...(held ? { holdout: true as const, wanted: held.wanted } : {}), ...(held?.where ? { wantedWhere: held.where } : {}), ...(trial ? { trial } : {}), ...(redo ? { redo: true as const } : {}) }
+  tasks[chat] = { ...tasks[chat], end: ts }
+  const decide = async (where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'] = 'applied') => {
+    const d: Decision = { kind: 'decision', ts, platform: 'codex', chat, where, from, to, ...(follows ? { follows } : {}), outcome, key, ...(usage ? { classifier: { model: classifier, usage } } : {}), ...(redo ? { redo: true as const } : {}) }
     await appendStats(home, d).catch(err => log(home, 'stats', err))
-    const t = tasks[chat]
-    if (t && where !== 'keep') t.offer = where === 'subagent' ? ts : undefined
-    if (t) await saveTask(home, chat, t, ts)
+    const t = tasks[chat]!
+    if (where !== 'keep') t.offer = where === 'subagent' ? ts : undefined
+    await saveTask(home, chat, t, ts)
   }
   const keep = async () => {
     await decide('keep', from)
@@ -481,17 +479,7 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   // Mapped to the same Codex setting: nothing to switch.
   const sameSetting = slug === model && !!now && effortOf(slug, level) === effortOf(model, now)
   const idle = p?.where === 'here' && (midTurn || !model || (!other && ((!changeModel && !changeEffort) || sameSetting)))
-  // The trial: the prompt's task, and whether the router stays quiet in it (a control task). A prompt
-  // the router leaves alone anyway is not drawn.
-  const eligible = !!routed && !idle && wantsChange(routed, now, o.cfg) && !trialExempt(text, routed)
-  const placed = placeTask(tasks[chat] ?? null, { ts, key, follows }, { eligible, control: () => (deps.draw ?? inHoldout)(`${chat}:${ts}:${key}`, Number(o.cfg.holdoutPct)) })
-  tasks[chat] = { ...tasks[chat], ...placed.task }
-  trial = placed.trial
   if (!p || !routed) return keep()
-  if (placed.quiet) {
-    await decide('keep', from, 'applied', { wanted: { model: o.models[p.model], effort: p.effort }, where: heldWhere(routed) })
-    return null
-  }
 
   if (p.where === 'here') {
     if (idle) return keep()
@@ -522,8 +510,6 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
 }
 
 // A main turn that called spawn_agent after the router offered (or ran) a subagent: the offer was taken.
-// The end of a main turn also moves the task's end, as the Claude Code mod does: a long turn does not
-// split its task.
 async function noteSpawn(home: string, input: Input, now: number) {
   const chat = input.session_id ?? ''
   const task = (await readTasks(home, now))[chat]

@@ -13,7 +13,7 @@ const SESSION_PICK = '{"where": "session", "model": "sonnet", "effort": "medium"
 type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[]; redraws: number; state: Map<string, unknown> }
 
 // The mod's /config rows where the engine lists them (a terminal session); the desktop app lists none.
-const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions', 'newSessionAt', 'notifications', 'stats', 'openPane', 'holdoutPct', 'compareWith', 'classifier']
+const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions', 'newSessionAt', 'notifications', 'stats', 'openPane', 'compareWith', 'classifier']
   .map(k => ({ key: `prompt-router.${k}`, label: k, kind: 'choice', value: '', options: [], provider: { plugin: 'prompt-router', tier: 'user' }, isLocked: false }))
 
 // The engine beneath the plugin, as far as the pane needs it.
@@ -250,19 +250,19 @@ test('a setting\'s line sits beside its control, not under it', async ($: any, o
   await ui.unmount()
 })
 
-// Five control tasks ($1…$5, 1…5 min: median $3, 3 min) and one routed task ($1, 1 min), all today.
-function controlLog(now: number) {
+// Five kept tasks and one routed task (150k output tokens: $0.08 on Haiku, $3.00 on Opus at list price), all today.
+function taskLog(now: number) {
   const dec = (chat: string, ts: number, over: object) => JSON.stringify({ kind: 'decision', ts, platform: 'claude-code', chat, where: 'here', from: { model: 'opus', effort: 'medium' }, to: { model: 'haiku', effort: 'low' }, outcome: 'applied', follows: 'new', ...over })
-  const turn = (chat: string, ts: number, model: string, usd: number, min: number) => JSON.stringify({ kind: 'turn', ts, platform: 'claude-code', chat, model, baseline: 'opus', usage: { input: 10, output: 10 }, usd, durationMs: min * 60_000 })
+  const turn = (chat: string, ts: number, model: string, usd: number, min: number, output = 10) => JSON.stringify({ kind: 'turn', ts, platform: 'claude-code', chat, model, baseline: 'opus', usage: { input: 10, output }, usd, durationMs: min * 60_000 })
   const lines: string[] = []
-  for (let i = 0; i < 5; i++) lines.push(dec(`k${i}`, now - 3 * HOUR, { where: 'keep', to: { model: 'opus', effort: 'medium' }, holdout: true, wanted: { model: 'haiku', effort: 'low' } }), turn(`k${i}`, now - 3 * HOUR + 1, 'opus', i + 1, i + 1))
-  lines.push(dec('r', now - HOUR, {}), turn('r', now - HOUR + 1, 'haiku', 1, 1))
+  for (let i = 0; i < 5; i++) lines.push(dec(`k${i}`, now - 3 * HOUR, { where: 'keep', to: { model: 'opus', effort: 'medium' } }), turn(`k${i}`, now - 3 * HOUR + 1, 'opus', i + 1, i + 1))
+  lines.push(dec('r', now - HOUR, {}), turn('r', now - HOUR + 1, 'haiku', 1, 1, 150_000))
   return lines.join('\n')
 }
 
 test('Details, folded: the strict balance, how often it was right, where the tasks went', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
-  engine(on, { now, log: controlLog(now) })
+  engine(on, { now, log: taskLog(now) })
   await start($)
   for (const surface of ['desktop', 'terminal'] as const) {
     const shut = await $.ui.mount({ ...PANE, surface })
@@ -273,20 +273,19 @@ test('Details, folded: the strict balance, how often it was right, where the tas
     const texts = await textsOf(ui)
     if (surface === 'terminal') {
       // The terminal puts the figure beside the name.
-      expect(texts).toMatch(/Router balance \(rough\)\n\+\$2\.00/)
+      expect(texts).toMatch(/Router balance \(rough\)\n\+\$2\.93/)
       expect(texts).toMatch(/Decisions right\n100 % \(95 %: 21–100 %\)/)
       expect(texts).toMatch(/Tasks\nhaiku 1/)
-      expect(texts).toMatch(/Measured vs\. control\n0 router \/ 5 control tasks, too little data/)
     } else {
       // The app surfaces: one tinted tile, the balance as a big figure in the colour of its sign beside a
       // ring of how often it was right; then one bar parted by model over a legend of tasks, cost and share.
       const hero = await ui.find({ key: 'details-hero' })
       expect(hero.props.backgroundColor).toBe('#8b7cf60f')
       expect(hero.props.borderColor).toBe('#8b7cf638')
-      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nDecisions right · 95 %: 21–100 %\nMeasured vs\. control: 0 router \/ 5 control tasks, too little data\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
+      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nDecisions right · 95 %: 21–100 %\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
       const balance = JSON.stringify(await ui.find({ key: 'balance' }))
-      expect(balance).toMatch(/Router balance \(rough\) \+\$2\.00/)
-      expect(balance).toMatch(/fill=\\"#1fa37a\\"[^<]*>\+\$2\.00</)
+      expect(balance).toMatch(/Router balance \(rough\) \+\$2\.93/)
+      expect(balance).toMatch(/fill=\\"#1fa37a\\"[^<]*>\+\$2\.93</)
       const ring = JSON.stringify(await ui.find({ key: 'accuracy' }))
       expect(ring).toMatch(/Decisions right: 100 %/)
       expect(ring).toMatch(/>100%<[\s\S]*>right</)
@@ -474,7 +473,7 @@ test('with no /config row for the mod, a press saves the option in settings.json
 
 test('a fold stays open while a value under it changes', async ($: any, on: any) => {
   const now = 30 * 86_400_000
-  const seen = engine(on, { now, log: controlLog(now) })
+  const seen = engine(on, { now, log: taskLog(now) })
   await start($)
   const draw = async (act?: (ui: any) => Promise<void>) => {
     const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })

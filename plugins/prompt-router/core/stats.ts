@@ -1,9 +1,9 @@
 // Savings summary from the stats log. Pure functions: the platforms write the records, this reads them.
 // Every dollar is an estimate from core/prices.ts. Honest by design: the classifier's cost comes off
-// the saving, a stronger model is shown as extra cost, an effort change is left to the trial, and
-// the balance takes all of them in.
+// the saving, a stronger model is shown as extra cost, an effort change is not priced, and the
+// balance takes all of them in.
 import { LEVELS, MODEL_NAMES, NAMES, above, asLevel, knownModel } from './router.ts'
-import type { Level, Model } from './router.ts'
+import type { Level } from './router.ts'
 import { cost } from './prices.ts'
 import type { Usage } from './prices.ts'
 
@@ -25,13 +25,6 @@ export type Decision = {
   follows?: 'continues' | 'corrects' | 'new'
   outcome: 'applied' | 'asked' | 'declined'
   classifier?: { model: string; usage: Usage; usd?: number; ms?: number }
-  /** A control-group prompt: the router would have moved it to `wanted` but kept the setting (`where: 'keep'`). */
-  holdout?: true
-  wanted?: Side
-  /** Where the router would have sent a control-group prompt, when not `here`. */
-  wantedWhere?: 'subagent' | 'session'
-  /** On a task's first prompt the router wanted to act on: the group the whole task was drawn into. */
-  trial?: 'router' | 'control'
   /** The transcript the decision belongs to (Claude Code: the session id, the name of its .jsonl). */
   session?: string
   /** The prompt's own words say the last answer did not do the job (isRedo). */
@@ -75,11 +68,7 @@ export type Turn = {
 // `outcome: 'declined'`: the person was asked and kept their setting instead.
 export type Accept = { kind: 'accept'; ts: number; platform: string; chat: string; decision: number; outcome?: 'declined' }
 
-// The chat started a session (start_session); `key` is the promptKey of its prompt, which the new
-// session's first decision repeats, so its work counts for the task that started it.
-export type Spawn = { kind: 'spawn'; ts: number; platform: string; chat: string; key: string }
-
-export type Entry = Decision | Turn | Accept | Spawn
+export type Entry = Decision | Turn | Accept
 
 export type Summary = {
   prompts: number
@@ -169,7 +158,7 @@ function classifierUsd(d: Decision) {
 export const REFERENCE: { model: string; effort: Level } = { model: 'opus', effort: 'medium' }
 
 // The tokens the same work would have taken without the router; the turn's own when nothing differs.
-// Effort is not re-priced: what it saves is only measured (trial()).
+// Effort is not re-priced: how many tokens another effort would have taken is not known.
 function withoutUsage(t: Turn, u: Usage): Usage {
   const carried = (t.mainContext ?? 0) * (t.requests ?? 0)
   if (!carried && !t.switched) return u
@@ -355,26 +344,10 @@ export const EPISODE_GAP = 30 * 60_000
 
 // The same text again goes on with the task (a repeat, even after a switch); otherwise the classifier's
 // `follows` decides, and an older record without it starts a new task.
-// The platforms draw the control group by the same rule when the prompt comes (cur: the task so far).
 export function startsTask(d: Pick<Decision, 'ts' | 'key' | 'follows'>, cur: { end: number; keys: readonly (string | undefined)[] } | null) {
   if (!cur || d.ts - cur.end > EPISODE_GAP) return true
   if (d.key && cur.keys.includes(d.key)) return false
   return d.follows === undefined || d.follows === 'new'
-}
-
-// One chat's current task, for the trial: when it last had a prompt, its prompts' keys, its group.
-export type TaskState = { end: number; keys: string[]; control: boolean }
-
-// Places a routed prompt in its chat's task (startsTask). A task enters the trial when the router
-// wants to change its first prompt and the prompt is not exempt (eligible): `control()` then draws
-// its group, once. quiet: the router leaves this prompt alone (a control task it would act on).
-export function placeTask(cur: TaskState | null, d: { ts: number; key: string; follows?: Decision['follows'] }, o: { eligible: boolean; control: () => boolean }): { task: TaskState; trial?: 'router' | 'control'; quiet: boolean } {
-  if (startsTask(d, cur)) {
-    const control = o.eligible && o.control()
-    return { task: { end: d.ts, keys: [d.key], control }, ...(o.eligible ? { trial: control ? ('control' as const) : ('router' as const) } : {}), quiet: control }
-  }
-  const task = { end: d.ts, keys: [...cur!.keys, d.key], control: cur!.control }
-  return { task, quiet: task.control && o.eligible }
 }
 
 const startsEpisode = (d: Decision, cur: Episode) => startsTask(d, { end: cur.end, keys: cur.decisions.map(x => x.key) })
@@ -418,20 +391,10 @@ export function failureOf(e: Episode): Failure {
   return failure(reasons)
 }
 
-// A class of tasks: where the router sent it and the model it picked (for a control task, where it
-// would have sent it and the model it would have picked).
-const classOf = (where: string, model: string) => `${where}:${model}`
-
 // A move down: a cheaper model, or a subagent or session on the same model (a fresh context), or a
-// lower effort here. lower: down with neither the model nor the effort higher, the only moves measured
-// against control tasks (an escalation, even a partial one, falls back to the re-pricing).
-function moveOf(where: string, from: Decision['from'], to: Decision['to']) {
-  const down = above(from.model, to.model) || (from.model === to.model && (where !== 'here' || above(from.effort, to.effort)))
-  return { down, lower: down && !above(to.model, from.model) && !above(to.effort, from.effort) }
-}
-
-// Control tasks a class needs before its medians replace the token re-pricing.
-export const MIN_CONTROL = 5
+// lower effort here. Anything else is a higher pick (an escalation).
+const movesDown = (where: string, from: Decision['from'], to: Decision['to']) =>
+  above(from.model, to.model) || (from.model === to.model && (where !== 'here' || above(from.effort, to.effort)))
 
 const turnUsd = (t: Turn) => (t.usage ? (t.usd ?? cost(t.usage, t.model) ?? 0) : 0)
 const turnsUsd = (ts: readonly Turn[]) => ts.reduce((n, t) => n + turnUsd(t), 0)
@@ -439,20 +402,6 @@ const turnsMs = (ts: readonly Turn[]) => ts.filter(main).reduce((n, t) => n + (t
 const classifierMs = (ds: readonly Decision[]) => ds.reduce((n, d) => n + (d.classifier?.ms ?? 0), 0)
 // Whether the task's main turns carry their times (older records and some platforms do not).
 const timed = (ts: readonly Turn[]) => ts.some(t => main(t) && t.durationMs !== undefined)
-
-// The q-quantile of sorted values, linear between neighbours.
-function quantile(sorted: readonly number[], q: number) {
-  const i = (sorted.length - 1) * q
-  const lo = Math.floor(i)
-  return sorted[lo]! + (sorted[Math.min(lo + 1, sorted.length - 1)]! - sorted[lo]!) * (i - lo)
-}
-
-type Spread = { q1: number; median: number; q3: number }
-
-function spread(values: number[]): Spread {
-  const s = [...values].sort((a, b) => a - b)
-  return { q1: quantile(s, 0.25), median: quantile(s, 0.5), q3: quantile(s, 0.75) }
-}
 
 // The Wilson 95 % interval of a share (successes may be fractional: failures are weighted).
 export function wilson(successes: number, n: number): { low: number; high: number } {
@@ -465,24 +414,13 @@ export function wilson(successes: number, n: number): { low: number; high: numbe
   return { low: Math.max(0, c - h), high: Math.min(1, c + h) }
 }
 
-// A range with its point: low and high from the control quartiles (equal to the point where the
-// re-pricing stood in).
-export type Range = { value: number; low: number; high: number }
-
-export type ModelRow = { model: string; tasks: number; control: number; usdPerTask: number; reworkPct: number; minutesPerTask: number | null }
+export type ModelRow = { model: string; tasks: number; usdPerTask: number; reworkPct: number; minutesPerTask: number | null }
 
 export type Balance = {
-  /** Tasks the router changed (model, effort, subagent, session), and control tasks. */
+  /** Tasks the router changed (model, effort, subagent, session). */
   routed: number
-  control: number
-  /** Routed tasks priced against control medians, and those priced by the token re-pricing. */
-  measured: number
-  estimated: number
-  /** Routed tasks whose time was compared with control times (0 = the time is not measured yet). */
-  timed: number
-  /** Money and minutes the router saved (+) or cost (−) against no router, classifier included. */
-  usd: Range
-  minutes: Range
+  /** Money the router saved (+) or cost (−) against no router, classifier included. An estimate. */
+  usd: number
   /** usd split: cheaper picks, higher picks (escalation), re-work after a failed answer, classifier. */
   parts: { cheaper: number; escalation: number; rework: number; classifier: number }
   /** Share of routed tasks that did the job (weighted failures), with its Wilson interval. */
@@ -490,60 +428,22 @@ export type Balance = {
   byModel: ModelRow[]
 }
 
-// The router's balance per task. A routed task is compared with the median control task of its class
-// (what the same kind of task cost and took with the person's own setting); with fewer than
-// MIN_CONTROL control tasks, with today's token re-pricing and no saving of time, counted in
-// `estimated`. A task's later prompts after a failure count as re-work, by the failure's weight.
-// `since`: only tasks that started then or later count; the control medians always use every record.
+// The router's balance per task: each routed task's turns priced on the model they would have run on
+// without the router (the token re-pricing above), minus what they cost and the classifier. A task's
+// later prompts after a failure count as re-work, by the failure's weight.
+// `since`: only tasks that started then or later count.
 export function balance(records: readonly Entry[], since = -Infinity): Balance {
   const taken = takenSet(records)
   const changed = (d: Decision) => routedDecision(d) || (d.outcome === 'asked' && taken.has(takenKey(d.chat, d.ts)))
-  const eps = episodes(records).filter(e => e.decisions.length)
-  const control = new Map<string, { usd: number[]; ms: number[] }>()
-  for (const e of eps) {
-    const d = e.decisions[0]!
-    if (!d.holdout || !d.wanted) continue
-    // Only the control tasks of a move the routed tasks are measured against: where the router wanted
-    // the task to go, and a move down (the control group now holds back raises too).
-    const where = d.wantedWhere ?? 'here'
-    if (!moveOf(where, d.from, d.wanted).lower) continue
-    const k = classOf(where, d.wanted.model)
-    const c = control.get(k) ?? { usd: [], ms: [] }
-    control.set(k, c)
-    // Without the router there is no classifier: only the turns count.
-    c.usd.push(turnsUsd(e.turns))
-    if (timed(e.turns)) c.ms.push(turnsMs(e.turns))
-  }
-  const usdSpread = new Map([...control].filter(([, c]) => c.usd.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.usd)]))
-  const msSpread = new Map([...control].filter(([, c]) => c.ms.length >= MIN_CONTROL).map(([k, c]) => [k, spread(c.ms)]))
-
-  const out: Balance = {
-    routed: 0, control: 0, measured: 0, estimated: 0, timed: 0,
-    usd: { value: 0, low: 0, high: 0 }, minutes: { value: 0, low: 0, high: 0 },
-    parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [],
-  }
-  const rows = new Map<string, { tasks: number; control: number; usd: number; rework: number; ms: number; timed: number }>()
-  const row = (m: string) => rows.get(m) ?? (rows.set(m, { tasks: 0, control: 0, usd: 0, rework: 0, ms: 0, timed: 0 }), rows.get(m)!)
+  const out: Balance = { routed: 0, usd: 0, parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [] }
+  const rows = new Map<string, { tasks: number; usd: number; rework: number; ms: number; timed: number }>()
+  const row = (m: string) => rows.get(m) ?? (rows.set(m, { tasks: 0, usd: 0, rework: 0, ms: 0, timed: 0 }), rows.get(m)!)
   let fails = 0
-  let msLow = 0
-  let msHigh = 0
-  let msSaved = 0
-  let usdLow = 0
-  let usdHigh = 0
-  for (const e of eps) {
-    if (e.start < since) continue
+  for (const e of episodes(records)) {
+    if (!e.decisions.length || e.start < since) continue
     const d = e.decisions[0]!
     const clsUsd = e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
-    const clsMs = classifierMs(e.decisions)
     out.parts.classifier -= clsUsd
-    msSaved -= clsMs
-    msLow -= clsMs
-    msHigh -= clsMs
-    if (d.holdout && d.wanted) {
-      out.control++
-      row(d.wanted.model).control++
-      continue
-    }
     if (!changed(d)) continue
     out.routed++
     const f = failureOf(e).weight
@@ -551,54 +451,30 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     const actual = turnsUsd(e.turns)
     const later = e.decisions[1] ? turnsUsd(e.turns.filter(t => t.ts >= e.decisions[1]!.ts)) : 0
     const rework = f * later
-    const k = classOf(d.where, d.to.model)
+    const s = empty()
+    for (const t of e.turns) addTurn(s, t, null)
+    const gain = s.withoutUsd - (actual - rework)
     // A subagent or session on a stronger model is an escalation, not a cheaper pick.
-    const { down, lower } = moveOf(d.where, d.from, d.to)
-    const cu = lower ? usdSpread.get(k) : undefined
-    let without: Spread
-    if (cu) {
-      out.measured++
-      without = cu
-    } else {
-      out.estimated++
-      const s = empty()
-      for (const t of e.turns) addTurn(s, t, null)
-      without = { q1: s.withoutUsd, median: s.withoutUsd, q3: s.withoutUsd }
-    }
-    const firstGain = without.median - (actual - rework)
-    if (down) out.parts.cheaper += firstGain
-    else out.parts.escalation += firstGain
+    if (movesDown(d.where, d.from, d.to)) out.parts.cheaper += gain
+    else out.parts.escalation += gain
     out.parts.rework -= rework
-    usdLow += without.q1 - actual
-    usdHigh += without.q3 - actual
-    const ms = turnsMs(e.turns)
-    const cm = lower && timed(e.turns) ? msSpread.get(k) : undefined
-    if (cm) {
-      out.timed++
-      msSaved += cm.median - ms
-      msLow += cm.q1 - ms
-      msHigh += cm.q3 - ms
-    }
     const r = row(d.to.model)
     r.tasks++
     r.usd += actual + clsUsd
     r.rework += f
     if (timed(e.turns)) {
-      r.ms += ms + clsMs
+      r.ms += turnsMs(e.turns) + classifierMs(e.decisions)
       r.timed++
     }
   }
   const p = out.parts
-  out.usd.value = p.cheaper + p.escalation + p.rework + p.classifier
-  out.usd.low = usdLow + p.classifier
-  out.usd.high = usdHigh + p.classifier
-  out.minutes = { value: msSaved / 60_000, low: msLow / 60_000, high: msHigh / 60_000 }
+  out.usd = p.cheaper + p.escalation + p.rework + p.classifier
   if (out.routed) {
     const w = wilson(out.routed - fails, out.routed)
     out.accuracy = { pct: (1 - fails / out.routed) * 100, low: w.low * 100, high: w.high * 100 }
   }
   out.byModel = [...rows].map(([model, r]) => ({
-    model, tasks: r.tasks, control: r.control,
+    model, tasks: r.tasks,
     usdPerTask: r.tasks ? r.usd / r.tasks : 0,
     reworkPct: r.tasks ? (r.rework / r.tasks) * 100 : 0,
     minutesPerTask: r.timed ? r.ms / r.timed / 60_000 : null,
@@ -611,106 +487,6 @@ export type Balances = { today: Balance; week: Balance; total: Balance }
 // The balance of today (local calendar day), the last 7 days and everything, as summarize() splits them.
 export function balances(records: readonly Entry[], now: number): Balances {
   return { today: balance(records, startOfDay(now)), week: balance(records, now - 7 * DAY), total: balance(records) }
-}
-
-// The trial: tasks drawn into the router group or the control group when they started (`trial` on the
-// first decision; an older holdout record counts as control). A task costs every turn of it (later
-// prompts, re-work, subagents, a session it started) and, in the router group, the classifier: without
-// the router it would not run. Nothing here calls a model.
-export type TaskKind = 'cheaper' | 'dearer' | 'subagent' | 'session'
-export type ArmStats = { tasks: number; usd: number }
-/** saving: control mean − router mean per task (+ = the router saves), with its 95 % interval; null below MIN_TRIAL. */
-export type TrialRow = { kind: 'all' | TaskKind; router: ArmStats; control: ArmStats; saving: Range | null }
-
-// Tasks each group needs before a saving is shown.
-export const MIN_TRIAL = 5
-// How long after `start_session` the new session's first prompt may come to belong to the task.
-const SPAWN_WINDOW = 15 * 60_000
-// The new session's first prompt and the spawn's words: the same start (the prompt may get a note added).
-const sameStart = (a: string | undefined, b: string) => !!a && a.slice(0, 60) === b.slice(0, 60)
-
-// Where the router sent the task (or wanted to, in control): a fresh context, or here cheaper or dearer
-// (the model first, then the effort). A chat with no effort set runs at the reference's. null: here at
-// the same setting (a router task whose first prompt the router kept as it was): it counts in `all` only.
-// `models`: the platform's model mapping, so Codex slugs and OpenCode ids rank by their tier.
-function kindOf(d: Decision, control: boolean, models?: Partial<Record<Model, string>>): TaskKind | null {
-  const where = control ? (d.wantedWhere ?? 'here') : d.where
-  if (where === 'subagent' || where === 'session') return where
-  const to = (control ? d.wanted : d.to) ?? d.to
-  const from = { model: d.from.model, effort: d.from.effort || REFERENCE.effort }
-  const eff = to.effort || from.effort
-  if (above(from.model, to.model, models)) return 'cheaper'
-  if (above(to.model, from.model, models)) return 'dearer'
-  if (from.model !== to.model) return null
-  return above(from.effort, eff) ? 'cheaper' : above(eff, from.effort) ? 'dearer' : null
-}
-
-function armOf(d: Decision): 'router' | 'control' | null {
-  if (d.trial) return d.trial
-  return d.holdout && d.wanted ? 'control' : null
-}
-
-const mean = (xs: readonly number[]) => xs.reduce((n, x) => n + x, 0) / xs.length
-const variance = (xs: readonly number[]) => {
-  const m = mean(xs)
-  return xs.reduce((n, x) => n + (x - m) ** 2, 0) / (xs.length - 1)
-}
-
-// Welch: the difference of two means and its normal-approximation 95 % interval.
-function welch(control: readonly number[], router: readonly number[]): Range | null {
-  if (control.length < MIN_TRIAL || router.length < MIN_TRIAL) return null
-  const value = mean(control) - mean(router)
-  const half = 1.96 * Math.sqrt(variance(control) / control.length + variance(router) / router.length)
-  return { value, low: value - half, high: value + half }
-}
-
-// `models`: the platform's model mapping (Codex, OpenCode), so its model ids rank by their tier.
-export function trial(records: readonly Entry[], since = -Infinity, models?: Partial<Record<Model, string>>): TrialRow[] {
-  const eps = episodes(records).filter(e => e.decisions.length)
-  // A session the task started: its first prompt has the spawn's words, within SPAWN_WINDOW.
-  const child = new Map<Episode, Episode>()
-  for (const s of records) {
-    if (s.kind !== 'spawn') continue
-    const parent = eps.filter(e => e.chat === s.chat && e.start <= s.ts).at(-1)
-    const kid = eps.find(e => e.chat !== s.chat && !child.has(e) && sameStart(e.decisions[0]!.key, s.key) && e.start >= s.ts && e.start - s.ts <= SPAWN_WINDOW)
-    if (parent && kid) child.set(kid, parent)
-  }
-  // A session started from a started session belongs to the task at the root of the chain.
-  const root = (e: Episode) => {
-    const seen = new Set<Episode>()
-    while (child.has(e) && !seen.has(e)) {
-      seen.add(e)
-      e = child.get(e)!
-    }
-    return e
-  }
-  const price = new Map<Episode, { usd: number; cls: number }>()
-  for (const e of eps) {
-    const owner = root(e)
-    const c = price.get(owner) ?? { usd: 0, cls: 0 }
-    c.usd += turnsUsd(e.turns)
-    c.cls += e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
-    price.set(owner, c)
-  }
-  const groups = new Map<'all' | TaskKind, { router: number[]; control: number[] }>()
-  const group = (k: 'all' | TaskKind) => groups.get(k) ?? (groups.set(k, { router: [], control: [] }), groups.get(k)!)
-  group('all')
-  for (const e of eps) {
-    if (child.has(e) || e.start < since) continue
-    const d = e.decisions[0]!
-    const arm = armOf(d)
-    if (!arm) continue
-    const c = price.get(e)!
-    const usd = arm === 'router' ? c.usd + c.cls : c.usd
-    const kind = kindOf(d, arm === 'control', models)
-    for (const k of kind ? (['all', kind] as const) : (['all'] as const)) group(k)[arm].push(usd)
-  }
-  const stats = (xs: number[]): ArmStats => ({ tasks: xs.length, usd: xs.length ? mean(xs) : 0 })
-  const order = ['all', 'cheaper', 'dearer', 'subagent', 'session'] as const
-  return order.filter(k => groups.has(k)).map(k => {
-    const g = groups.get(k)!
-    return { kind: k, router: stats(g.router), control: stats(g.control), saving: welch(g.control, g.router) }
-  })
 }
 
 // What scripts/usage-scan.mjs writes: every API request of a session's transcript (subagents with `agent`).
@@ -791,14 +567,15 @@ export function byDay(records: readonly Entry[], now: number, days: number, c: C
   return keys.map(day => ({ day, ...finish(map.get(day)!) }))
 }
 
-// The JSONL log as records; broken lines and unknown kinds are skipped.
+// The JSONL log as records; broken lines and unknown kinds are skipped. Fields of older versions
+// (holdout, wanted, wantedWhere, trial; spawn records) are ignored: a held-back prompt was a keep.
 export function parseLog(text: string): Entry[] {
   const out: Entry[] = []
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
     try {
       const r = JSON.parse(line)
-      if (r && (r.kind === 'turn' || r.kind === 'decision' || r.kind === 'accept' || r.kind === 'spawn') && typeof r.ts === 'number') out.push(r)
+      if (r && (r.kind === 'turn' || r.kind === 'decision' || r.kind === 'accept') && typeof r.ts === 'number') out.push(r)
     } catch {}
   }
   return out
@@ -880,7 +657,7 @@ const NOTE_COMPARE = (c: Compare) => c && 'mix' in c
   : "Compared with the chat's first model (option compareWith: first)."
 
 const NOTE =
-  "An estimate: tokens × list prices in core/prices.ts. Cost without router prices each turn on the model it would have run on without the router; a routed subagent also counts the main chat's context its requests did not read; a turn after the router switched models counts the cache it rewrote. Balance = cost without router − cost with router (the work plus the classifier). Vs. always Opus medium prices the same tokens on Opus for every chat, whatever its own pick, minus the cost with router; cost per turn is the cost with router over the priced turns. Effort is not re-priced: what it saves, and work moved to a subagent or a new session, only the trial (router vs. control tasks) measures."
+  "An estimate: tokens × list prices in core/prices.ts. Cost without router prices each turn on the model it would have run on without the router; a routed subagent also counts the main chat's context its requests did not read; a turn after the router switched models counts the cache it rewrote. Balance = cost without router − cost with router (the work plus the classifier). Vs. always Opus medium prices the same tokens on Opus for every chat, whatever its own pick, minus the cost with router; cost per turn is the cost with router over the priced turns. Effort is not re-priced: how many tokens another effort would have taken is not known."
 
 export const STATS_COLUMNS = ['Today', '7 days', 'Total'] as const
 
@@ -890,33 +667,7 @@ export function statsRows(r: Report, c: Compare = null): { label: string; cells:
 }
 
 // A plain text table of the three periods (for /router stats and the Codex and OpenCode adapters).
-const KIND_LABEL: Record<TrialRow['kind'], string> = { all: 'All tasks', cheaper: 'Cheaper here', dearer: 'Stronger here', subagent: 'Subagent', session: 'New session' }
-const TRIAL_NOTE =
-  `Measured, not estimated: when a task starts that the router would change, it is drawn into the router group or the control group (option holdoutPct), where the router stays quiet for the whole task. A task costs all its turns: later prompts, re-work, subagents, a session it started, and in the router group the classifier. Saving = the control mean minus the router mean, with its 95 % interval (Welch); below ${MIN_TRIAL} tasks in a group, too little data. A kind is where the router sent the task, or would have.`
-const armText = (a: ArmStats) => `${a.tasks} · ${a.tasks ? usd(a.usd) : '–'}`
-const savingText = (r: TrialRow) => (r.saving ? `${signed(r.saving.value)} (${signed(r.saving.low)} to ${signed(r.saving.high)})` : 'too little data')
-
-// The pane's short line for the whole trial.
-export const measuredLabel = (r: TrialRow) =>
-  r.saving ? `${signed(r.saving.value)} per task (${signed(r.saving.low)} to ${signed(r.saving.high)})` : `${r.router.tasks} router / ${r.control.tasks} control tasks, too little data`
-
-// /router stats: the trial, one row per kind of task.
-export function trialText(rows: readonly TrialRow[]): string {
-  if (!rows.some(r => r.router.tasks + r.control.tasks)) return 'Measured per task: no tasks in the trial yet (option holdoutPct).'
-  const t = [['', 'Router', 'Control', 'Saving per task (95 %)'], ...rows.map(r => [KIND_LABEL[r.kind], armText(r.router), armText(r.control), savingText(r)])]
-  const w = t[0]!.map((_, i) => Math.max(...t.map(r => r[i]!.length)) + 2)
-  return ['Measured per task: router vs. control', ...t.map(r => r.map((c, i) => c.padEnd(w[i]!)).join('').trimEnd()), '', TRIAL_NOTE].join('\n')
-}
-
-function trialHtml(rows: readonly TrialRow[]): string {
-  if (!rows.some(r => r.router.tasks + r.control.tasks)) return '<h2>Measured per task</h2><p>No tasks in the trial yet (option holdoutPct).</p>'
-  const body = rows.map(r => `<tr><th>${KIND_LABEL[r.kind]}</th><td>${armText(r.router)}</td><td>${armText(r.control)}</td><td>${savingText(r)}</td></tr>`).join('')
-  return `<h2>Measured per task: router vs. control</h2>
-<div class="wrap"><table><thead><tr><th></th><th>Router</th><th>Control</th><th>Saving per task (95 %)</th></tr></thead><tbody>${body}</tbody></table></div>
-<p>${TRIAL_NOTE}</p>`
-}
-
-export function statsText(r: Report, c: Compare = null, b?: Balance, t?: readonly TrialRow[]): string {
+export function statsText(r: Report, c: Compare = null, b?: Balance): string {
   const rows = statsRows(r, c)
   const w = Math.max(...rows.map(x => x.label.length)) + 2
   const line = (n: string, cells: readonly string[]) => `${n.padEnd(w)}${cells.map((t, i) => (i < 2 ? t.padEnd(16) : t)).join('')}`
@@ -926,7 +677,6 @@ export function statsText(r: Report, c: Compare = null, b?: Balance, t?: readonl
     '',
     NOTE,
     NOTE_COMPARE(c),
-    ...(t ? ['', trialText(t)] : []),
     ...(b ? ['', balanceText(b)] : []),
   ].join('\n')
 }
@@ -938,7 +688,7 @@ export function savingLabel(s: Summary): string {
 }
 
 // A self-contained page for /router stats: the three periods and the balance per day as bars.
-export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[], c: Compare = null, b?: Balance, t?: readonly TrialRow[]): string {
+export function statsHtml(r: Report, days: readonly ({ day: string } & Summary)[], c: Compare = null, b?: Balance): string {
   const W = 720
   const H = 200
   const pad = 24
@@ -986,7 +736,6 @@ thead th { color: var(--muted); font-weight: 500; }
 <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Balance per day"><line class="axis" x1="${pad}" x2="${W - pad}" y1="${zero}" y2="${zero}"/>${bars}</svg>
 <div class="days"><span>${first}</span><span>balance per day</span><span>${last}</span></div>
 <div class="wrap"><table><thead><tr><th></th><th>Today</th><th>7 days</th><th>Total</th></tr></thead><tbody>${table}</tbody></table></div>
-${t ? trialHtml(t) : ''}
 ${b ? balanceHtml(b) : ''}
 </main></body></html>
 `
@@ -995,35 +744,19 @@ ${b ? balanceHtml(b) : ''}
 // A dollar amount with its sign always shown: +$0.42 saved, −$0.14 lost.
 export const signed = (n: number) => `${n < 0 ? '−' : '+'}$${Math.abs(n).toFixed(2)}`
 
-// Minutes as "45 min" or "2 h 10 min".
-export function minutes(m: number) {
-  const t = Math.round(Math.abs(m))
-  return t < 60 ? `${t} min` : `${Math.floor(t / 60)} h${t % 60 ? ` ${t % 60} min` : ''}`
-}
-
-// Time the router saved or lost, in words (a sign on time reads both ways).
-export const timeText = (m: number) => (Math.round(Math.abs(m)) === 0 ? 'no time' : `${minutes(m)} ${m > 0 ? 'saved' : 'lost'}`)
-
-// Below this many routed tasks the balance is a rough figure even when every task met its control.
+// Below this many routed tasks the balance is a rough figure (a few tasks can swing it either way).
 export const ROUGH_BELOW = 12
 
-// A rough balance: few tasks, or some priced by the token re-pricing instead of the control group.
-export const isRough = (b: Balance) => b.estimated > 0 || b.routed < ROUGH_BELOW
+export const isRough = (b: Balance | null) => !!b && b.routed < ROUGH_BELOW
 
-// The short line for the footer: money, then time once it is measured; "~" marks a rough
-// figure. '' with nothing to show.
+// The short line for the footer: the money, with "~" while it stands on few tasks. '' with nothing to show.
 export function balanceLabel(b: Balance): string {
-  if (!b.routed && Math.abs(b.usd.value) < 0.005) return ''
-  return `${isRough(b) ? '~' : ''}${signed(b.usd.value)}${b.timed ? ` · ${timeText(b.minutes.value)}` : ''}`
+  if (!b.routed && Math.abs(b.usd) < 0.005) return ''
+  return `${isRough(b) ? '~' : ''}${signed(b.usd)}`
 }
 
 // How many tasks the balance stands on, for a tooltip or a dim line.
-export function sampleNote(b: Balance): string {
-  const how = b.routed ? ` (${b.measured} against the control group${b.estimated ? `, ${b.estimated} estimated from tokens` : ''})` : ''
-  return `${b.routed} routed tasks${how} · ${b.control} control tasks${isRough(b) ? ' · rough estimate' : ''}`
-}
-
-const range = (r: Range, f: (n: number) => string) => (r.low === r.high ? '' : ` (${f(r.low)} to ${f(r.high)})`)
+export const sampleNote = (b: Balance) => `${b.routed} routed ${b.routed === 1 ? 'task' : 'tasks'}${isRough(b) ? ' · few tasks, rough' : ''}`
 
 // The balance's parts with their labels, in the order they add up.
 export const balanceParts = (b: Balance) => [
@@ -1038,20 +771,19 @@ export const accuracyText = (b: Balance) => (b.accuracy ? `${Math.round(b.accura
 // The per-model table as rows of cells, header first.
 export function modelTable(b: Balance): string[][] {
   return [
-    ['Model', 'Tasks', 'Control', '$/task', 'Re-work', 'Min/task'],
-    ...b.byModel.map(r => [r.model, String(r.tasks), String(r.control), usd(r.usdPerTask), `${Math.round(r.reworkPct)} %`, r.minutesPerTask === null ? '–' : r.minutesPerTask.toFixed(1)]),
+    ['Model', 'Tasks', '$/task', 'Re-work', 'Min/task'],
+    ...b.byModel.map(r => [r.model, String(r.tasks), usd(r.usdPerTask), `${Math.round(r.reworkPct)} %`, r.minutesPerTask === null ? '–' : r.minutesPerTask.toFixed(1)]),
   ]
 }
 
 const BALANCE_NOTE =
-  'Per task: a routed task (its prompt, the prompts that fixed or went on with it, the classifier) against the median control task of its class, a prompt the router would have moved the same way but left alone (option holdoutPct). The range comes from the control quartiles. With fewer than 5 control tasks in a class the task is priced by the token re-pricing above instead, and its time counts as unchanged. Re-work: the later prompts of a task whose answer failed, by the failure weight.'
+  'Per task: a routed task (its prompt, the prompts that fixed or went on with it, its subagents, the classifier), its turns priced on the model they would have run on without the router, as in the table above. Re-work: the later prompts of a task whose answer failed, by the failure weight. Accuracy: the share of routed tasks with no sign of failure.'
 
 // /router stats: the balance per task, under the token table.
 export function balanceText(b: Balance): string {
   const lines = [
-    'Per task, against the control group (total)',
-    `Money      ${signed(b.usd.value)}${range(b.usd, signed)}`,
-    `Time       ${b.timed ? `${timeText(b.minutes.value)}${range(b.minutes, timeText)}` : 'not measured yet'}`,
+    'Per task (total, estimated)',
+    `Money      ${signed(b.usd)}`,
     ...balanceParts(b).map(([, label, v]) => `  ${label.padEnd(15)}${signed(v)}`),
     `Accuracy   ${accuracyText(b)}`,
     sampleNote(b),
@@ -1068,9 +800,9 @@ function balanceHtml(b: Balance): string {
   const t = modelTable(b)
   const table = t.length > 1 ? `<div class="wrap"><table><thead><tr>${t[0]!.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${t.slice(1).map(r => `<tr>${r.map((c, i) => (i ? `<td>${c}</td>` : `<th>${c}</th>`)).join('')}</tr>`).join('')}</tbody></table></div>` : ''
   const parts = balanceParts(b).map(([, label, v]) => `<tr><th>${label}</th><td>${signed(v)}</td></tr>`).join('')
-  return `<h2>Per task, against the control group</h2>
-<div class="big">${isRough(b) ? '~' : ''}${signed(b.usd.value)} <span style="font-size:15px;font-weight:400;color:var(--muted)">${b.timed ? timeText(b.minutes.value) : 'time not measured yet'} · total</span></div>
-<p>${sampleNote(b)}${range(b.usd, signed) ? ` · range${range(b.usd, signed)}` : ''}</p>
+  return `<h2>Per task</h2>
+<div class="big">${isRough(b) ? '~' : ''}${signed(b.usd)} <span style="font-size:15px;font-weight:400;color:var(--muted)">total, estimated</span></div>
+<p>${sampleNote(b)}</p>
 <div class="wrap"><table><tbody>${parts}<tr><th>Accuracy</th><td>${accuracyText(b)}</td></tr></tbody></table></div>
 ${table}
 <p>${BALANCE_NOTE}</p>`

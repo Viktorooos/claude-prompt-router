@@ -94,13 +94,6 @@
       "default": "off",
       "options": ["off", "on"]
     },
-    "holdoutPct": {
-      "type": "string",
-      "title": "Control group for the savings stats",
-      "description": "This share (%) of tasks the router wants to act on runs without the router (decided at the task's first prompt, kept for the prompts that go on with it), so the savings stats can compare the cost of real tasks with and without it. Never a prompt that names a model or effort or that needs xhigh or max. 30 % for now to gather data faster; 10 % is enough later. 0: off.",
-      "default": "30",
-      "options": ["30", "0", "5", "10", "20"]
-    },
     "compareWith": {
       "type": "string",
       "title": "Compare savings with",

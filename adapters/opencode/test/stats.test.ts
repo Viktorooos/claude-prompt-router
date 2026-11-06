@@ -253,7 +253,7 @@ test('stats: the table compares with the compareWith option', async () => {
   assert.match(out, /Saved \(cheaper model\)\s+\$0\.00\s+\$0\.00\s+\$0\.00/)
 })
 
-// The trial and the per-prompt fields, as the Claude Code mod writes them (register.tsx).
+// The per-prompt fields, as the Claude Code mod writes them (register.tsx).
 const withFollows = (reply: string, follows: string) => reply.replace(/}$/, `, "follows": "${follows}"}`)
 const accepts = (dir: string) => stats(dir).filter(r => r.kind === 'accept')
 
@@ -269,74 +269,6 @@ test('every decision carries the prompt key, what the classifier read of it (fol
   assert.equal(b.key, promptKey('still not working'))
   assert.equal(b.follows, 'corrects')
   assert.equal(b.redo, true)
-})
-
-test('trial: a control task gets no note and no switch, and the router stays quiet for the prompts that go on with it', async () => {
-  const draws: number[] = []
-  const draw = (_seed: string, pct: number) => (draws.push(pct), true)
-  const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) }, { effortMode: 'auto', draw })
-  const first = await send(hooks, S, 'run the tests')
-  assert.equal(said(first), 'run the tests')
-  client.reply = withFollows(PICK.here, 'continues')
-  const next = await send(hooks, S, 'and the lint')
-  assert.equal(said(next), 'and the lint')
-  assert.equal(next.message.variant, undefined)
-  assert.deepEqual(draws, [30])
-  const [a, b] = decisions(dir)
-  assert.deepEqual([a.where, a.outcome, a.holdout, a.trial, a.wantedWhere], ['keep', 'applied', true, 'control', 'subagent'])
-  assert.deepEqual(a.wanted, { model: 'haiku', effort: 'low' })
-  assert.deepEqual(a.to, a.from)
-  assert.deepEqual([b.where, b.holdout, b.trial, b.wantedWhere], ['keep', true, undefined, undefined])
-  assert.deepEqual(b.wanted, { model: 'opus', effort: 'low' })
-})
-
-test('trial: new work draws again; a router task is routed as usual; holdoutPct is the share drawn', async () => {
-  const draws: number[] = []
-  const draw = (_seed: string, pct: number) => (draws.push(pct), false)
-  const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) }, { holdoutPct: '10', draw })
-  assert.match(said(await send(hooks, S, 'run the tests')), /Subagent/)
-  // The same question again goes on with its task.
-  await send(hooks, S, 'run the tests')
-  client.reply = withFollows(PICK.session, 'new')
-  await send(hooks, S, 'build the export screen')
-  assert.deepEqual(draws, [10, 10])
-  assert.deepEqual(decisions(dir).map(d => d.trial), ['router', undefined, 'router'])
-})
-
-test('trial: a prompt that names a setting, an xhigh pick, or nothing to change is never drawn', async () => {
-  let draws = 0
-  const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) }, { draw: () => (draws++, true) })
-  assert.match(said(await send(hooks, S, 'do it with opus')), /Subagent/)
-  client.reply = withFollows(PICK.subagent.replace('"low"', '"xhigh"'), 'new')
-  assert.match(said(await send(hooks, S, 'redesign the sync')), /Subagent/)
-  client.reply = withFollows(PICK.same, 'new')
-  await send(hooks, S, 'ok')
-  assert.equal(draws, 0)
-  assert.ok(decisions(dir).every(d => d.trial === undefined && d.holdout === undefined))
-})
-
-test('trial: a here prompt over a running turn is never drawn (the router leaves it alone anyway)', async () => {
-  let draws = 0
-  const { hooks, dir } = await setup({ reply: PICK.here, history: ongoing(S), busy: [S] }, { effortMode: 'auto', draw: () => (draws++, true) })
-  await send(hooks, S, 'and push it')
-  assert.equal(draws, 0)
-  assert.deepEqual(decisions(dir).map(d => [d.where, d.trial, d.holdout]), [['keep', undefined, undefined]])
-})
-
-test('trial: a finished turn keeps the task going, so a long turn does not split it', async t => {
-  const T0 = Date.UTC(2026, 10, 6, 10)
-  t.mock.timers.enable({ apis: ['Date'], now: T0 })
-  let draws = 0
-  const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) }, { draw: () => (draws++, true) })
-  await send(hooks, S, 'run the tests')
-  // The turn ran for 40 minutes; the next prompt 5 minutes after it goes on with the task.
-  t.mock.timers.tick(40 * 60_000)
-  await hooks.event(done(S, 'm1'))
-  t.mock.timers.tick(5 * 60_000)
-  client.reply = withFollows(PICK.here, 'continues')
-  await send(hooks, S, 'and the lint')
-  assert.equal(draws, 1)
-  assert.deepEqual(decisions(dir).map(d => [d.where, d.holdout, d.trial]), [['keep', true, 'control'], ['keep', true, undefined]])
 })
 
 test('accept: the router subagent, session or switch the user took after the offer, once', async () => {
