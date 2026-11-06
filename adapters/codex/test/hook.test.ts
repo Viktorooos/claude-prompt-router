@@ -221,6 +221,12 @@ test('needsUserConfig: a custom provider or endpoint keeps the user config', () 
   assert.equal(needsUserConfig('model = "x"\n[model_providers.azure]\nname = "Azure"\n'), true)
 })
 
+test('needsUserConfig: where the login is kept or forced keeps the user config (the light run would not find it)', () => {
+  assert.equal(needsUserConfig('cli_auth_credentials_store = "keyring"\n'), true)
+  assert.equal(needsUserConfig('forced_login_method = "api"\n'), true)
+  assert.equal(needsUserConfig('forced_chatgpt_workspace_id = "ws"\n'), true)
+})
+
 test('codexRunner: a Codex that rejects a light flag gets the plain args', async () => {
   const log = join(tmp(), 'args')
   const bin = fakeCodex(`echo "$@" >> ${log}; cat > /dev/null; case "$*" in *--ignore-user-config*) echo "Error: Unknown feature flag: sleep_tool" >&2; exit 1;; esac; while [ "$1" != "-o" ]; do shift; done; echo '{"where":"keep"}' > "$2"`)

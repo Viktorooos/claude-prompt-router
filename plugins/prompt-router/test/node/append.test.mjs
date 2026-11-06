@@ -4,16 +4,16 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { append, TAIL } from '../../scripts/append.mjs'
 
 const SCRIPT = fileURLToPath(new URL('../../scripts/append.mjs', import.meta.url))
 const DAY = 86_400_000
 const line = (ts, n) => `${JSON.stringify({ kind: 'turn', ts, n })}\n`
 
-function run(path, mode, stdin) {
+function run(path, mode, stdin, node = []) {
   return new Promise((resolve, reject) => {
-    const child = execFile(process.execPath, [SCRIPT, path, mode], (err, _out, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve()))
+    const child = execFile(process.execPath, [...node, SCRIPT, path, mode], (err, _out, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve()))
     child.stdin.end(stdin)
   })
 }
@@ -54,4 +54,28 @@ test('tail: the error log keeps its last 20 kB', async () => {
   const text = await readFile(path, 'utf8')
   assert.equal(text.length, TAIL)
   assert.ok(text.endsWith('last line\n'))
+})
+
+test('a Node without import.meta.main still appends', async () => {
+  const dir = await mkdtemp(`${tmpdir()}/append-`)
+  // Node before 22.18 / 24.2: import.meta.main is undefined.
+  const hook = `${dir}/no-main.mjs`
+  await writeFile(hook, `import { registerHooks } from 'node:module'
+registerHooks({ load(url, ctx, next) {
+  const r = next(url, ctx)
+  return url.endsWith('/append.mjs') ? { ...r, source: String(r.source).replaceAll('import.meta.main', 'undefined') } : r
+} })
+`)
+  const path = `${dir}/stats.jsonl`
+  await run(path, 'stats', line(Date.now(), 1), ['--import', pathToFileURL(hook).href])
+  assert.deepEqual((await readFile(path, 'utf8')).trim().split('\n').map(l => JSON.parse(l).n), [1])
+})
+
+test('stats: a Node that cannot load the TypeScript core appends nothing and fails, so the caller rewrites (and trims) instead', async () => {
+  const dir = await mkdtemp(`${tmpdir()}/append-`)
+  const path = `${dir}/stats.jsonl`
+  const now = Date.now()
+  await writeFile(path, line(now - 91 * DAY, 1))
+  await assert.rejects(run(path, 'stats', line(now, 2), ['--no-experimental-strip-types']))
+  assert.deepEqual((await readFile(path, 'utf8')).trim().split('\n').map(l => JSON.parse(l).n), [1])
 })

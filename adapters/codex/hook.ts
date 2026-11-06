@@ -307,10 +307,10 @@ export function classifierArgs(o: { model: string; effort: string }, t: { file: 
   ]
 }
 
-// A config.toml that sets its own provider or endpoint: the light run would drop it (it skips the
-// user config), so the classifier keeps the plain args there.
+// A config.toml that sets its own provider, endpoint or login store: the light run would drop it (it
+// skips the user config), so the classifier keeps the plain args there.
 export function needsUserConfig(toml: string) {
-  return /^\s*(model_provider|openai_base_url|chatgpt_base_url)\s*=|^\s*\[model_providers[.\]]/m.test(toml)
+  return /^\s*(model_provider|openai_base_url|chatgpt_base_url|cli_auth_credentials_store|forced_login_method|forced_chatgpt_workspace_id)\s*=|^\s*\[model_providers[.\]]/m.test(toml)
 }
 
 // A Codex too old or too new for a light flag stops before any model call with one of these.
