@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { CHECKED, REUSE_MS, childPath, classifierArgs, codexBin, codexRunner, configDefaults, effortFor, needsUserConfig, readHistory, recentAnswer } from '../hook.ts'
+import { CHECKED, REUSE_MS, childPath, classifierArgs, codexBin, codexRunner, configDefaults, effortFor, isAppRequest, needsUserConfig, readHistory, recentAnswer } from '../hook.ts'
 import type { Output } from '../hook.ts'
 import { readStats } from '../stats.ts'
 import { FIXTURE, PICK, home, send, tmp } from './helpers.ts'
@@ -540,4 +540,24 @@ test('/router off leaves an options file it cannot read and logs the error', asy
 test('an invalid classifier value falls back to the Codex default, light', async () => {
   const { calls } = await send('fix it', { options: { classifier: 'bogus' } })
   assert.equal(calls[0].model, 'gpt-6-luna')
+})
+
+// The desktop app asks its own model things through the same chat machinery (e.g. a suggested next
+// prompt); those are no user prompts: no classifier, no note, no stats.
+const APP_REQUEST = 'This is an app-generated request for a suggested next user message. Based on the conversation so far, suggest one short follow-up.'
+
+test('app-generated requests are skipped: no classifier, no note, no decision', async () => {
+  const { r, calls, home: h } = await send(APP_REQUEST, { reply: PICK.here })
+  assert.equal(r, null)
+  assert.equal(calls.length, 0)
+  assert.equal(readStats(h).filter(x => x.kind === 'decision').length, 0)
+  assert.equal(isAppRequest('  this is an App-Generated request for a title'), true)
+  assert.equal(isAppRequest('why is this an app-generated request?'), false)
+})
+
+test('app-generated requests in the rollout do not count as user prompts', async () => {
+  const f = join(tmp(), 'r.jsonl')
+  const msg = (text: string) => ({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })
+  writeFileSync(f, [msg('opravit login'), msg(APP_REQUEST)].map(l => JSON.stringify(l)).join('\n') + '\n')
+  assert.deepEqual((await readHistory(f)).users, ['opravit login'])
 })

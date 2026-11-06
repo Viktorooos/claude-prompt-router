@@ -9,7 +9,7 @@ import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
 import { typed } from '../../plugins/prompt-router/core/router.ts'
-import { CHECKED, codexHome, handle, readHistory, recentAnswer } from './hook.ts'
+import { CHECKED, codexHome, handle, isAppRequest, readHistory, recentAnswer } from './hook.ts'
 import type { Deps } from './hook.ts'
 
 const GO_ON = 'Prompt Router: nothing to switch. Answer the prompt now and do not mention the router.'
@@ -54,6 +54,8 @@ export async function findTranscript(home: string, prompt: string): Promise<stri
 export async function route(args: { prompt?: unknown }, deps: Deps = {}): Promise<string> {
   const home = deps.codexHome ?? codexHome()
   const prompt = typeof args.prompt === 'string' ? args.prompt : ''
+  // The app's own requests to the model are no user prompts.
+  if (isAppRequest(prompt)) return GO_ON
   try {
     const transcript = await findTranscript(home, prompt)
     const h = await readHistory(transcript)

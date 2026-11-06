@@ -179,3 +179,12 @@ test('route: a prompt the hook left as it is goes on; an old answer is classifie
   await route({ prompt: 'ok' }, { codexHome: h, now: now + REUSE_MS + 1, runner })
   assert.equal(calls, 1)
 })
+
+test('route skips app-generated requests without the classifier', async () => {
+  const h = home()
+  const prompt = 'This is an app-generated request for a suggested next user message.'
+  rollout(sessions(h), 'chat-9', prompt)
+  let calls = 0
+  assert.match(await route({ prompt }, { codexHome: h, runner: async () => (calls++, PICK.here) }), /nothing to switch/i)
+  assert.equal(calls, 0)
+})

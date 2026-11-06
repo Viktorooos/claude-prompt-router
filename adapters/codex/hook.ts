@@ -150,6 +150,11 @@ export async function configDefaults(home: string) {
 
 export type History = { id: string; users: string[]; reply: string; isFirst: boolean; model: string; effort: string; tokens: number | undefined; window?: number; openTurns: string[] }
 
+// Requests the desktop app makes of the model itself (a suggested next prompt and the like), sent
+// as user messages: no user typed them.
+const APP_REQUEST = /^\s*This is an? (app|system|automatically)[- ]generated request\b/i
+export const isAppRequest = (text: string) => APP_REQUEST.test(text)
+
 const INJECTED = /^\s*(<[a-z_]+[\s>/]|<\/[a-z_]+>|# AGENTS\.md instructions|\[Prompt Router|Codex could not read)/
 
 function textParts(content: unknown) {
@@ -157,7 +162,7 @@ function textParts(content: unknown) {
   if (!Array.isArray(content)) return ''
   return content
     .map(c => (c && typeof c === 'object' && typeof (c as { text?: unknown }).text === 'string' ? (c as { text: string }).text : ''))
-    .filter(t => t && !INJECTED.test(t))
+    .filter(t => t && !INJECTED.test(t) && !isAppRequest(t))
     .join('\n')
 }
 
@@ -217,7 +222,7 @@ export async function readHistory(path: string | null | undefined): Promise<Hist
     }
   }
   // The event log has the typed text alone; the model's items carry context blocks around it.
-  h.users = (events.length ? events : items).map(typed).filter(Boolean)
+  h.users = (events.length ? events : items).map(typed).filter(u => u && !isAppRequest(u))
   h.openTurns = [...open]
   return h
 }
@@ -508,7 +513,7 @@ async function classify(input: Input, deps: Deps, home: string, ran: { on: boole
     const status = await routerCommand(home, o, m[1] ?? '', cur)
     return out(statusNote(status), status)
   }
-  if (!o.enabled || text.startsWith('/')) return null
+  if (!o.enabled || text.startsWith('/') || isAppRequest(text)) return null
 
   const levels = await supported(home)
   const effortOf = (slug: string, l: Level) => effortFor(o.efforts, levels, slug, l)

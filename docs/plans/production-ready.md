@@ -53,7 +53,13 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
   - Testy: 9 asercí `r === null` u klasifikovaných promptů změněno na „neutrální poznámka“ (změna chování, ne oslabení), nové testy na `CHECKED`, `recentAnswer`, `route` bez druhé klasifikace a vypršení po 120 s. Codex 107.
   - Živé ověření (jeden `pick` na prompt v logu) jsem nedělal, vyžaduje reinstalaci adaptéru.
 
-- [ ] 3. Přeskočit interní požadavky appky (30 min). Přidat „This is an app-generated request“ (a podobné prefixy appky) do `INJECTED` v `adapters/codex/hook.ts:154` a stejný filtr v `mcp.ts`. Ověření: unit test; živě po tahu v desktopové appce žádný `pick` na tenhle text.
+- [x] 3. Přeskočit interní požadavky appky (30 min). Přidat „This is an app-generated request“ (a podobné prefixy appky) do `INJECTED` v `adapters/codex/hook.ts:154` a stejný filtr v `mcp.ts`. Ověření: unit test; živě po tahu v desktopové appce žádný `pick` na tenhle text.
+
+  Poznámky ke kroku 3 (hotovo):
+  - V `~/.codex/log/prompt-router.log` i v rolloutech z listopadu je jediný takový prefix „This is an app-generated request for a suggested next user message“ (3× `pick`). Filtr `isAppRequest` v `hook.ts` (`/^\s*This is an? (app|system|automatically)[- ]generated request\b/i`) je o něco širší, jiné prefixy jsem nevymýšlel.
+  - Hook: takový prompt vrací `null` (žádná klasifikace, poznámka ani záznam ve stats). Historie (`readHistory`, `textParts`) ho nepočítá mezi uživatelovy prompty. `route` v `mcp.ts` ho odbaví hned `GO_ON` bez hledání rolloutu. `INJECTED` zůstal beze změny, filtr je vedle něj (jeden regex na obou místech).
+  - Testy: hook (žádné volání runneru, žádné rozhodnutí; historie), mcp (route bez klasifikátoru). Codex 110.
+
 - [ ] 4. Cena v `/router stats` pro Codex (30–60 min). GPT modely nejsou v `core/prices.ts`, stats ukazují $0. Doplnit GPT modely do ceníku (ceny API OpenAI), ať stats ukazují dolary jako v Claude Code. Soubory: `plugins/prompt-router/core/prices.ts`, `core/stats.ts:218-221`, `adapters/codex/stats.ts`. Ověření: `node --test adapters/codex/test/stats.test.ts` s turnem na `gpt-6.1-sol` ukazuje nenulovou cenu nebo tokeny.
 - [ ] 5. Windows pro Codex (30–60 min). `codexBin` hledá `codex` bez `.cmd`/`.exe` (`hook.ts:257`), `isOurs` regex nezná zpětná lomítka (`install.ts:122`, druhý install vytvoří duplicitu a uninstall nic nenajde), quoting příkazu přes `JSON.stringify` (`install.ts:112`). Ověření: unit testy s `path.win32` cestami a `process.platform` přes deps.
 
