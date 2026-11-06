@@ -108,18 +108,23 @@ export async function uninstallDesktop(home = codexHome(), now = Date.now()) {
   return out
 }
 
-export function command(hook = HOOK) {
-  return `${JSON.stringify(nodeBin())} ${JSON.stringify(hook)}`
+// The hook command line. POSIX shells read the JSON-quoted paths; on Windows the command goes to
+// cmd.exe, which knows no backslash escapes, so each path is in plain double quotes (a Windows
+// path cannot hold a double quote).
+export function command(hook = HOOK, platform: NodeJS.Platform = process.platform, node = nodeBin()) {
+  const q = platform === 'win32' ? (p: string) => `"${p}"` : (p: string) => JSON.stringify(p)
+  return `${q(node)} ${q(hook)}`
 }
 
-export function entry(hook = HOOK, event: (typeof EVENTS)[number] = 'UserPromptSubmit') {
-  if (event !== 'UserPromptSubmit') return { type: 'command', command: command(hook), timeout: 10 }
-  return { type: 'command', command: command(hook), timeout: 30, statusMessage: 'Routing...' }
+export function entry(hook = HOOK, event: (typeof EVENTS)[number] = 'UserPromptSubmit', platform: NodeJS.Platform = process.platform) {
+  if (event !== 'UserPromptSubmit') return { type: 'command', command: command(hook, platform), timeout: 10 }
+  return { type: 'command', command: command(hook, platform), timeout: 30, statusMessage: 'Routing...' }
 }
 
-// The router's entry, wherever this repo was when it was installed.
-function isOurs(h: unknown) {
-  return !!h && typeof h === 'object' && typeof (h as { command?: unknown }).command === 'string' && /adapters\/codex\/hook\.ts"?\s*$/.test((h as { command: string }).command)
+// The router's entry, wherever this repo was when it was installed: / or \ (also JSON-escaped \\)
+// between the folders.
+export function isOurs(h: unknown) {
+  return !!h && typeof h === 'object' && typeof (h as { command?: unknown }).command === 'string' && /adapters[\\/]+codex[\\/]+hook\.ts"?\s*$/.test((h as { command: string }).command)
 }
 
 type Group = { hooks?: unknown[]; [k: string]: unknown }
@@ -141,7 +146,7 @@ async function save(file: string, j: HooksFile, now: number, out: string[]) {
   await writeFile(file, `${JSON.stringify(j, null, 2)}\n`)
 }
 
-export async function install(home = codexHome(), now = Date.now(), hook = HOOK) {
+export async function install(home = codexHome(), now = Date.now(), hook = HOOK, platform: NodeJS.Platform = process.platform) {
   const p = paths(home)
   const out: string[] = []
   await mkdir(home, { recursive: true })
@@ -149,7 +154,7 @@ export async function install(home = codexHome(), now = Date.now(), hook = HOOK)
   const hooks = (j.hooks ??= {})
   const done: string[] = []
   for (const event of EVENTS) {
-    const want = entry(hook, event)
+    const want = entry(hook, event, platform)
     const groups = (hooks[event] ??= [])
     const found = groups.flatMap(g => (Array.isArray(g.hooks) ? g.hooks : [])).filter(isOurs)
     if (found.length === 1 && JSON.stringify(found[0]) === JSON.stringify(want)) continue

@@ -28,7 +28,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, join } from 'node:path'
+import { delimiter, dirname, join, posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { TIER_OF, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
@@ -250,11 +250,25 @@ const SCHEMA = {
 }
 
 // The codex binary. The desktop app runs hooks with the short PATH of a Dock app (no Homebrew bin),
-// so a bare `codex` is not found there: look in the usual places too.
-export function codexBin(env: NodeJS.ProcessEnv = process.env, places = ['/opt/homebrew/bin/codex', '/usr/local/bin/codex', join(homedir(), '.local/bin/codex')]) {
+// so a bare `codex` is not found there: look in the usual places too. On Windows npm installs a
+// codex.cmd shim (in %APPDATA%\\npm), a standalone install codex.exe.
+export function codexBin(env: NodeJS.ProcessEnv = process.env, places?: string[], platform: NodeJS.Platform = process.platform, exists: (f: string) => boolean = existsSync) {
   if (env.PROMPT_ROUTER_CODEX) return env.PROMPT_ROUTER_CODEX
-  const onPath = (env.PATH ?? '').split(delimiter).filter(Boolean).map(d => join(d, 'codex'))
-  return [...onPath, ...places].find(p => existsSync(p)) ?? 'codex'
+  const win = platform === 'win32'
+  const p = win ? win32 : posix
+  const names = win ? ['codex.exe', 'codex.cmd'] : ['codex']
+  const usual = win ? (env.APPDATA ? [p.join(env.APPDATA, 'npm', 'codex.cmd')] : []) : ['/opt/homebrew/bin/codex', '/usr/local/bin/codex', p.join(env.HOME || homedir(), '.local/bin/codex')]
+  const onPath = (env.PATH ?? env.Path ?? '').split(win ? ';' : ':').filter(Boolean).flatMap(d => names.map(n => p.join(d, n)))
+  return [...onPath, ...(places ?? usual)].find(f => exists(f)) ?? 'codex'
+}
+
+// How to start `bin`. Node will not spawn a .cmd without a shell, and cmd.exe would mangle the
+// arguments, so npm's codex.cmd runs as `node <its codex.js>`; only a shim with no package next to
+// it goes through the shell.
+export function codexSpawn(bin: string, platform: NodeJS.Platform = process.platform, exists: (f: string) => boolean = existsSync, node = process.execPath) {
+  if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(bin)) return { file: bin, args: [] as string[], shell: false }
+  const js = win32.join(win32.dirname(bin), 'node_modules', '@openai', 'codex', 'bin', 'codex.js')
+  return exists(js) ? { file: node, args: [js], shell: false } : { file: bin, args: [] as string[], shell: true }
 }
 
 // The classifier: one ephemeral, read-only `codex exec` with no tools to speak of. Its whole process
@@ -305,7 +319,11 @@ const FLAG_ERROR = /unknown feature|unexpected argument|unrecognized|invalid val
 type Run = { code: number | null; stdout: string; stderr: string }
 
 function runCodex(args: string[], prompt: string, timeoutMs: number): Promise<Run> {
-  const child = spawn(codexBin(), args, { env: { ...process.env, PATH: childPath(), PROMPT_ROUTER_INNER: '1' }, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+  const run = codexSpawn(codexBin())
+  // Its own process group, killed whole at the time limit; Windows has no groups (and a detached
+  // child there gets a console window).
+  const win = process.platform === 'win32'
+  const child = spawn(run.file, [...run.args, ...args], { env: { ...process.env, PATH: childPath(), PROMPT_ROUTER_INNER: '1' }, stdio: ['pipe', 'pipe', 'pipe'], detached: !win, windowsHide: true, shell: run.shell })
   let stdout = ''
   let stderr = ''
   child.stdout.on('data', d => (stdout = (stdout + d).slice(-200_000)))

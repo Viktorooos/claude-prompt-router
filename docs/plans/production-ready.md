@@ -70,7 +70,14 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
   - Testy: nový test cen (CC 203), Codex test compareWith přepsaný na GPT ceny (dřív testoval „Codex modely zůstávají bez ceny“, což je teď naopak), v testu tabulky nahrazen nepřeceněný model `gpt-6-luna` za `gpt-5-codex` (pořád testuje model bez ceny), nový test `/router stats` s `compareWith: strong-medium`. Codex 111.
   - README: odrážka Codex v Savings stats přepsaná.
 
-- [ ] 5. Windows pro Codex (30–60 min). `codexBin` hledá `codex` bez `.cmd`/`.exe` (`hook.ts:257`), `isOurs` regex nezná zpětná lomítka (`install.ts:122`, druhý install vytvoří duplicitu a uninstall nic nenajde), quoting příkazu přes `JSON.stringify` (`install.ts:112`). Ověření: unit testy s `path.win32` cestami a `process.platform` přes deps.
+- [x] 5. Windows pro Codex (30–60 min). `codexBin` hledá `codex` bez `.cmd`/`.exe` (`hook.ts:257`), `isOurs` regex nezná zpětná lomítka (`install.ts:122`, druhý install vytvoří duplicitu a uninstall nic nenajde), quoting příkazu přes `JSON.stringify` (`install.ts:112`). Ověření: unit testy s `path.win32` cestami a `process.platform` přes deps.
+
+  Poznámky ke kroku 5 (hotovo, jen unit testy, na Windows nespuštěno):
+  - `codexBin(env, places?, platform, exists)` v `hook.ts`: na Windows hledá `codex.exe` a `codex.cmd` v `PATH`/`Path` (oddělovač `;`, `path.win32`), jinak `%APPDATA%\npm\codex.cmd`. Nový `codexSpawn(bin, platform, exists, node)`: npm shim `codex.cmd` spouští jako `node <složka>\node_modules\@openai\codex\bin\codex.js` (Node `.cmd` bez shellu nespustí a cmd.exe by rozbil argumenty); jen shim bez balíčku vedle jde přes `shell: true` (tam by cesty s mezerou v argumentech mohly selhat). Na Windows `detached: false` (jinak by naskočilo okno konzole) a `windowsHide: true`; zabíjení po timeoutu tam padne na `child.kill`, které vnuka za shellem nezabije.
+  - `install.ts`: `command(hook, platform, node)` na Windows dává cesty v obyčejných uvozovkách (cmd.exe nezná JSON escapy), POSIX beze změny (`JSON.stringify`, ať se stávajícím instalacím nemění příkaz a Codex nežádá znovu o trust). `isOurs` (teď exportovaný) pozná `adapters[\\/]+codex[\\/]+hook.ts`, tedy i zdvojená lomítka ze starého JSON quotingu. `install(home, now, hook, platform)`.
+  - Nejistota: nevím, jestli Codex na Windows spouští hook přes cmd.exe, nebo PowerShell. V PowerShellu by `"C:\…\node.exe" "…hook.ts"` byl jen řetězec (chtělo by `& "…"`). Ověřit při prvním běhu na Windows.
+  - Testy: Windows `codexBin`, `codexSpawn`, `command`, `isOurs` a dvojí install + uninstall s Windows cestou (jeden záznam, pak žádný). Codex 116.
+
 
 ### B. Claude Code
 

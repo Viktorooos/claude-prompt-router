@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { CHECKED, REUSE_MS, childPath, classifierArgs, codexBin, codexRunner, configDefaults, effortFor, isAppRequest, needsUserConfig, readHistory, recentAnswer } from '../hook.ts'
+import { CHECKED, REUSE_MS, childPath, classifierArgs, codexBin, codexRunner, codexSpawn, configDefaults, effortFor, isAppRequest, needsUserConfig, readHistory, recentAnswer } from '../hook.ts'
 import type { Output } from '../hook.ts'
 import { readStats } from '../stats.ts'
 import { FIXTURE, PICK, home, send, tmp } from './helpers.ts'
@@ -560,4 +560,24 @@ test('app-generated requests in the rollout do not count as user prompts', async
   const msg = (text: string) => ({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })
   writeFileSync(f, [msg('opravit login'), msg(APP_REQUEST)].map(l => JSON.stringify(l)).join('\n') + '\n')
   assert.deepEqual((await readHistory(f)).users, ['opravit login'])
+})
+
+// Windows: npm puts codex.cmd (a batch shim) on PATH, a standalone install codex.exe.
+test('codexBin on Windows: codex.exe or codex.cmd on PATH (;), else %APPDATA%\\npm', () => {
+  const have = (...files: string[]) => (f: string) => files.includes(f)
+  const env = { PATH: 'C:\\Windows;C:\\Users\\x\\AppData\\Roaming\\npm', APPDATA: 'C:\\Users\\x\\AppData\\Roaming' }
+  assert.equal(codexBin(env, undefined, 'win32', have('C:\\Users\\x\\AppData\\Roaming\\npm\\codex.cmd')), 'C:\\Users\\x\\AppData\\Roaming\\npm\\codex.cmd')
+  assert.equal(codexBin(env, undefined, 'win32', have('C:\\Windows\\codex.exe', 'C:\\Users\\x\\AppData\\Roaming\\npm\\codex.cmd')), 'C:\\Windows\\codex.exe')
+  // The desktop app's short PATH: the npm folder from APPDATA.
+  assert.equal(codexBin({ Path: 'C:\\Windows', APPDATA: env.APPDATA }, undefined, 'win32', have('C:\\Users\\x\\AppData\\Roaming\\npm\\codex.cmd')), 'C:\\Users\\x\\AppData\\Roaming\\npm\\codex.cmd')
+  assert.equal(codexBin(env, undefined, 'win32', have()), 'codex')
+})
+
+test('codexSpawn: a codex.cmd shim runs its codex.js with node, no shell; anything else runs as it is', () => {
+  const js = 'C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js'
+  assert.deepEqual(codexSpawn('C:\\npm\\codex.cmd', 'win32', f => f === js, 'C:\\node\\node.exe'), { file: 'C:\\node\\node.exe', args: [js], shell: false })
+  // A shim without the package next to it: through the shell, as Windows runs a .cmd.
+  assert.deepEqual(codexSpawn('C:\\npm\\codex.cmd', 'win32', () => false, 'node'), { file: 'C:\\npm\\codex.cmd', args: [], shell: true })
+  assert.deepEqual(codexSpawn('C:\\bin\\codex.exe', 'win32', () => true, 'node'), { file: 'C:\\bin\\codex.exe', args: [], shell: false })
+  assert.deepEqual(codexSpawn('/opt/homebrew/bin/codex', 'darwin', () => true, 'node'), { file: '/opt/homebrew/bin/codex', args: [], shell: false })
 })

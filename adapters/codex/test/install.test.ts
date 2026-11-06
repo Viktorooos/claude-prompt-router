@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import { paths } from '../hook.ts'
-import { command, install, uninstall } from '../install.ts'
+import { command, install, isOurs, uninstall } from '../install.ts'
 import { tmp } from './helpers.ts'
 
 const SCRIPT = fileURLToPath(new URL('../install.ts', import.meta.url))
@@ -144,4 +144,34 @@ test('install also registers the Stop and SubagentStop hooks for the statistics;
   assert.equal((await install(h, 2))[0], `Already installed in ${p.hooks}`)
   await uninstall(h, 3)
   assert.deepEqual(JSON.parse(readFileSync(p.hooks, 'utf8')).hooks, { Stop: [{ hooks: [{ type: 'command', command: 'echo theirs' }] }] })
+})
+
+// Windows: backslash paths, and a command cmd.exe reads (plain double quotes, no JSON escapes).
+const WIN_HOOK = 'C:\\Users\\x\\prompt-router\\adapters\\codex\\hook.ts'
+const WIN_NODE = 'C:\\Program Files\\nodejs\\node.exe'
+
+test('command on Windows: each path in plain double quotes', () => {
+  assert.equal(command(WIN_HOOK, 'win32', WIN_NODE), '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\x\\prompt-router\\adapters\\codex\\hook.ts"')
+})
+
+test('isOurs knows the hook by a Windows path too, in either quoting', () => {
+  assert.equal(isOurs({ command: command(WIN_HOOK, 'win32', WIN_NODE) }), true)
+  assert.equal(isOurs({ command: JSON.stringify(WIN_NODE) + ' ' + JSON.stringify(WIN_HOOK) }), true)
+  assert.equal(isOurs({ command: command('/repo/adapters/codex/hook.ts') }), true)
+  assert.equal(isOurs({ command: 'node "C:\\x\\other\\hook.ts"' }), false)
+})
+
+test('install twice and uninstall with a Windows hook path: one entry, then none', async () => {
+  const h = tmp()
+  await install(h, 1, WIN_HOOK, 'win32')
+  await install(h, 2, WIN_HOOK, 'win32')
+  const j = JSON.parse(readFileSync(paths(h).hooks, 'utf8'))
+  for (const ev of ['UserPromptSubmit', 'Stop', 'SubagentStop']) {
+    const cmds = j.hooks[ev].flatMap((g: { hooks: { command: string }[] }) => g.hooks.map(x => x.command))
+    assert.equal(cmds.length, 1, ev)
+    assert.match(cmds[0], /^"[^"]+" "C:\\Users\\x\\prompt-router\\adapters\\codex\\hook\.ts"$/)
+  }
+  await uninstall(h, 3)
+  const after = JSON.parse(readFileSync(paths(h).hooks, 'utf8'))
+  assert.equal(JSON.stringify(after).includes('hook.ts'), false)
 })
