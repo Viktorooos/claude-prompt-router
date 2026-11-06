@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { TEMPLATE, claudeDir, compactWindow, promptKey, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { TEMPLATE, claudeDir, compactWindow, promptKey, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig, SWITCHES } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -1483,4 +1483,33 @@ test('promptKey: a 16-digit hex hash, the same for case and spacing, never the t
   expect(k).not.toContain('login')
   // sha256("abc") starts ba7816bf8f01cfea.
   expect(promptKey(' ABC ')).toBe('ba7816bf8f01cfea')
+})
+
+// newSessionAt is exactly 10 … 100 %, and sessionSuggestions auto starts the session with no question.
+test('newSessionAt: every 10 % step from 10 to 100 is a valid value, anything between is not', () => {
+  for (let n = 10; n <= 100; n += 10) expect(toConfig({ newSessionAt: `${n}%` }).newSessionAt).toBe(`${n}%`)
+  expect(toConfig({ newSessionAt: '45%' }).newSessionAt).toBe('50%')
+  expect(toConfig({ newSessionAt: '0%' }).newSessionAt).toBe('50%')
+  expect(SWITCHES.newSessionAt.filter(v => v !== 'off').slice().sort()).toEqual(['10%', '100%', '20%', '30%', '40%', '50%', '60%', '70%', '80%', '90%'].sort())
+  expect(toConfig({ sessionSuggestions: 'auto' }).sessionSuggestions).toBe('auto')
+  expect(preferSession(pickOf('new'), { tokens: 95_000, window: 100_000 }, toConfig({ newSessionAt: '90%' })).where).toBe('session')
+  expect(preferSession(pickOf('new'), { tokens: 85_000, window: 100_000 }, toConfig({ newSessionAt: '90%' })).where).toBe('here')
+})
+
+test('sessionSuggestions auto: a chat at the share starts the new session right away, no question', saved({ sessionSuggestions: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, HERE_NEW, { usage: { tokens: 120_000, window: 200_000 }, files: FULL({ sessionSuggestions: 'auto' }) })
+  await start($)
+  await submit($, 'now add a favourites screen')
+  const t = seen.sent[0] ?? ''
+  expect(t).not.toMatch(/AskUserQuestion/)
+  expect(t).not.toMatch(/Where should this go/)
+  expect(t).toMatch(/call start_session right away/)
+  expect(t).toMatch(/60 ?%/)
+})
+
+test('sessionSuggestions auto: a session pick of the classifier in a short chat is still asked', saved({ sessionSuggestions: 'auto' }), async ($: any, on: any) => {
+  const seen = engine(on, PICK.session, { files: FULL({ sessionSuggestions: 'auto' }) })
+  await start($)
+  await submit($, 'unrelated: add a shopping list')
+  expect(seen.sent[0] ?? '').toMatch(/AskUserQuestion/)
 })

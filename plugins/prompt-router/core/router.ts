@@ -40,10 +40,12 @@ export const SWITCHES = {
   midChatModelDetection: ['ask', 'auto', 'off'],
   // auto: the suggested subagent runs right away, with no "Where should this go?" (one line tells the user).
   subagentSuggestions: ['ask', 'auto', 'off'],
-  sessionSuggestions: ['ask', 'off'],
+  // auto: a chat that reached newSessionAt starts the new session right away, with no question.
+  sessionSuggestions: ['ask', 'auto', 'off'],
   // In a chat past this share of its model's context window, any prompt that would stay here is
   // offered as a new session (every reply here re-reads the whole context).
-  newSessionAt: ['50%', 'off', '40%', '60%', '70%'],
+  // 10 … 100 %; `off` is only read for old settings (the pane turns it into sessionSuggestions off).
+  newSessionAt: ['50%', 'off', '10%', '20%', '30%', '40%', '60%', '70%', '80%', '90%', '100%'],
   notifications: ['on', 'off'],
   stats: ['on', 'off'],
   // Claude Code: open the Prompt Router pane by itself when a session starts.
@@ -70,7 +72,7 @@ export type Model = keyof typeof MODELS
 // note: in a long chat, the words "chat at X% of context" in the user's language, for preferSession.
 // follows: how the prompt relates to the chat's last answer (a missing field is unknown).
 export type Follows = 'continues' | 'corrects' | 'new'
-export type Pick = { where: Where; model: Model; effort: Level; why: string; work?: 'new' | 'continue'; note?: string; follows?: Follows; first?: { now: Model | '' }; other?: { now: Model } }
+export type Pick = { where: Where; model: Model; effort: Level; why: string; work?: 'new' | 'continue'; note?: string; follows?: Follows; first?: { now: Model | '' }; other?: { now: Model }; long?: boolean }
 
 // Claude Code's config folder (~/.claude): CLAUDE_CONFIG_DIR when set, else .claude in HOME or
 // USERPROFILE, else the .claude folder the plugin is installed under. '' when none says.
@@ -373,7 +375,7 @@ export function preferSession(p: Pick, c: { tokens: number | undefined; window?:
   const share = longShare(c, cfg)
   if (p.where !== 'here' || !share) return p
   const note = p.note || `chat at ${share}% of context`
-  return { ...p, where: 'session', why: p.why ? `${p.why}, ${note}` : note }
+  return { ...p, where: 'session', long: true, why: p.why ? `${p.why}, ${note}` : note }
 }
 
 // The chat's share of its model's context window in whole percent once it reaches newSessionAt, else 0.
