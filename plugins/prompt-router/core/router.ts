@@ -123,6 +123,9 @@ const REDO = /(?<!\p{L})(nefung\p{L}*|nejde|zkus(?:te)? to (?:znovu|ještě)|šp
 
 export const isRedo = (text: string) => REDO.test(text)
 
+// The prompt's text in a form that repeats when the same question comes again (case and spaces ignored).
+export const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 200)
+
 // A model the router may offer: an unknown or unavailable one falls back to Opus.
 export function asModel(v: unknown, models: readonly Model[] = ALL_MODELS): Model {
   const m = knownModel(v)

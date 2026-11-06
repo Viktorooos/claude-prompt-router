@@ -602,6 +602,8 @@ export type TrialRow = { kind: 'all' | TaskKind; router: ArmStats; control: ArmS
 export const MIN_TRIAL = 5
 // How long after `start_session` the new session's first prompt may come to belong to the task.
 const SPAWN_WINDOW = 15 * 60_000
+// The new session's first prompt and the spawn's words: the same start (the prompt may get a note added).
+const sameStart = (a: string | undefined, b: string) => !!a && a.slice(0, 60) === b.slice(0, 60)
 
 // Where the router sent the task (or wanted to, in control): a fresh context, or here cheaper or dearer.
 // A chat with no effort set runs at the reference's.
@@ -640,7 +642,7 @@ export function trial(records: readonly Entry[], since = -Infinity): TrialRow[] 
   for (const s of records) {
     if (s.kind !== 'spawn') continue
     const parent = eps.filter(e => e.chat === s.chat && e.start <= s.ts).at(-1)
-    const kid = eps.find(e => e.chat !== s.chat && !child.has(e) && e.decisions[0]!.key === s.key && e.start >= s.ts && e.start - s.ts <= SPAWN_WINDOW)
+    const kid = eps.find(e => e.chat !== s.chat && !child.has(e) && sameStart(e.decisions[0]!.key, s.key) && e.start >= s.ts && e.start - s.ts <= SPAWN_WINDOW)
     if (parent && kid) child.set(kid, parent)
   }
   const price = new Map<Episode, { usd: number; cls: number }>()

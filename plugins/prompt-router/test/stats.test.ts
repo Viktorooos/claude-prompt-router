@@ -755,8 +755,10 @@ test('trial: a task costs all its prompts, subagents and the session it started;
   const r = task('r', { trial: 'router', where: 'session', to: { model: 'opus', effort: 'medium' } }, [{ usd: 1 }, { usd: 0.5, agentId: 'a1' }],
     [{ d: { follows: 'continues' }, turns: [{ usd: 2 }] }])
   const t0 = NOW - DAY
-  const spawn: Entry = { kind: 'spawn', ts: t0 + 50, platform: 'claude-code', chat: 'r', key: 'do the thing' }
-  const child = task('s', { ts: t0 + 60, key: 'do the thing', where: 'here', to: { model: 'opus', effort: 'medium' } }, [{ ts: t0 + 70, usd: 3 }])
+  // The new session's prompt may end differently (a note added): the first 60 characters decide.
+  const words = 'do the thing in the settings screen and keep the old layout as it is'
+  const spawn: Entry = { kind: 'spawn', ts: t0 + 50, platform: 'claude-code', chat: 'r', key: words }
+  const child = task('s', { ts: t0 + 60, key: `${words}, context: the plan`, where: 'here', to: { model: 'opus', effort: 'medium' } }, [{ ts: t0 + 70, usd: 3 }])
   // A session with the same words but started much later is its own task.
   const late = task('s2', { ts: t0 + 60 * 60_000, key: 'do the thing', trial: 'router', ...DOWN }, [{ ts: t0 + 60 * 60_000 + 1, usd: 7 }])
   const rows = trial([...r, spawn, ...child, ...late])
