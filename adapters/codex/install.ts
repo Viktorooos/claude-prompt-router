@@ -30,6 +30,7 @@ export const DEFAULT_OPTIONS = {
   compareWith: 'strong-medium',
   sessionSuggestions: 'ask',
   newSessionAt: '50%',
+  holdoutPct: '30',
   notifications: 'on',
   project: '',
   rules: '',

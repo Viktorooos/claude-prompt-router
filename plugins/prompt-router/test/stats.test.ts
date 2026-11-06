@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, MIN_TRIAL, measuredLabel, trial, trialText, withTranscripts, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, MIN_TRIAL, measuredLabel, trial, trialText, withTranscripts, MIN_CONTROL, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, placeTask, historyCompare, historyMix, parseLog, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, timeText, minutes, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -858,4 +858,26 @@ test('measuredLabel: the pane\'s short line for the whole trial', () => {
   const enough = [...[1, 2, 3, 4, 5].map((u, i) => routerTask(`r${i}`, [u - 0.01])).flat(), ...[2, 4, 6, 8, 10].map((u, i) => controlTask(`k${i}`, [u])).flat()]
   expect(measuredLabel(trial(enough)[0]!)).toBe('+$3.00 per task (−$0.10 to +$6.10)')
   expect(measuredLabel(trial(routerTask('r', [1]))[0]!)).toBe('1 router / 0 control tasks, too little data')
+})
+
+test('placeTask: the first prompt of a task draws the group once; later prompts of the task keep it', () => {
+  let draws = 0
+  const control = () => (draws++, true)
+  const a = placeTask(null, { ts: 0, key: 'fix the bug' }, { eligible: true, control })
+  expect(a).toEqual({ task: { end: 0, keys: ['fix the bug'], control: true }, trial: 'control', quiet: true })
+  // Goes on with it: no new draw, no trial mark, still quiet while the router wants to act.
+  const b = placeTask(a.task, { ts: 60_000, key: 'still broken', follows: 'corrects' }, { eligible: true, control })
+  expect(b).toEqual({ task: { end: 60_000, keys: ['fix the bug', 'still broken'], control: true }, quiet: true })
+  // A later prompt the router would not change (or that is exempt) is not held back.
+  expect(placeTask(b.task, { ts: 70_000, key: 'ok', follows: 'continues' }, { eligible: false, control }).quiet).toBe(false)
+  expect(draws).toBe(1)
+  // New work starts a new task: a router task when the draw says so.
+  const c = placeTask(b.task, { ts: 80_000, key: 'add dark mode', follows: 'new' }, { eligible: true, control: () => false })
+  expect(c).toEqual({ task: { end: 80_000, keys: ['add dark mode'], control: false }, trial: 'router', quiet: false })
+  // A task that starts with nothing to change is outside the trial, with no draw.
+  const d = placeTask(null, { ts: 0, key: 'ok' }, { eligible: false, control })
+  expect(d).toEqual({ task: { end: 0, keys: ['ok'], control: false }, quiet: false })
+  expect(draws).toBe(1)
+  // Past 30 minutes the same chat starts over.
+  expect(placeTask(a.task, { ts: 31 * 60_000, key: 'x', follows: 'continues' }, { eligible: true, control: () => false }).trial).toBe('router')
 })

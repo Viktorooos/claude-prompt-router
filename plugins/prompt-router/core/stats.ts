@@ -362,6 +362,21 @@ export function startsTask(d: Pick<Decision, 'ts' | 'key' | 'follows'>, cur: { e
   return d.follows === undefined || d.follows === 'new'
 }
 
+// One chat's current task, for the trial: when it last had a prompt, its prompts' keys, its group.
+export type TaskState = { end: number; keys: string[]; control: boolean }
+
+// Places a routed prompt in its chat's task (startsTask). A task enters the trial when the router
+// wants to change its first prompt and the prompt is not exempt (eligible): `control()` then draws
+// its group, once. quiet: the router leaves this prompt alone (a control task it would act on).
+export function placeTask(cur: TaskState | null, d: { ts: number; key: string; follows?: Decision['follows'] }, o: { eligible: boolean; control: () => boolean }): { task: TaskState; trial?: 'router' | 'control'; quiet: boolean } {
+  if (startsTask(d, cur)) {
+    const control = o.eligible && o.control()
+    return { task: { end: d.ts, keys: [d.key], control }, ...(o.eligible ? { trial: control ? ('control' as const) : ('router' as const) } : {}), quiet: control }
+  }
+  const task = { end: d.ts, keys: [...cur!.keys, d.key], control: cur!.control }
+  return { task, quiet: task.control && o.eligible }
+}
+
 const startsEpisode = (d: Decision, cur: Episode) => startsTask(d, { end: cur.end, keys: cur.decisions.map(x => x.key) })
 
 // The records grouped into tasks, per chat, oldest first by where each task started.

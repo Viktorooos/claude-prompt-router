@@ -29,13 +29,19 @@ export function home(options?: Record<string, unknown>, toml = 'model = "gpt-6.1
   return h
 }
 
+// The control-group draw for the routing tests: never held back, so no prompt lands in it by chance;
+// the trial tests pass their own.
+export const never = () => false
+
 // Runs one prompt through the hook with a classifier that answers `reply` (or throws an Error).
-export async function send(prompt: string, o: { reply?: string | Error; options?: Record<string, unknown>; transcript?: string | null; model?: string; turn?: string; codexHome?: string } = {}) {
+export async function send(prompt: string, o: { reply?: string | Error; options?: Record<string, unknown>; transcript?: string | null; model?: string; turn?: string; codexHome?: string; session?: string; now?: number; draw?: (seed: string, pct: number) => boolean } = {}) {
   const calls: { prompt: string; model: string; effort: string; timeoutMs: number }[] = []
   const h = o.codexHome ?? home(o.options)
-  const input: Input = { session_id: 's1', transcript_path: o.transcript === undefined ? FIXTURE : o.transcript, cwd: '/work', hook_event_name: 'UserPromptSubmit', model: o.model ?? 'gpt-6.1-sol', turn_id: o.turn ?? 't2', prompt, permission_mode: 'default' }
+  const input: Input = { session_id: o.session ?? 's1', transcript_path: o.transcript === undefined ? FIXTURE : o.transcript, cwd: '/work', hook_event_name: 'UserPromptSubmit', model: o.model ?? 'gpt-6.1-sol', turn_id: o.turn ?? 't2', prompt, permission_mode: 'default' }
   const r = await handle(input, {
     codexHome: h,
+    now: o.now,
+    draw: o.draw ?? never,
     runner: async (p, x) => {
       calls.push({ prompt: p, ...x })
       const reply = o.reply ?? PICK.same

@@ -23,6 +23,7 @@ export const DEFAULT_OPTIONS = {
   subagentSuggestions: 'ask',
   sessionSuggestions: 'ask',
   newSessionAt: '50%',
+  holdoutPct: '30',
   notifications: 'on',
   project: '',
   rules: '',

@@ -22,7 +22,7 @@ Větev `integrate/all` (přímo, bez nové větve). UI panelu dělá jiná sessi
 - `namesSetting` má seznam modelů zvlášť od `ALL_MODELS`; `knownEffort` by šel nahradit normalizací v `parseLog`.
 - Statistiky: tah s `usd` na neceněném modelu (a tah na neznámém výchozím modelu) se počítá jako oceněný i neoceněný. Oprava mění test „a model with no price claims no saving…“ (`unpricedTurns` 2 → 1) a význam `unpricedTurns`, proto čeká na rozhodnutí.
 - OpenCode: patička tabulky statistik neříká, s čím se srovnává (`compareWith`).
-- Adaptéry nezapisují `follows`, `key` ani `accept` → v Codexu/OpenCode se nepočítá přepracování ani přijaté nabídky.
+- Codex zapisuje `accept` jen u subagenta (Stop hook vidí `spawn_agent`); přijetí `/model` řádku a nabídky session (příkaz do terminálu) hook nevidí. Adaptéry nezapisují odmítnutí (`outcome: 'declined'`): ptají se textem, ne nástrojem. (`follows`, `key`, `redo`, pokus po úkolech hotové v kroku 6 measured-savings.)
 - Statistiky: kontrolní třída ignoruje výchozí model/effort (`here:<model>`); náklad kontrolní epizody zahrnuje i routované navazující prompty; bilance bere jen první rozhodnutí epizody.
 - Nainstalovaný mod je cache 0.9.0 a liší se od repa – přeinstalovat až po commitu panelové session (rozhodnutí uživatele 2026-11-05).
 

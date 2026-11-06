@@ -17,6 +17,7 @@ import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
 import { parseLog, summarize } from '../../plugins/prompt-router/core/stats.ts'
 import type { Compare, Entry, Summary } from '../../plugins/prompt-router/core/stats.ts'
 import { TIER_OF } from '../shared/tiers.ts'
+import { SUBAGENT_TOOL } from './notes.ts'
 import type { Model } from '../../plugins/prompt-router/core/router.ts'
 
 const DAY = 86_400_000
@@ -80,6 +81,16 @@ export function turnUsage(text: string): { model: string; baseline: string; usag
   const usage = { input: b.input - a.input, output: b.output - a.output, cacheRead: b.cacheRead - a.cacheRead, cacheWrite: b.cacheWrite - a.cacheWrite }
   for (const k of Object.keys(usage) as (keyof Usage)[]) usage[k] = Math.max(0, usage[k])
   return { model, baseline, usage }
+}
+
+// Whether the rollout's last turn started a subagent (a spawn_agent call after its task_started).
+export function spawnedAgent(text: string): boolean {
+  let spawned = false
+  for (const e of events(text)) {
+    if (e.type === 'event_msg' && e.payload?.type === 'task_started') spawned = false
+    else if (e.type === 'response_item' && e.payload?.type === 'function_call' && e.payload?.name === SUBAGENT_TOOL) spawned = true
+  }
+  return spawned
 }
 
 // Older than 90 days, or past 5 MB: the oldest records go.

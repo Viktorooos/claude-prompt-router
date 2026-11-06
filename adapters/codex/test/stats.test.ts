@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { codexRunner, handleStop } from '../hook.ts'
 import { appendStats, classifierUsage, codexUsage, readStats, statsPath, statsReport, turnUsage } from '../stats.ts'
 import type { Decision, Entry, Turn } from '../../../plugins/prompt-router/core/stats.ts'
-import { PICK, home, send, tmp } from './helpers.ts'
+import { promptKey } from '../../../plugins/prompt-router/core/router.ts'
+import { PICK, home, never, send, tmp } from './helpers.ts'
 
 const HOOK = fileURLToPath(new URL('../hook.ts', import.meta.url))
 const DAY = 86_400_000
@@ -121,6 +122,7 @@ test('the classifier usage reported by the runner goes into the decision', async
   const { handle } = await import('../hook.ts')
   await handle({ session_id: 's1', transcript_path: null, model: 'gpt-6.1-sol', prompt: 'fix it', hook_event_name: 'UserPromptSubmit' }, {
     codexHome: h,
+    draw: never,
     runner: async (_p, o) => {
       o.onUsage?.({ input: 10, output: 2, cacheRead: 5, cacheWrite: 0 })
       return PICK.first
@@ -258,4 +260,89 @@ test('statsReport with compareWith: every priced turn on the chosen tier and eff
   assert.match(row(strong, 'Extra cost'), /\$0\.00\s+\$0\.00\s+\$0\.00$/)
   assert.match(row(strong, 'Turns without a price'), /1\s+1\s+1$/)
   assert.match(strong, /priced on the strong tier \(option compareWith[^)]*effort is not re-priced\)/)
+})
+
+// The trial and the per-prompt fields, as the Claude Code mod writes them (register.tsx).
+const T0 = Date.UTC(2026, 10, 6, 10)
+const withFollows = (reply: string, follows: string) => reply.replace(/}$/, `, "follows": "${follows}"}`)
+const spawnCall = ev('response_item', { type: 'function_call', name: 'spawn_agent', arguments: '{}', call_id: 'c1' })
+
+test('every decision carries the prompt key, what the classifier read of it (follows) and redo', async () => {
+  const h = home()
+  await send('Fix   the login BUG', { codexHome: h, reply: withFollows(PICK.here, 'new'), now: T0 })
+  await send('still not working', { codexHome: h, reply: withFollows(PICK.keep, 'corrects'), now: T0 + 60_000 })
+  const [a, b] = readStats(h) as Decision[]
+  assert.equal(a.key, promptKey('Fix   the login BUG'))
+  assert.equal(a.follows, 'new')
+  assert.equal(a.redo, undefined)
+  assert.equal(b.key, promptKey('still not working'))
+  assert.equal(b.follows, 'corrects')
+  assert.equal(b.redo, true)
+})
+
+test('trial: a control task gets no note, and the router stays quiet for the prompts that go on with it', async () => {
+  const h = home()
+  const draws: number[] = []
+  const draw = (_seed: string, pct: number) => (draws.push(pct), true)
+  const first = await send('fix the login bug', { codexHome: h, reply: PICK.subagent, now: T0, draw })
+  assert.equal(first.r, null)
+  const next = await send('and the logout one', { codexHome: h, reply: withFollows(PICK.here, 'continues'), now: T0 + 60_000, draw })
+  assert.equal(next.r, null)
+  assert.deepEqual(draws, [30])
+  const [a, b] = readStats(h) as Decision[]
+  assert.deepEqual([a.where, a.outcome, a.holdout, a.trial, a.wantedWhere], ['keep', 'applied', true, 'control', 'subagent'])
+  assert.deepEqual(a.wanted, { model: 'gpt-6-luna', effort: 'low' })
+  assert.deepEqual(a.to, a.from)
+  assert.deepEqual([b.where, b.holdout, b.trial, b.wantedWhere], ['keep', true, undefined, undefined])
+  assert.deepEqual(b.wanted, { model: 'gpt-6.1-sol', effort: 'low' })
+  // New work starts a new task and draws again: a router task is routed as usual.
+  const third = await send('add dark mode', { codexHome: h, reply: withFollows(PICK.subagent, 'new'), now: T0 + 120_000, draw: () => false })
+  assert.match(third.context, /spawn_agent|Subagent/)
+  const c = readStats(h)[2] as Decision
+  assert.deepEqual([c.where, c.trial, c.holdout], ['subagent', 'router', undefined])
+})
+
+test('trial: each chat has its own task; holdoutPct is the share drawn', async () => {
+  const h = home({ holdoutPct: '10' })
+  const draws: number[] = []
+  const draw = (_seed: string, pct: number) => (draws.push(pct), false)
+  await send('fix the login bug', { codexHome: h, reply: PICK.subagent, now: T0, draw })
+  await send('fix the login bug', { codexHome: h, reply: PICK.subagent, now: T0 + 1000, draw, session: 's2' })
+  // The same question again in the first chat goes on with its task.
+  await send('fix the login bug', { codexHome: h, reply: PICK.subagent, now: T0 + 2000, draw })
+  assert.deepEqual(draws, [10, 10])
+})
+
+test('trial: a prompt that names a setting, an xhigh pick, or nothing to change is never drawn', async () => {
+  const h = home()
+  let draws = 0
+  const draw = () => (draws++, true)
+  const named = await send('do it with opus', { codexHome: h, reply: PICK.subagent, now: T0, draw })
+  assert.notEqual(named.r, null)
+  const xhigh = await send('redesign the sync', { codexHome: h, reply: withFollows(PICK.subagent.replace('"low"', '"xhigh"'), 'new'), now: T0 + 60_000, draw })
+  assert.notEqual(xhigh.r, null)
+  await send('ok', { codexHome: h, reply: withFollows(PICK.same, 'new'), now: T0 + 120_000, draw })
+  assert.equal(draws, 0)
+  assert.ok((readStats(h) as Decision[]).every(d => d.trial === undefined && d.holdout === undefined))
+})
+
+test('accept: the Stop hook sees spawn_agent in the turn after a subagent offer, once', async () => {
+  const h = home()
+  await send('run the tests', { codexHome: h, reply: PICK.subagent, now: T0 })
+  // The user answers the question with a prompt of its own; the subagent starts in that turn.
+  await send('Subagent', { codexHome: h, reply: PICK.keep, now: T0 + 30_000 })
+  const stop = { session_id: 's1', hook_event_name: 'Stop', transcript_path: rollout([started('t1'), ctx('t1', 'gpt-6.1-sol'), started('t2'), ctx('t2', 'gpt-6.1-sol'), spawnCall]) }
+  await handleStop(stop, { codexHome: h, now: T0 + 90_000 })
+  await handleStop(stop, { codexHome: h, now: T0 + 95_000 })
+  assert.deepEqual(readStats(h).filter(r => r.kind === 'accept'), [{ kind: 'accept', ts: T0 + 90_000, platform: 'codex', chat: 's1', decision: T0 }])
+})
+
+test('accept: none for a spawn in an earlier turn, a session offer, or another chat', async () => {
+  const h = home()
+  await send('run the tests', { codexHome: h, reply: PICK.subagent, now: T0 })
+  await handleStop({ session_id: 's1', hook_event_name: 'Stop', transcript_path: rollout([started('t1'), spawnCall, started('t2'), ctx('t2', 'gpt-6.1-sol')]) }, { codexHome: h, now: T0 + 1000 })
+  await handleStop({ session_id: 's2', hook_event_name: 'Stop', transcript_path: rollout([started('t1'), ctx('t1', 'gpt-6.1-sol'), spawnCall]) }, { codexHome: h, now: T0 + 2000 })
+  await send('build the export', { codexHome: h, reply: PICK.session, now: T0 + 3000, session: 's3' })
+  await handleStop({ session_id: 's3', hook_event_name: 'Stop', transcript_path: rollout([started('t1'), ctx('t1', 'gpt-6.1-sol'), spawnCall]) }, { codexHome: h, now: T0 + 4000 })
+  assert.deepEqual(readStats(h).filter(r => r.kind === 'accept'), [])
 })

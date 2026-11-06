@@ -34,11 +34,12 @@ import { fileURLToPath } from 'node:url'
 import { fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, preferSession, describeOptions, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, heldWhere, inHoldout, isRedo, preferSession, describeOptions, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, trialExempt, typed, wantsChange } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
-import type { Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
-import { appendStats, classifierUsage, readStats, statsReport, turnUsage } from './stats.ts'
+import { placeTask } from '../../plugins/prompt-router/core/stats.ts'
+import type { Decision, TaskState, Turn } from '../../plugins/prompt-router/core/stats.ts'
+import { appendStats, classifierUsage, readStats, spawnedAgent, statsReport, turnUsage } from './stats.ts'
 import { askNote, autoNote, line, otherAutoNote, otherNote, runAgentLine, runAgentNote, statusNote, switchNote } from './notes.ts'
 import type { NoteCtx } from './notes.ts'
 
@@ -53,15 +54,15 @@ export type Output = { hookSpecificOutput?: { hookEventName: 'UserPromptSubmit';
 // onUsage: what the classifier call cost in tokens, when the runner can tell (for the statistics).
 export type Runner = (prompt: string, o: { model: string; effort: string; timeoutMs: number; onUsage?: (u: Usage) => void }) => Promise<string>
 // noSubagent: the client has no spawn_agent (the ChatGPT desktop through mcp.ts), so a here prompt
-// that fits another model is not offered to a subagent.
-export type Deps = { codexHome?: string; runner?: Runner; noSubagent?: boolean; now?: number }
+// that fits another model is not offered to a subagent. draw: the control-group draw (inHoldout; tests pin it).
+export type Deps = { codexHome?: string; runner?: Runner; noSubagent?: boolean; now?: number; draw?: (seed: string, pct: number) => boolean }
 
 export function codexHome() {
   return process.env.CODEX_HOME || join(process.env.HOME || homedir(), '.codex')
 }
 
 export function paths(home: string) {
-  return { hooks: join(home, 'hooks.json'), options: join(home, 'prompt-router.json'), config: join(home, 'config.toml'), cache: join(home, 'models_cache.json'), log: join(home, 'log', 'prompt-router.log') }
+  return { hooks: join(home, 'hooks.json'), options: join(home, 'prompt-router.json'), config: join(home, 'config.toml'), cache: join(home, 'models_cache.json'), log: join(home, 'log', 'prompt-router.log'), tasks: join(home, 'log', 'prompt-router-tasks.json') }
 }
 
 async function log(home: string, what: string, err: unknown) {
@@ -368,6 +369,29 @@ async function routerCommand(home: string, o: Options, arg: string, cur: { model
   ].join('\n')
 }
 
+// Each chat's current task for the trial, plus its open subagent offer (the decision's time stamp,
+// until the Stop hook sees spawn_agent or another offer replaces it). The hook is a new process per
+// prompt, so this lives in a small file next to the stats log; chats idle for a day are dropped.
+type ChatTask = TaskState & { offer?: number }
+
+async function readTasks(home: string, now: number): Promise<Record<string, ChatTask>> {
+  try {
+    const all = JSON.parse(await readFile(paths(home).tasks, 'utf8')) as Record<string, ChatTask>
+    return Object.fromEntries(Object.entries(all).filter(([, t]) => t && now - t.end < 86_400_000))
+  } catch {
+    return {}
+  }
+}
+
+async function saveTasks(home: string, tasks: Record<string, ChatTask>) {
+  try {
+    await mkdir(join(home, 'log'), { recursive: true })
+    await writeFile(paths(home).tasks, JSON.stringify(tasks))
+  } catch (err) {
+    await log(home, 'tasks', err)
+  }
+}
+
 // Works out the hook's answer for one prompt; null = the prompt goes on untouched.
 export async function handle(input: Input, deps: Deps = {}): Promise<Output | null> {
   const home = deps.codexHome ?? codexHome()
@@ -410,9 +434,20 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   // One stats record per routed prompt. Codex cannot switch itself: "applied" means the router's
   // line was given without a question (auto); whether the user then switched shows in the turns.
   const from = { model, effort: now }
-  const decide = async (where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'] = 'applied') => {
-    const d: Decision = { kind: 'decision', ts: deps.now ?? Date.now(), platform: 'codex', chat: input.session_id ?? '', where, from, to, outcome, ...(usage ? { classifier: { model: classifier, usage } } : {}) }
+  const ts = deps.now ?? Date.now()
+  const chat = input.session_id ?? ''
+  const key = promptKey(text)
+  const follows = parseFollows(reply)
+  const redo = isRedo(text)
+  const tasks = await readTasks(home, ts)
+  let trial: Decision['trial']
+  // held: a control-group prompt, what the router wanted instead.
+  const decide = async (where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'] = 'applied', held?: { wanted: Decision['to']; where?: Decision['wantedWhere'] }) => {
+    const d: Decision = { kind: 'decision', ts, platform: 'codex', chat, where, from, to, ...(follows ? { follows } : {}), outcome, key, ...(usage ? { classifier: { model: classifier, usage } } : {}), ...(held ? { holdout: true as const, wanted: held.wanted } : {}), ...(held?.where ? { wantedWhere: held.where } : {}), ...(trial ? { trial } : {}), ...(redo ? { redo: true as const } : {}) }
     await appendStats(home, d).catch(err => log(home, 'stats', err))
+    const t = tasks[chat]
+    if (t && where !== 'keep') t.offer = where === 'subagent' ? ts : undefined
+    if (t) await saveTasks(home, tasks)
   }
   const keep = async () => {
     await decide('keep', from)
@@ -424,15 +459,27 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   if (h.isFirst) await log(home, 'effective options', `${o.source} | ${tierLine(optionsLine(shownOptions(o.raw), fromTiers(CODEX_DEFAULTS) as Record<string, string>))}`)
   let p: Pick | null = parsed && preferSession(allowed(parsed, o.cfg), h, o.cfg)
   await log(home, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${h.tokens ?? '?'} tok | first ${h.isFirst} | ${clip(reply, 200)}`)
-  if (!p) return keep()
   // The first prompt of a chat has nothing to leave: only its model and effort count.
-  if (h.isFirst) p = { ...p, where: 'here', first: { now: routerModel(o.models, model) } }
+  if (p && h.isFirst) p = { ...p, where: 'here', first: { now: routerModel(o.models, model) } }
+  // Mid-chat, a here prompt that fits another model is offered to a subagent on it.
+  const other = !!p && p.where === 'here' && hereModel && !h.isFirst && p.model !== curClass && o.cfg.midChatModelDetection !== 'off'
+  const routed = p && other ? { ...p, other: { now: curClass as Model } } : p
+  // The trial: the prompt's task, and whether the router stays quiet in it (a control task).
+  const eligible = !!routed && wantsChange(routed, now, o.cfg) && !trialExempt(text, routed)
+  const placed = placeTask(tasks[chat] ?? null, { ts, key, follows }, { eligible, control: () => (deps.draw ?? inHoldout)(`${chat}:${ts}:${key}`, Number(o.cfg.holdoutPct)) })
+  tasks[chat] = { ...tasks[chat], ...placed.task }
+  trial = placed.trial
+  if (!p || !routed) return keep()
+  if (placed.quiet) {
+    await decide('keep', from, 'applied', { wanted: { model: o.models[p.model], effort: p.effort }, where: heldWhere(routed) })
+    return null
+  }
   // A prompt typed over a running turn (steer) belongs to that work.
   const midTurn = h.openTurns.some(t => t !== input.turn_id)
 
   if (p.where === 'here') {
     if (midTurn || !model) return keep()
-    if (hereModel && !h.isFirst && p.model !== curClass && o.cfg.midChatModelDetection !== 'off') {
+    if (other) {
       // Mapped to the same Codex effort: Stay here just goes on.
       const effort = p.effort !== now && !(now && effortOf(model, p.effort) === effortOf(model, now))
       if (o.cfg.midChatModelDetection === 'ask' && o.cfg.subagentSuggestions === 'auto') {
@@ -466,10 +513,24 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   return out(`[${askNote(ctx, p, cur, midTurn)}]`, suggests(o, effortOf, p))
 }
 
+// A main turn that called spawn_agent after the router offered (or ran) a subagent: the offer was taken.
+async function noteSpawn(home: string, input: Input, now: number) {
+  const chat = input.session_id ?? ''
+  const tasks = await readTasks(home, now)
+  const offer = tasks[chat]?.offer
+  if (offer === undefined || !input.transcript_path) return
+  const text = await readFile(input.transcript_path, 'utf8').catch(() => '')
+  if (!spawnedAgent(text)) return
+  await appendStats(home, { kind: 'accept', ts: now, platform: 'codex', chat, decision: offer }, now)
+  delete tasks[chat].offer
+  await saveTasks(home, tasks)
+}
+
 // Stop / SubagentStop: the finished turn's tokens from the rollout, for the statistics. The
 // baseline is the model the chat started on; for a subagent, the main chat's current model.
 export async function handleStop(input: Input, deps: { codexHome?: string; now?: number } = {}) {
   const home = deps.codexHome ?? codexHome()
+  if (input.hook_event_name !== 'SubagentStop') await noteSpawn(home, input, deps.now ?? Date.now())
   const read = async (f: string | null | undefined) => (f ? turnUsage(await readFile(f, 'utf8')) : null)
   const sub = input.hook_event_name === 'SubagentStop' && !!input.agent_transcript_path
   const t = await read(sub ? input.agent_transcript_path : input.transcript_path).catch(() => null)

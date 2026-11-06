@@ -2,14 +2,14 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, inHoldout, isRedo, promptKey, namesSetting, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, heldWhere, inHoldout, isRedo, promptKey, trialExempt, wantsChange, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, measuredLabel, startsTask, trial, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
+import { REFERENCE, measuredLabel, placeTask, trial, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CardIcon } from '../core/panel.ts'
-import type { Balance, Balances, Compare, Decision, Entry, History, Report, TrialRow, UsageScan } from '../core/stats.ts'
+import type { Balance, Balances, Compare, Decision, Entry, History, Report, TaskState, TrialRow, UsageScan } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -559,31 +559,17 @@ async function flush($: EngineInterface) {
 // it, by the same rule as the stats' tasks): when the router wants to act on a task's first prompt,
 // holdoutPct % of such tasks run with no router at all. A prompt that names a model or effort, or that
 // wants xhigh or max, is never held back (and never starts a control task).
-type Task = { end: number; keys: string[]; control: boolean }
-let task: Task | null = null
+let task: TaskState | null = null
 let lastTrial: Decision['trial']
-
-// What the router would change for this prompt: the model or effort here, or a subagent or session.
-function wantsChange(p: Pick, now: Level | '') {
-  if (p.where === 'subagent' || p.where === 'session' || p.other) return true
-  const from = p.first?.now
-  return (!!from && p.model !== from && cfg.firstChatDetection !== 'off') || (p.effort !== now && cfg.effortDetection !== 'off')
-}
 
 // Places the prompt in its task; true when the router must leave it alone (a control task).
 async function holdsOut($: EngineInterface, text: string, p: Pick | null, now: Level | '') {
   const ts = await $.clock.now()
-  const wants = !!p && wantsChange(p, now)
-  const exempt = !p || p.effort === 'xhigh' || p.effort === 'max' || namesSetting(text)
-  if (startsTask({ ts, key: lastPromptKey, follows: lastFollows }, task)) {
-    const eligible = wants && !exempt
-    task = { end: ts, keys: [lastPromptKey], control: eligible && inHoldout(`${chatId}:${ts}:${lastPromptKey}`, Number(cfg.holdoutPct)) }
-    lastTrial = eligible ? (task.control ? 'control' : 'router') : undefined
-  } else {
-    task!.end = ts
-    task!.keys.push(lastPromptKey)
-  }
-  return task!.control && wants && !exempt
+  const eligible = !!p && wantsChange(p, now, cfg) && !trialExempt(text, p)
+  const r = placeTask(task, { ts, key: lastPromptKey, follows: lastFollows }, { eligible, control: () => inHoldout(`${chatId}:${ts}:${lastPromptKey}`, Number(cfg.holdoutPct)) })
+  task = r.task
+  lastTrial = r.trial
+  return r.quiet
 }
 
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
@@ -619,8 +605,7 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
   }
 
   if (await holdsOut($, text, p, now)) {
-    const where = p.where === 'here' && !p.other ? undefined : p.where === 'session' ? 'session' : 'subagent'
-    await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now, p, { model: p.model, effort: p.effort }, where)
+    await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now, p, { model: p.model, effort: p.effort }, heldWhere(p))
     return e
   }
   if (p.where === 'here') {

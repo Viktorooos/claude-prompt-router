@@ -56,10 +56,14 @@ export function tmp(prefix = 'pr-oc-') {
   return mkdtempSync(join(tmpdir(), prefix))
 }
 
+// The control-group draw for the routing tests: never held back, so no prompt lands in it by chance;
+// the trial tests pass their own.
+export const never = () => false
+
 export async function setup(o: Parameters<typeof mockClient>[0] = {}, options: Record<string, unknown> = {}) {
   const { client, calls } = mockClient(o)
   const dir = tmp()
-  const hooks: any = await routerPlugin(tool)({ client }, { stateDir: dir, optionsFile: join(dir, 'none.json'), timeoutMs: 200, ...options })
+  const hooks: any = await routerPlugin(tool)({ client }, { stateDir: dir, optionsFile: join(dir, 'none.json'), timeoutMs: 200, draw: never, ...options })
   const config: any = {}
   await hooks.config(config)
   return { hooks, client, calls, dir, config }

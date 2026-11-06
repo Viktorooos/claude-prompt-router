@@ -29,13 +29,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, preferSession, describeOptions, knownModel, optionsLine, parsePick, pickPrompt, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, heldWhere, inHoldout, isRedo, preferSession, describeOptions, knownModel, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, trialExempt, typed, wantsChange } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import { SESSION_TOOL, STATS_TOOL, SWITCH_TOOL, agentFor, askNote, modelName, otherAutoNote, otherNote, switchNote } from './notes.ts'
 import { TIER_NAMES, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
 import type { NoteCtx } from './notes.ts'
 import { statsLog, statsTable } from './stats.ts'
-import type { Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
+import { placeTask } from '../../plugins/prompt-router/core/stats.ts'
+import type { Accept, Decision, TaskState, Turn } from '../../plugins/prompt-router/core/stats.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
 
 // `tool` from @opencode-ai/plugin: the shim hands it in, since the repo has no node_modules.
@@ -57,6 +58,10 @@ type ChatState = {
   // What the picker sent with the last message.
   cur: { model: string; variant: string }
   last: Pick | null
+  // The chat's current task for the trial, and the router's open offer (its decision's time stamp)
+  // until the user takes it or another offer replaces it.
+  task: TaskState | null
+  offer: { ts: number; where: Decision['where'] } | null
 }
 
 type Part = { type: string; text?: string; synthetic?: boolean }
@@ -92,7 +97,9 @@ export function routerPlugin(tool: ToolFn) {
   return async (input: { client: Client }, options?: Record<string, unknown>) => {
     const client = input.client
     const home = process.env.HOME || homedir()
-    const opts0 = options ?? {}
+    // draw: the control-group draw (inHoldout); tests pin it. Not an option of the router.
+    const { draw: drawOpt, ...opts0 } = options ?? {}
+    const draw = typeof drawOpt === 'function' ? (drawOpt as (seed: string, pct: number) => boolean) : inHoldout
     const dir = typeof opts0.stateDir === 'string' ? opts0.stateDir : `${home}/.config/opencode/prompt-router`
     const optionsFile = typeof opts0.optionsFile === 'string' ? opts0.optionsFile : `${home}/.config/opencode/prompt-router.json`
     const timeoutMs = typeof opts0.timeoutMs === 'number' ? opts0.timeoutMs : 20_000
@@ -177,7 +184,7 @@ export function routerPlugin(tool: ToolFn) {
     function chat(sid: string) {
       let st = chats.get(sid)
       if (!st) {
-        st = { seen: '', seenModel: '', turnLevel: null, hold: null, modelHold: null, cur: { model: '', variant: '' }, last: null }
+        st = { seen: '', seenModel: '', turnLevel: null, hold: null, modelHold: null, cur: { model: '', variant: '' }, last: null, task: null, offer: null }
         chats.set(sid, st)
       }
       return st
@@ -254,12 +261,21 @@ export function routerPlugin(tool: ToolFn) {
     }
     const isChild = async (sid: string) => !!(await parentOf(sid))
 
-    async function record(r: Decision | Turn) {
+    async function record(r: Decision | Turn | Accept) {
       try {
         await stats.add(r)
       } catch (err) {
         await log('stats', err)
       }
+    }
+
+    // The user took the router's open offer of this kind in this chat (a subagent, a session, a switch).
+    async function took(sid: string, where: Decision['where']) {
+      const st = chats.get(sid)
+      if (!st?.offer || st.offer.where !== where) return
+      const decision = st.offer.ts
+      st.offer = null
+      await record({ kind: 'accept', ts: Date.now(), platform: 'opencode', chat: sid, decision })
     }
 
     const modelID = (id: string) => split(id).modelID
@@ -396,7 +412,7 @@ export function routerPlugin(tool: ToolFn) {
       }
     }
 
-    type Classified = { p: Pick | null; classifier: NonNullable<Decision['classifier']> }
+    type Classified = { p: Pick | null; classifier: NonNullable<Decision['classifier']>; follows: Decision['follows'] }
     async function pick(sid: string, st: ChatState, text: string, now: Level | ''): Promise<Classified> {
       const messages = unwrap<Msg[]>(await client.session.messages({ path: { id: sid } })) ?? []
       const t = [...messages].reverse().find(m => m.info.role === 'assistant' && m.info.tokens)?.info.tokens
@@ -410,10 +426,11 @@ export function routerPlugin(tool: ToolFn) {
       const p = parsed && preferSession(allowed(parsed, cfg), c, cfg)
       await log('pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${tokens ?? '?'} tok | first ${c.isFirst} | ${clip(reply, 200)}`)
       // The first prompt of a chat has nothing to leave: only its model and effort count.
-      if (p && c.isFirst) return { p: { ...p, where: 'here', first: { now: routerModel(model) } }, classifier }
+      const follows = parseFollows(reply)
+      if (p && c.isFirst) return { p: { ...p, where: 'here', first: { now: routerModel(model) } }, classifier, follows }
       const cur = routerModel(model)
-      if (p?.where === 'here' && cur && p.model !== cur && cfg.midChatModelDetection !== 'off') return { p: { ...p, other: { now: cur } }, classifier }
-      return { p: p || null, classifier }
+      if (p?.where === 'here' && cur && p.model !== cur && cfg.midChatModelDetection !== 'off') return { p: { ...p, other: { now: cur } }, classifier, follows }
+      return { p: p || null, classifier, follows }
     }
 
     function addNote(parts: Part[], note: string) {
@@ -434,12 +451,23 @@ export function routerPlugin(tool: ToolFn) {
         await log('pick', err)
       }
       if (!res) return
-      const { p, classifier } = res
+      const { p, classifier, follows } = res
       const fromSide = { model: routerModel(st.seenModel) || st.seenModel, effort: now }
-      const note = (where: Decision['where'], outcome: Decision['outcome'], to: Decision['to']) =>
-        record({ kind: 'decision', ts: Date.now(), platform: 'opencode', chat: sid, where, from: fromSide, to, outcome, classifier })
+      const ts = Date.now()
+      const key = promptKey(text)
+      const redo = isRedo(text)
+      // The trial: the prompt's task, and whether the router stays quiet in it (a control task).
+      const eligible = !!p && wantsChange(p, now, cfg) && !trialExempt(text, p)
+      const placed = placeTask(st.task, { ts, key, follows }, { eligible, control: () => draw(`${sid}:${ts}:${key}`, Number(cfg.holdoutPct)) })
+      st.task = placed.task
+      // held: a control-group prompt, what the router wanted instead.
+      const note = async (where: Decision['where'], outcome: Decision['outcome'], to: Decision['to'], held?: { wanted: Decision['to']; where?: Decision['wantedWhere'] }) => {
+        if (where !== 'keep') st.offer = outcome === 'asked' ? { ts, where } : null
+        await record({ kind: 'decision', ts, platform: 'opencode', chat: sid, where, from: fromSide, to, ...(follows ? { follows } : {}), outcome, key, classifier, ...(held ? { holdout: true as const, wanted: held.wanted } : {}), ...(held?.where ? { wantedWhere: held.where } : {}), ...(placed.trial ? { trial: placed.trial } : {}), ...(redo ? { redo: true as const } : {}) })
+      }
       // No pick (an approval, or a reply that could not be read): the classifier still cost.
       if (!p) return note('keep', 'applied', fromSide)
+      if (placed.quiet) return note('keep', 'applied', fromSide, { wanted: { model: p.model, effort: p.effort }, where: heldWhere(p) })
       st.last = p
       const midTurn = await isBusy(sid)
       const proposed = { model: p.model as string, effort: p.effort }
@@ -594,6 +622,7 @@ export function routerPlugin(tool: ToolFn) {
       'tool.execute.before': async (i: { tool: string; sessionID: string }, output: { args: any }) => {
         const agent = output?.args?.subagent_type
         if (i.tool !== 'task' || typeof agent !== 'string' || !agent.startsWith('router-')) return
+        await took(i.sessionID, 'subagent')
         const level = chats.get(i.sessionID)?.last?.effort
         if (level) subEffort.set(agent, level)
       },
@@ -626,6 +655,7 @@ export function routerPlugin(tool: ToolFn) {
             const level = asLevel(args.effort)
             if (model) applyModel(st, model)
             if (level) applyLevel(st, level)
+            if (model || level) await took(tc.sessionID, 'here')
             const done = [model ? `model ${modelName(models, model)}` : '', level ? `effort ${NAMES[level]}` : ''].filter(Boolean)
             const skipped = [
               args.model && !model ? `model ${JSON.stringify(args.model)} (not offered in this chat)` : '',
@@ -659,6 +689,7 @@ export function routerPlugin(tool: ToolFn) {
               firstPrompt.delete(created.id)
               throw err
             }
+            if (tc?.sessionID) await took(tc.sessionID, 'session')
             return `Started a new session "${title}" (${created.id}) on ${models[model]} at effort ${NAMES[level]}. The user opens it with /sessions.`
           },
         }),

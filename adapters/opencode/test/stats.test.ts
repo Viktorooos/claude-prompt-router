@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { agentFor } from '../notes.ts'
+import { promptKey } from '../../../plugins/prompt-router/core/router.ts'
 import { PICK, named, ongoing, said, send, setup, tmp } from './helpers.ts'
 
 const S = 'ses_main'
@@ -250,4 +251,97 @@ test('stats: the table compares with the compareWith option', async () => {
   const out: string = await haiku.hooks.tool.router_stats.execute({}, { sessionID: S })
   assert.doesNotMatch(out, /Saved .*\$3\.90/)
   assert.match(out, /Saved \(cheaper model\)\s+\$0\.00\s+\$0\.00\s+\$0\.00/)
+})
+
+// The trial and the per-prompt fields, as the Claude Code mod writes them (register.tsx).
+const withFollows = (reply: string, follows: string) => reply.replace(/}$/, `, "follows": "${follows}"}`)
+const accepts = (dir: string) => stats(dir).filter(r => r.kind === 'accept')
+
+test('every decision carries the prompt key, what the classifier read of it (follows) and redo', async () => {
+  const { hooks, client, dir } = await setup({ reply: withFollows(PICK.here, 'new'), history: ongoing(S) })
+  await send(hooks, S, 'Fix   the login BUG')
+  client.reply = withFollows(PICK.keep, 'corrects')
+  await send(hooks, S, 'still not working')
+  const [a, b] = decisions(dir)
+  assert.equal(a.key, promptKey('Fix   the login BUG'))
+  assert.equal(a.follows, 'new')
+  assert.equal(a.redo, undefined)
+  assert.equal(b.key, promptKey('still not working'))
+  assert.equal(b.follows, 'corrects')
+  assert.equal(b.redo, true)
+})
+
+test('trial: a control task gets no note and no switch, and the router stays quiet for the prompts that go on with it', async () => {
+  const draws: number[] = []
+  const draw = (_seed: string, pct: number) => (draws.push(pct), true)
+  const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) }, { effortMode: 'auto', draw })
+  const first = await send(hooks, S, 'run the tests')
+  assert.equal(said(first), 'run the tests')
+  client.reply = withFollows(PICK.here, 'continues')
+  const next = await send(hooks, S, 'and the lint')
+  assert.equal(said(next), 'and the lint')
+  assert.equal(next.message.variant, undefined)
+  assert.deepEqual(draws, [30])
+  const [a, b] = decisions(dir)
+  assert.deepEqual([a.where, a.outcome, a.holdout, a.trial, a.wantedWhere], ['keep', 'applied', true, 'control', 'subagent'])
+  assert.deepEqual(a.wanted, { model: 'haiku', effort: 'low' })
+  assert.deepEqual(a.to, a.from)
+  assert.deepEqual([b.where, b.holdout, b.trial, b.wantedWhere], ['keep', true, undefined, undefined])
+  assert.deepEqual(b.wanted, { model: 'opus', effort: 'low' })
+})
+
+test('trial: new work draws again; a router task is routed as usual; holdoutPct is the share drawn', async () => {
+  const draws: number[] = []
+  const draw = (_seed: string, pct: number) => (draws.push(pct), false)
+  const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) }, { holdoutPct: '10', draw })
+  assert.match(said(await send(hooks, S, 'run the tests')), /Subagent/)
+  // The same question again goes on with its task.
+  await send(hooks, S, 'run the tests')
+  client.reply = withFollows(PICK.session, 'new')
+  await send(hooks, S, 'build the export screen')
+  assert.deepEqual(draws, [10, 10])
+  assert.deepEqual(decisions(dir).map(d => d.trial), ['router', undefined, 'router'])
+})
+
+test('trial: a prompt that names a setting, an xhigh pick, or nothing to change is never drawn', async () => {
+  let draws = 0
+  const { hooks, client, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) }, { draw: () => (draws++, true) })
+  assert.match(said(await send(hooks, S, 'do it with opus')), /Subagent/)
+  client.reply = withFollows(PICK.subagent.replace('"low"', '"xhigh"'), 'new')
+  assert.match(said(await send(hooks, S, 'redesign the sync')), /Subagent/)
+  client.reply = withFollows(PICK.same, 'new')
+  await send(hooks, S, 'ok')
+  assert.equal(draws, 0)
+  assert.ok(decisions(dir).every(d => d.trial === undefined && d.holdout === undefined))
+})
+
+test('accept: the router subagent, session or switch the user took after the offer, once', async () => {
+  const sub = await setup({ reply: PICK.subagent, history: ongoing(S) })
+  await send(sub.hooks, S, 'run the tests')
+  const task = () => sub.hooks['tool.execute.before']({ tool: 'task', sessionID: S, callID: 'c1' }, { args: { subagent_type: 'router-light', prompt: 'run tests', description: 'tests' } })
+  await task()
+  await task()
+  const [d] = decisions(sub.dir)
+  assert.deepEqual(accepts(sub.dir).map(a => [a.platform, a.chat, a.decision]), [['opencode', S, d.ts]])
+
+  const ses = await setup({ reply: PICK.session, history: ongoing(S) })
+  await send(ses.hooks, S, 'build the export screen')
+  await ses.hooks.tool.router_session.execute({ model: 'standard', effort: 'medium', prompt: 'build the export screen' }, { sessionID: S })
+  assert.deepEqual(accepts(ses.dir).map(a => a.decision), [decisions(ses.dir)[0].ts])
+
+  const here = await setup({ reply: PICK.here, history: ongoing(S) }, { effortMode: 'ask' })
+  await send(here.hooks, S, 'rename that variable')
+  await here.hooks.tool.router_switch.execute({ effort: 'low' }, { sessionID: S })
+  assert.deepEqual(accepts(here.dir).map(a => a.decision), [decisions(here.dir)[0].ts])
+})
+
+test('accept: none without an offer, or for a tool that does not take it', async () => {
+  const sub = await setup({ reply: PICK.subagent, history: ongoing(S) })
+  await send(sub.hooks, S, 'run the tests')
+  await sub.hooks.tool.router_switch.execute({ effort: 'low' }, { sessionID: S })
+  await sub.hooks['tool.execute.before']({ tool: 'task', sessionID: S, callID: 'c1' }, { args: { subagent_type: 'general', prompt: 'x', description: 'x' } })
+  const none = await setup({ reply: PICK.same, history: ongoing(S) })
+  await send(none.hooks, S, 'ok')
+  await none.hooks['tool.execute.before']({ tool: 'task', sessionID: S, callID: 'c1' }, { args: { subagent_type: 'router-light', prompt: 'x', description: 'x' } })
+  assert.deepEqual([...accepts(sub.dir), ...accepts(none.dir)], [])
 })

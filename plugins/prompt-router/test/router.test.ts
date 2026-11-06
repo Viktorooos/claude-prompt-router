@@ -1,5 +1,5 @@
 import { expect, test as base } from 'claude-code/testing'
-import { SWITCHES, TEMPLATE, compactWindow, describeOptions, inHoldout, isRedo, namesSetting, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { SWITCHES, TEMPLATE, compactWindow, describeOptions, heldWhere, inHoldout, isRedo, namesSetting, trialExempt, wantsChange, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
 
 // The routing tests run without the control group (holdoutPct 0), so no prompt lands in it by chance;
 // the holdout tests below turn it on.
@@ -1564,4 +1564,36 @@ test('/router stats with compareWith history and no history file falls back to O
   const r = await $.command.run({ command: 'router', args: 'stats' })
   expect(r.text).toMatch(/Cost on Opus medium\s+\$20\.00/)
   expect(r.text).toMatch(/compareWith is history, but .*compared with Opus medium/)
+})
+
+test('wantsChange: a subagent, a session, another model, or a new model or effort the switches allow', () => {
+  const on = { firstChatDetection: 'ask', effortDetection: 'auto' }
+  const p = { where: 'here', model: 'opus', effort: 'medium', why: '' } as const
+  expect(wantsChange(p, 'medium', on)).toBe(false)
+  expect(wantsChange(p, 'low', on)).toBe(true)
+  expect(wantsChange(p, '', on)).toBe(true)
+  expect(wantsChange(p, 'low', { ...on, effortDetection: 'off' })).toBe(false)
+  expect(wantsChange({ ...p, first: { now: 'sonnet' } }, 'medium', on)).toBe(true)
+  expect(wantsChange({ ...p, first: { now: 'sonnet' } }, 'medium', { ...on, firstChatDetection: 'off' })).toBe(false)
+  expect(wantsChange({ ...p, first: { now: '' } }, 'medium', on)).toBe(false)
+  expect(wantsChange({ ...p, other: { now: 'sonnet' } }, 'medium', on)).toBe(true)
+  expect(wantsChange({ ...p, where: 'subagent' }, 'medium', on)).toBe(true)
+  expect(wantsChange({ ...p, where: 'session' }, 'medium', on)).toBe(true)
+})
+
+test('trialExempt: no pick, a prompt that names a setting, or an xhigh / max pick stays out of the trial', () => {
+  const p = { where: 'here', model: 'opus', effort: 'low', why: '' } as const
+  expect(trialExempt('fix it', p)).toBe(false)
+  expect(trialExempt('fix it', null)).toBe(true)
+  expect(trialExempt('fix it with opus', p)).toBe(true)
+  expect(trialExempt('fix it', { ...p, effort: 'xhigh' })).toBe(true)
+  expect(trialExempt('fix it', { ...p, effort: 'max' })).toBe(true)
+})
+
+test('heldWhere: where a held-back prompt would have gone when not here', () => {
+  const p = { where: 'here', model: 'opus', effort: 'low', why: '' } as const
+  expect(heldWhere(p)).toBe(undefined)
+  expect(heldWhere({ ...p, other: { now: 'sonnet' } })).toBe('subagent')
+  expect(heldWhere({ ...p, where: 'subagent' })).toBe('subagent')
+  expect(heldWhere({ ...p, where: 'session' })).toBe('session')
 })

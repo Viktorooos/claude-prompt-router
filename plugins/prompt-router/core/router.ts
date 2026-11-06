@@ -117,6 +117,26 @@ export function namesSetting(text: string): boolean {
   return /\b(haik(u|em)|sonnet(u|em|y|a)?|opus(u|em|y|a)?|fabl(e|u|em)|effort(s|u|em|y)?|ultrathink|think (hard|harder|deeply))\b/i.test(text)
 }
 
+// What the router would change for this prompt: the model or effort here (as far as the switches let
+// it), another model mid-chat, or a subagent or a session.
+export function wantsChange(p: Pick, now: Level | '', cfg: { firstChatDetection: string; effortDetection: string }): boolean {
+  if (p.where === 'subagent' || p.where === 'session' || p.other) return true
+  const from = p.first?.now
+  return (!!from && p.model !== from && cfg.firstChatDetection !== 'off') || (p.effort !== now && cfg.effortDetection !== 'off')
+}
+
+// A prompt the savings trial leaves out (never held back, never starts a control task): no pick, a
+// prompt that names a model or effort itself, or an xhigh or max pick (quality first).
+export function trialExempt(text: string, p: Pick | null): boolean {
+  return !p || p.effort === 'xhigh' || p.effort === 'max' || namesSetting(text)
+}
+
+// Where a held-back prompt would have gone when not here (a mid-chat model change runs as a subagent).
+export function heldWhere(p: Pick): 'subagent' | 'session' | undefined {
+  if (p.where === 'here' && !p.other) return undefined
+  return p.where === 'session' ? 'session' : 'subagent'
+}
+
 // Whether the prompt says the last answer did not do the job (a re-work sign that needs no model):
 // "nefunguje", "zkus to znovu", "pořád padá", "still broken", "didn't work", "try again", "wrong".
 const REDO = /(?<!\p{L})(nefung\p{L}*|nejde|zkus(?:te)? to (?:znovu|ještě)|špatně|(?:pořád|stále|furt) (?:to )?(?:padá|nejde|nefunguje|je špatně|hází)|still (?:broken|failing|wrong|crashes|not)|(?:doesn'?t|does not|didn'?t|did not|won'?t) work|not working|try again|wrong)(?!\p{L})/iu

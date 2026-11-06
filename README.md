@@ -209,7 +209,7 @@ The same keys on every platform. Each feature has its own switch. The defaults k
 | `compareWith` | `opus-medium`, any `<model>-<effort>` (`haiku`, `sonnet`, `opus`, `fable` × `low` … `max`), `first`, `history` (Claude Code); in Codex the tiers: `strong-medium` (default), `light-low`, … | What the [savings stats](#savings-stats) compare with. Default Opus at medium effort (Anthropic's pick for everyday work), the same for every chat. `first`: the model the chat started on (the main chat's for a subagent), the behaviour before this option. `history`: the mix of models and efforts you ran before installing the router, weighted by tokens (see [savings stats](#savings-stats)). Claude Code and Codex; OpenCode always uses `first`. |
 | `stats` | `on`, `off` | Claude Code. `on`: note each decision and each turn's token use in a local file for [savings stats](#savings-stats). `off`: nothing is noted. Default `on`. |
 | `openPane` | `off`, `on` | Claude Code. `on`: the Prompt Router pane opens by itself when a session starts (shown from 144 terminal columns, 110 once you have opened it with `/router panel`), or else on your first prompt. `off`: only `/router panel` opens it. |
-| `holdoutPct` | `30`, `0`, `5`, `10`, `20` | Claude Code. This share (%) of tasks the router would change (model, effort, subagent or new session) is drawn into a control group when the task starts: the router stays quiet for the whole task and logs what it wanted, for the [measured saving](#measured). A prompt that names a model or effort, or an xhigh or max pick, is never held back. `0`: off. Default `30` for now, to collect data quickly; `10` is enough later. |
+| `holdoutPct` | `30`, `0`, `5`, `10`, `20` | All three platforms. This share (%) of tasks the router would change (model, effort, subagent or new session) is drawn into a control group when the task starts: the router stays quiet for the whole task and logs what it wanted, for the [measured saving](#measured). A prompt that names a model or effort, or an xhigh or max pick, is never held back. `0`: off. Default `30` for now, to collect data quickly; `10` is enough later. Codex and OpenCode log the trial the same way (in Codex a control task gets no note at all); their text tables do not show it yet. |
 
 Where to put them:
 
@@ -428,6 +428,7 @@ All in `~/.codex` (`$CODEX_HOME` is respected), each file after a backup:
   "subagentSuggestions": "ask",
   "sessionSuggestions": "ask",
   "newSessionAt": "50%",
+  "holdoutPct": "30",
   "notifications": "on",
   "compareWith": "strong-medium",
   "project": "",
@@ -449,7 +450,7 @@ All in `~/.codex` (`$CODEX_HOME` is respected), each file after a backup:
 
 </details>
 
-The classifier is a read-only `codex exec` on the `classifier` class (`gpt-6-luna`) at low effort: about **3–4 s per prompt**. Log: `~/.codex/log/prompt-router.log`.
+The classifier is a read-only `codex exec` on the `classifier` class (`gpt-6-luna`) at low effort: about **3–4 s per prompt**. Log: `~/.codex/log/prompt-router.log`; the trial's current task per chat: `~/.codex/log/prompt-router-tasks.json`.
 
 ### Differences
 
@@ -519,6 +520,7 @@ The [shared keys](#options) plus the OpenCode ones, in **one** of two places:
   "subagentSuggestions": "ask",
   "sessionSuggestions": "ask",
   "newSessionAt": "50%",
+  "holdoutPct": "30",
   "notifications": "on",
   "project": "",
   "rules": "",
