@@ -483,7 +483,7 @@ async function loadHistory($: EngineInterface) {
   })()
 }
 
-// The prompt's text in a form that repeats when the same question comes again (case and spaces ignored).
+// The last prompt's key (promptKey): the same question again goes on with its task.
 let lastPromptKey = ''
 // The prompt's own words say the last answer failed (isRedo); the chat's transcript id; whether this
 // turn showed the router's question (AskUserQuestion with the header "Prompt Router").
