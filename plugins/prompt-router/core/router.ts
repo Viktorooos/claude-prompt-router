@@ -143,7 +143,7 @@ const QUICK_WORDS = new Set(
 // Anything with a word of its own goes to the classifier.
 export function quickReply(text: string): boolean {
   const t = typed(text).toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
-  if (!t || t.length > 40 || t.startsWith('/') || isRedo(t)) return false
+  if (!t || t.length > 40 || t.startsWith('/')) return false
   const words = t.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
   if (words.length > 5) return false
   return words.every(w => QUICK_WORDS.has(w) || /^\d{1,3}$/.test(w) || /^\p{L}$/u.test(w))

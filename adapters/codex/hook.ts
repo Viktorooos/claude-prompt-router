@@ -538,8 +538,9 @@ async function classify(input: Input, deps: Deps, home: string, ran: { on: boole
   if (!o.enabled || text.startsWith('/') || isAppRequest(text)) return null
   // "yes", "option 2", "díky": nothing to route, no classifier call. The hook still answers (CHECKED),
   // so the agent does not ask route instead.
+  const key = promptKey(text)
   if (quickReply(text)) {
-    Object.assign(ran, { on: true, key: promptKey(text), ts: deps.now ?? Date.now() })
+    Object.assign(ran, { on: true, key, ts: deps.now ?? Date.now() })
     return null
   }
 
@@ -559,14 +560,13 @@ async function classify(input: Input, deps: Deps, home: string, ran: { on: boole
   const c: Chat = { first: all[0] ?? '', recent: all.slice(-4, -1), reply: h.reply, model, now, tokens: h.tokens, window: h.window, conf: o.cfg, isFirst: h.isFirst, hereModel, models: avail }
   const runner = deps.runner ?? codexRunner
   let usage: Usage | null = null
-  Object.assign(ran, { on: true, key: promptKey(text), ts: deps.now ?? Date.now() })
+  Object.assign(ran, { on: true, key, ts: deps.now ?? Date.now() })
   const reply = await runner(pickPrompt(text, c), { model: classifier, effort: effortOf(classifier, 'low'), timeoutMs: o.timeoutMs, onUsage: u => (usage = u) })
   // One stats record per routed prompt. Codex cannot switch itself: "applied" means the router's
   // line was given without a question (auto); whether the user then switched shows in the turns.
   const from = { model, effort: now }
   const ts = deps.now ?? Date.now()
   const chat = input.session_id ?? ''
-  const key = promptKey(text)
   const follows = parseFollows(reply)
   const redo = isRedo(text)
   const tasks = await readTasks(home, ts)

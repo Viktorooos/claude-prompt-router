@@ -705,7 +705,7 @@ export function statsRows(r: Report, c: Compare = null): { label: string; cells:
   return statsRowList(c).map(([label, f]) => ({ label, cells: [r.today, r.week, r.total].map(f) }))
 }
 
-// A plain text table of the three periods (for /router stats and the Codex and OpenCode adapters).
+// A plain text table of the three periods (for /router stats).
 export function statsText(r: Report, c: Compare = null, b?: Balance): string {
   const rows = statsRows(r, c)
   const w = Math.max(...rows.map(x => x.label.length)) + 2
