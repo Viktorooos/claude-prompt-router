@@ -6,7 +6,7 @@ import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWi
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { REFERENCE, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
+import { REFERENCE, startsTask, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, sampleNote, signed, statsHtml, statsText, summarize, timeText, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report } from '../core/stats.ts'
@@ -466,11 +466,12 @@ const promptKey = (text: string) => text.trim().toLowerCase().replace(/\s+/g, ' 
 
 // Notes one routing decision (with what the classifier cost); returns its time stamp. Every result of
 // decide() passes here once, so the pane's last decision is written here too.
-async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick, wanted?: Decision['to']) {
+async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick, wanted?: Decision['to'], wantedWhere?: Decision['wantedWhere']) {
   const ts = await $.clock.now()
   if (cfg.stats === 'on') {
-    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(wanted ? { holdout: true as const, wanted } : {}) })
+    pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(wanted ? { holdout: true as const, wanted } : {}), ...(wantedWhere ? { wantedWhere } : {}), ...(lastTrial ? { trial: lastTrial } : {}) })
   }
+  lastTrial = undefined
   lastClassifier = null
   lastFollows = undefined
   const last: LastDecision = { where: p?.other ? 'other' : where, outcome: outcome === 'asked' ? 'asked' : 'applied', model: to.model, effort: to.effort, why: p?.why ?? '', from: { model: pickedFrom, effort: now }, ts, ...lastCtx }
@@ -527,16 +528,35 @@ async function flush($: EngineInterface) {
   }
 }
 
-// The control group for the savings stats: a prompt the router would only move lower (never to xhigh
-// or max, never one that names a model or effort) keeps its setting for holdoutPct % of prompts.
-async function holdsOut($: EngineInterface, text: string, p: Pick, now: Level | '') {
+// The control group for the savings stats, drawn per task (a prompt and the prompts that go on with
+// it, by the same rule as the stats' tasks): when the router wants to act on a task's first prompt,
+// holdoutPct % of such tasks run with no router at all. A prompt that names a model or effort, or that
+// wants xhigh or max, is never held back (and never starts a control task).
+type Task = { end: number; keys: string[]; control: boolean }
+let task: Task | null = null
+let lastTrial: Decision['trial']
+
+// What the router would change for this prompt: the model or effort here, or a subagent or session.
+function wantsChange(p: Pick, now: Level | '') {
+  if (p.where === 'subagent' || p.where === 'session' || p.other) return true
   const from = p.first?.now
-  const model = !!from && p.model !== from && cfg.firstChatDetection !== 'off'
-  const effort = p.effort !== now && cfg.effortDetection !== 'off'
-  if (!model && !effort) return false
-  if ((model && !above(from, p.model)) || (effort && !above(now, p.effort))) return false
-  if (p.effort === 'xhigh' || p.effort === 'max' || namesSetting(text)) return false
-  return inHoldout(`${chatId}:${await $.clock.now()}:${lastPromptKey}`, Number(cfg.holdoutPct))
+  return (!!from && p.model !== from && cfg.firstChatDetection !== 'off') || (p.effort !== now && cfg.effortDetection !== 'off')
+}
+
+// Places the prompt in its task; true when the router must leave it alone (a control task).
+async function holdsOut($: EngineInterface, text: string, p: Pick | null, now: Level | '') {
+  const ts = await $.clock.now()
+  const wants = !!p && wantsChange(p, now)
+  const exempt = !p || p.effort === 'xhigh' || p.effort === 'max' || namesSetting(text)
+  if (startsTask({ ts, key: lastPromptKey, follows: lastFollows }, task)) {
+    const eligible = wants && !exempt
+    task = { end: ts, keys: [lastPromptKey], control: eligible && inHoldout(`${chatId}:${ts}:${lastPromptKey}`, Number(cfg.holdoutPct)) }
+    lastTrial = eligible ? (task.control ? 'control' : 'router') : undefined
+  } else {
+    task!.end = ts
+    task!.keys.push(lastPromptKey)
+  }
+  return task!.control && wants && !exempt
 }
 
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
@@ -564,10 +584,16 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     }
   }
   if (!p) {
+    if (lastClassifier) await holdsOut($, text, null, now)
     if (lastClassifier) await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now)
     return e
   }
 
+  if (await holdsOut($, text, p, now)) {
+    const where = p.where === 'here' && !p.other ? undefined : p.where === 'session' ? 'session' : 'subagent'
+    await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now, p, { model: p.model, effort: p.effort }, where)
+    return e
+  }
   if (p.where === 'here') {
     // A prompt typed over a running turn belongs to that work: its model and effort stay.
     if (e.turnId) {
@@ -580,10 +606,6 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     }
     if (p.other) await noteAsked($, 'subagent', p, now)
     if (p.other) return { ...e, text: `${e.text}\n\n[${(cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(p, p.other.now, now)}]` }
-    if (await holdsOut($, text, p, now)) {
-      await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now, p, { model: p.model, effort: p.effort })
-      return e
-    }
     const changes: string[] = []
     let askModel: { from: Model } | null = null
     let askEffort: { now: Level | '' } | null = null
@@ -810,6 +832,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     home = $.plugin.root.split('/.claude/')[0] ?? ''
     chatId = `${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
+    task = null
     pending = []
     baseline = ''
     routed = ''
@@ -984,6 +1007,7 @@ export const register: Register = (on, options) => {
       // The router moved this chat to another model since the last turn (not the person's own switch).
       const switched = !e.agentId && !!lastTurnModel && !!model && model !== lastTurnModel && model !== base
       if (!e.agentId && model) lastTurnModel = model
+      if (!e.agentId && task) task.end = await $.clock.now()
       const manual = !e.agentId && manualUp
       if (!e.agentId) manualUp = false
       pending.push({

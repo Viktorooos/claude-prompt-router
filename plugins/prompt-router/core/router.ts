@@ -47,9 +47,10 @@ export const SWITCHES = {
   stats: ['on', 'off'],
   // Claude Code: open the Prompt Router pane by itself when a session starts.
   openPane: ['off', 'on'],
-  // Share of prompts the router would move lower that keep their setting, as a control group for the
-  // savings stats. 0 turns it off.
-  holdoutPct: ['10', '0', '5', '20'],
+  // Share of tasks the router wants to act on that run without it, as a control group for the savings
+  // stats (drawn at a task's first prompt). 30 % for now to gather data faster; 10 % is enough later.
+  // 0 turns it off.
+  holdoutPct: ['30', '0', '5', '10', '20'],
   // What the savings are measured against: a model at an effort for every chat, or `first`, the
   // chat's first model (the main chat's for a subagent). Read from the tokens, so it reprices old data.
   compareWith: COMPARE_VALUES,

@@ -28,6 +28,10 @@ export type Decision = {
   /** A control-group prompt: the router would have moved it to `wanted` but kept the setting (`where: 'keep'`). */
   holdout?: true
   wanted?: Side
+  /** Where the router would have sent a control-group prompt, when not `here`. */
+  wantedWhere?: 'subagent' | 'session'
+  /** On a task's first prompt the router wanted to act on: the group the whole task was drawn into. */
+  trial?: 'router' | 'control'
 }
 
 // One finished turn (main chat, or a subagent with `agentId`). `baseline` is the model it would
@@ -362,11 +366,14 @@ export const EPISODE_GAP = 30 * 60_000
 
 // The same text again goes on with the task (a repeat, even after a switch); otherwise the classifier's
 // `follows` decides, and an older record without it starts a new task.
-function startsEpisode(d: Decision, cur: Episode) {
-  if (d.ts - cur.end > EPISODE_GAP) return true
-  if (d.key && cur.decisions.some(x => x.key === d.key)) return false
+// The platforms draw the control group by the same rule when the prompt comes (cur: the task so far).
+export function startsTask(d: Pick<Decision, 'ts' | 'key' | 'follows'>, cur: { end: number; keys: readonly (string | undefined)[] } | null) {
+  if (!cur || d.ts - cur.end > EPISODE_GAP) return true
+  if (d.key && cur.keys.includes(d.key)) return false
   return d.follows === undefined || d.follows === 'new'
 }
+
+const startsEpisode = (d: Decision, cur: Episode) => startsTask(d, { end: cur.end, keys: cur.decisions.map(x => x.key) })
 
 // The records grouped into tasks, per chat, oldest first by where each task started.
 export function episodes(records: readonly Entry[]): Episode[] {

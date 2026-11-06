@@ -1,5 +1,5 @@
 import { expect, test as base } from 'claude-code/testing'
-import { TEMPLATE, compactWindow, describeOptions, inHoldout, namesSetting, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { SWITCHES, TEMPLATE, compactWindow, describeOptions, inHoldout, namesSetting, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
 
 // The routing tests run without the control group (holdoutPct 0), so no prompt lands in it by chance;
 // the holdout tests below turn it on.
@@ -1148,6 +1148,74 @@ test('holdout: never a raise or an xhigh pick', { options: { effortDetection: 'a
   const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
   expect(ds.length).toBe(30)
   expect(ds.some((d: any) => d.holdout)).toBe(false)
+})
+
+test('holdout: a chat with no effort set yet can land in the control group', { options: { effortDetection: 'auto', holdoutPct: '30' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.here, { noEffortRow: true })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for (let i = 0; i < 40; i++) {
+    await submit($, `fix the empty search in list ${i}`)
+    await $.turn.complete(TURN_DONE)
+  }
+  const held = statsLines(seen).filter((x: any) => x.kind === 'decision' && x.holdout)
+  expect(held.length).toBeGreaterThan(0)
+  for (const d of held) {
+    expect(d.from.effort).toBe('')
+    expect(d.wanted).toEqual({ model: 'opus', effort: 'low' })
+  }
+})
+
+test('holdout: the whole task lands in one group, decided at its first prompt', { options: { effortDetection: 'auto', holdoutPct: '30' } } as any, async ($: any, on: any) => {
+  let n = 0
+  const seen = engine(on, () => `{"where": "here", "model": "opus", "effort": "${n % 3 === 1 ? 'high' : 'low'}", "why": "w", "follows": "${n++ % 3 === 0 ? 'new' : 'continues'}"}`)
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for (let i = 0; i < 90; i++) {
+    await submit($, `step ${i % 3} of task ${Math.floor(i / 3)}`)
+    await $.turn.complete(TURN_DONE)
+  }
+  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
+  expect(ds.length).toBe(90)
+  let control = 0
+  for (let t = 0; t < 30; t++) {
+    const [first, ...rest] = ds.slice(t * 3, t * 3 + 3)
+    expect(['router', 'control']).toContain(first.trial)
+    for (const d of rest) expect(d.trial).toBeUndefined()
+    const held = first.trial === 'control'
+    if (held) control++
+    // Every prompt of a control task keeps its setting, a raise included.
+    for (const d of [first, ...rest]) expect(!!d.holdout).toBe(held)
+    for (const d of [first, ...rest]) if (held) expect(d.where).toBe('keep')
+  }
+  expect(control).toBeGreaterThan(0)
+  expect(control).toBeLessThan(30)
+})
+
+test('holdout: a suggested subagent or session in a control task is not offered', { options: { holdoutPct: '30' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.session)
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for (let i = 0; i < 30; i++) {
+    await submit($, `build the export screen ${i}`)
+    await $.turn.complete(TURN_DONE)
+  }
+  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
+  const held = ds.map((d: any, i: number) => [d, i] as const).filter(([d]) => d.holdout)
+  expect(held.length).toBeGreaterThan(0)
+  for (const [d, i] of held) {
+    expect(d.where).toBe('keep')
+    expect(d.wanted).toEqual({ model: 'sonnet', effort: 'medium' })
+    expect(d.wantedWhere).toBe('session')
+    expect(seen.sent[i]).toBe(`build the export screen ${i}`)
+  }
+  for (const d of ds.filter((d: any) => !d.holdout)) expect(d.trial).toBe('router')
+})
+
+test('holdout: the control group is 30 % by default, 10 % one step away', () => {
+  expect(toConfig({}).holdoutPct).toBe('30')
+  expect(SWITCHES.holdoutPct[0]).toBe('30')
+  expect(SWITCHES.holdoutPct).toContain('10')
 })
 
 test('stats: a subagent the router did not offer counts at its own price', async ($: any, on: any) => {
