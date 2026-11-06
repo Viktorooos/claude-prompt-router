@@ -129,7 +129,7 @@ The decisions are the same everywhere. What each platform lets a plugin do diffe
 <a id="concepts"></a>
 ## 🧠 Concepts
 
-Shared by all three platforms.
+Shared by both platforms.
 
 ### Decisions
 
@@ -140,7 +140,7 @@ Shared by all three platforms.
 | **subagent** | A self-contained search, read, build or test run whose short result is needed here. |
 | **session** | Unrelated to this chat, or long mechanical work better done with a fresh context. In a chat over **60k tokens**, even a trivial unrelated task goes here. |
 
-**Here on another model** (all three platforms). The chat's model is set only on its first prompt. Later, switching it would break the prompt cache and the new model would read the whole context again at full price. So when a prompt belongs here but fits a stronger or a cheaper model, the router asks: **Subagent (model · effort)**, which gets what it needs from the chat and returns a short result, or **Stay here**, where only the effort is judged again (`effortDetection`). With `midChatModelDetection: off` it only judges the effort.
+**Here on another model** (both platforms). The chat's model is set only on its first prompt. Later, switching it would break the prompt cache and the new model would read the whole context again at full price. So when a prompt belongs here but fits a stronger or a cheaper model, the router asks: **Subagent (model · effort)**, which gets what it needs from the chat and returns a short result, or **Stay here**, where only the effort is judged again (`effortDetection`). With `midChatModelDetection: off` it only judges the effort.
 
 ### Models
 
