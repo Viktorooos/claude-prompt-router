@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { TEMPLATE, compactWindow, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
+import { TEMPLATE, claudeDir, compactWindow, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -1442,4 +1442,15 @@ test('/router stats with compareWith history and no history file falls back to O
   const r = await $.command.run({ command: 'router', args: 'stats' })
   expect(r.text).toMatch(/Cost on Opus medium\s+\$20\.00/)
   expect(r.text).toMatch(/compareWith is history, but .*compared with Opus medium/)
+})
+
+test('claudeDir: CLAUDE_CONFIG_DIR first, then HOME or USERPROFILE, then the plugin path', () => {
+  expect(claudeDir({ configDir: '/work/cc-config/', home: '/Users/x', pluginRoot: '/Users/x/.claude/plugins/p' })).toBe('/work/cc-config')
+  expect(claudeDir({ configDir: 'D:\\cc\\config\\', userProfile: 'C:\\Users\\x' })).toBe('D:\\cc\\config')
+  expect(claudeDir({ home: '/home/x', pluginRoot: '/opt/plugins/p' })).toBe('/home/x/.claude')
+  expect(claudeDir({ userProfile: 'C:\\Users\\x', pluginRoot: 'C:\\Users\\x\\.claude\\plugins\\cache\\prompt-router' })).toBe('C:\\Users\\x\\.claude')
+  expect(claudeDir({ home: '', configDir: ' ' , pluginRoot: 'C:\\Users\\x\\.claude\\plugins\\cache\\prompt-router' })).toBe('C:\\Users\\x\\.claude')
+  expect(claudeDir({ pluginRoot: '/Users/x/.claude/plugins/cache/prompt-router' })).toBe('/Users/x/.claude')
+  expect(claudeDir({ pluginRoot: '/srv/plugins/prompt-router' })).toBe('')
+  expect(claudeDir({})).toBe('')
 })

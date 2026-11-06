@@ -71,6 +71,17 @@ export type Model = keyof typeof MODELS
 export type Follows = 'continues' | 'corrects' | 'new'
 export type Pick = { where: Where; model: Model; effort: Level; why: string; work?: 'new' | 'continue'; note?: string; follows?: Follows; first?: { now: Model | '' }; other?: { now: Model } }
 
+// Claude Code's config folder (~/.claude): CLAUDE_CONFIG_DIR when set, else .claude in HOME or
+// USERPROFILE, else the .claude folder the plugin is installed under. '' when none says.
+export function claudeDir(env: { configDir?: string; home?: string; userProfile?: string; pluginRoot?: string }): string {
+  const trimmed = (p: string | undefined) => (p ?? '').trim().replace(/(?<=.)[\\/]+$/, '')
+  const config = trimmed(env.configDir)
+  if (config) return config
+  const home = trimmed(env.home) || trimmed(env.userProfile)
+  if (home) return `${home}${home.includes('\\') && !home.includes('/') ? '\\' : '/'}.claude`
+  return /^(.*?[\\/]\.claude)(?=[\\/])/.exec(env.pluginRoot ?? '')?.[1] ?? ''
+}
+
 export function norm(s: string) {
   const t = s.toLowerCase().replace(/[^a-z]/g, '')
   return t === 'extrahigh' ? 'xhigh' : t

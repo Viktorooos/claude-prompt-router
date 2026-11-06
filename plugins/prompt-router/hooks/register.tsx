@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMessage } from 'claude-code'
 
 import type { LastDecision, Level } from '../types'
-import { ALL_MODELS, BASE_MODELS, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, isRedo, promptKey, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
+import { ALL_MODELS, BASE_MODELS, claudeDir, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, isRedo, promptKey, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
@@ -32,7 +32,8 @@ const PANE_TITLE = 'Prompt Router'
 // Change the tag when LastDecision's fields change: a value an older copy stored then reads as none.
 const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })
 
-let home = ''
+// Claude Code's config folder (~/.claude or CLAUDE_CONFIG_DIR), known from session.start on.
+let configDir = ''
 let cfg: Config = toConfig({})
 let enabled = true
 // The options as the engine passed them, the options the mod goes by, and a line for /router when
@@ -106,9 +107,11 @@ async function appendLog($: EngineInterface, path: string, text: string, mode: '
 }
 
 async function log($: EngineInterface, what: string, err: unknown) {
+  // Before session.start there is no folder to write to (not /mods-logs at the root).
+  if (!configDir) return
   try {
     const msg = err instanceof Error ? err.message : String(err)
-    await appendLog($, `${home}/.claude/mods-logs/prompt-router.log`, `${new Date(await $.clock.now()).toISOString()} ${what}: ${msg}\n`, 'tail')
+    await appendLog($, `${configDir}/mods-logs/prompt-router.log`, `${new Date(await $.clock.now()).toISOString()} ${what}: ${msg}\n`, 'tail')
   } catch {
     // Nowhere left to report it.
   }
@@ -443,11 +446,11 @@ function switchNote(p: Pick, model: { from: Model } | null, effort: { now: Level
   return `Prompt Router suggests ${parts.join(' and ')} for this prompt${p.why ? `, because: ${p.why}` : ''}. Before doing anything, ask the user with the AskUserQuestion tool (header "Prompt Router", the question "Switch?" with the reason in one sentence) with the options "Switch (${label})", "Keep as is", the recommended one first. Write the question and options in ${userLang(cfg)}. On Switch, ${how}, then handle the prompt; on Keep as is, handle the prompt normally.`
 }
 
-const statsPath = () => `${home}/.claude/mods-logs/prompt-router-stats.jsonl`
+const statsPath = () => `${configDir}/mods-logs/prompt-router-stats.jsonl`
 
 // compareWith history: the token mix of the sessions from before the router, counted once by
 // scripts/history-scan.mjs in the background and kept beside the stats log (it never changes).
-const historyPath = () => `${home}/.claude/mods-logs/prompt-router-history.json`
+const historyPath = () => `${configDir}/mods-logs/prompt-router-history.json`
 let history: History | null = null
 let historyComputing = false
 
@@ -464,14 +467,14 @@ async function readHistory($: EngineInterface): Promise<History | null> {
 
 // /router stats only: the tokens of cut-off turns (no usage in the log) from their chats' transcripts,
 // by scripts/usage-scan.mjs. Only the sessions that have such a turn are read.
-const usagePath = () => `${home}/.claude/mods-logs/prompt-router-usage.json`
+const usagePath = () => `${configDir}/mods-logs/prompt-router-usage.json`
 
 async function fillFromTranscripts($: EngineInterface, records: Entry[]): Promise<Entry[]> {
   const cut = new Set(records.flatMap(r => (r.kind === 'turn' && !r.agentId && !r.usage ? [r.chat] : [])))
   const ids = [...new Set(records.flatMap(r => (r.kind === 'decision' && r.session && cut.has(r.chat) ? [r.session] : [])))]
   if (!ids.length) return records
   try {
-    const scan = $.process.spawn({ argv: ['node', `${$.plugin.root}/scripts/usage-scan.mjs`, `${home}/.claude/projects`, usagePath(), ...ids] })
+    const scan = $.process.spawn({ argv: ['node', `${$.plugin.root}/scripts/usage-scan.mjs`, `${configDir}/projects`, usagePath(), ...ids] })
     for await (const _ of scan) void _
   } catch (err) {
     // The last scan's result still holds the older sessions.
@@ -493,7 +496,7 @@ async function loadHistory($: EngineInterface) {
   // Not awaited: the scan must not hold the prompt or the session's start.
   void (async () => {
     try {
-      const scan = $.process.spawn({ argv: ['node', `${$.plugin.root}/scripts/history-scan.mjs`, `${home}/.claude/projects`, statsPath(), historyPath()] })
+      const scan = $.process.spawn({ argv: ['node', `${$.plugin.root}/scripts/history-scan.mjs`, `${configDir}/projects`, statsPath(), historyPath()] })
       for await (const _ of scan) void _
       history = await readHistory($)
     } catch (err) {
@@ -564,7 +567,7 @@ async function readStats($: EngineInterface) {
 
 // Appends the pending records (the log trimmed to 90 days / 5 MB); they stay pending until written.
 async function flush($: EngineInterface) {
-  if (cfg.stats !== 'on' || !pending.items.length) return
+  if (cfg.stats !== 'on' || !pending.items.length || !configDir) return
   try {
     await pending.flush(batch => appendLog($, statsPath(), batch.map(r => `${JSON.stringify(r)}\n`).join(''), 'stats'))
   } catch (err) {
@@ -743,7 +746,7 @@ async function saveOption($: EngineInterface, k: Option, value: string) {
         return
       }
     } else {
-      const path = `${home}/.claude/settings.json`
+      const path = `${configDir}/settings.json`
       const text = String(await $.fs.read(path).catch(() => '{}')) || '{}'
       const file = JSON.parse(text) as { pluginConfigs?: Record<string, { options?: Record<string, unknown> }> }
       const all = (file.pluginConfigs ??= {})
@@ -772,7 +775,7 @@ async function loadOptions($: EngineInterface) {
   cfgNote = ''
   let saved: Record<string, unknown> = {}
   try {
-    const all = (JSON.parse(String(await $.fs.read(`${home}/.claude/settings.json`))) as { pluginConfigs?: Record<string, { options?: unknown }> }).pluginConfigs ?? {}
+    const all = (JSON.parse(String(await $.fs.read(`${configDir}/settings.json`))) as { pluginConfigs?: Record<string, { options?: unknown }> }).pluginConfigs ?? {}
     const full = Object.keys(all).find(k => k.startsWith(`${NAME}@`))
     const entry = all[optionsEntry(all)]?.options
     if (entry && typeof entry === 'object') {
@@ -838,12 +841,28 @@ async function openPaneUnasked($: EngineInterface, onPrompt: boolean) {
   }
 }
 
+async function findConfigDir($: EngineInterface): Promise<string> {
+  const get = async (read: () => Promise<string | undefined>) => {
+    try {
+      return (await read()) ?? ''
+    } catch {
+      return ''
+    }
+  }
+  return claudeDir({
+    configDir: await get(() => $.env.get('CLAUDE_CONFIG_DIR')),
+    home: await get(() => $.env.get('HOME')),
+    userProfile: await get(() => $.env.get('USERPROFILE')),
+    pluginRoot: $.plugin.root,
+  })
+}
+
 export const register: Register = (on, options) => {
   given = { ...options }
   opts = given
   cfg = toConfig(given)
   on('session.start', async ($, e, next) => {
-    home = $.plugin.root.split('/.claude/')[0] ?? ''
+    configDir = await findConfigDir($)
     chatId = `${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
     try {
       sessionId = String((await $.session.id()) ?? '')
@@ -1126,7 +1145,7 @@ export const register: Register = (on, options) => {
       const c = compareNow()
       const report = summarize(records, now, c)
       const perTask = balance(records)
-      const page = `${home}/.claude/mods-logs/prompt-router-stats.html`
+      const page = `${configDir}/mods-logs/prompt-router-stats.html`
       let link = ''
       try {
         await $.fs.write(page, statsHtml(report, byDay(records, now, 30, c), c, perTask))

@@ -268,7 +268,7 @@ It is an **estimate**, kept honest:
 - A **stronger model** the router picked is shown as **extra cost**, apart, never hidden in the net.
 - A turn cut off before it finished has no token count in the log. `/router stats` (never a prompt or the panel) then reads its chat's transcript with `scripts/usage-scan.mjs` (plain Node, no model calls; only the chats with such a turn) and takes the tokens of the requests since the turn before; the panel counts it as unknown. A model with no price claims no saving.
 
-The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl`, trimmed to 90 days and 5 MB. Turn it off with `"stats": "off"`.
+The data stays on your machine: `~/.claude/mods-logs/prompt-router-stats.jsonl` (under `CLAUDE_CONFIG_DIR` when you set it), trimmed to 90 days and 5 MB. Parallel sessions append to it under a lock (`scripts/append.mjs`), so none loses another's records. Turn it off with `"stats": "off"`.
 
 <a id="balance"></a>
 ### How the balance is worked out

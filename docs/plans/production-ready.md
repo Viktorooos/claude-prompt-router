@@ -88,7 +88,12 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
   - `pending` je `Pending<Entry>` v `core/stats.ts`: flush jeden po druhém, záznam odchází až po úspěšném zápisu, při chybě zůstává do dalšího flushe (strop 5000, pak nejstarší pryč).
   - Testy: CC `Pending` (dva souběžné flushe, neúspěšný zápis, strop), `needsRotate`; node `test/node/append.test.mjs` (dva procesy najednou, 30 zápisů najednou, rotace přes tmp, tail). CC 207, node 5.
 
-- [ ] 7. Domovská složka bez `split('/.claude/')` (30 min). Brát HOME/USERPROFILE a `CLAUDE_CONFIG_DIR` z prostředí modu (zjistit, co `$` nabízí), ne z cesty pluginu; před `session.start` nezapisovat do `/.claude/mods-logs`. Soubory: `register.tsx:35`, `register.tsx:847`. Ověření: unit test s Windows rootem (`C:\Users\x\.claude\plugins\…`) a s vlastním config direm.
+- [x] 7. Domovská složka bez `split('/.claude/')` (30 min). Brát HOME/USERPROFILE a `CLAUDE_CONFIG_DIR` z prostředí modu (zjistit, co `$` nabízí), ne z cesty pluginu; před `session.start` nezapisovat do `/.claude/mods-logs`. Soubory: `register.tsx:35`, `register.tsx:847`. Ověření: unit test s Windows rootem (`C:\Users\x\.claude\plugins\…`) a s vlastním config direm.
+  Poznámky ke kroku 7 (hotovo):
+  - `$.env.get` je k dispozici (jména musí být literály, `claude plugin validate` je vypíše: `CLAUDE_CONFIG_DIR`, `HOME`, `USERPROFILE`). `claudeDir()` v `core/router.ts`: `CLAUDE_CONFIG_DIR` (bez koncových lomítek), jinak `HOME`, pak `USERPROFILE` + `.claude` (oddělovač `\` jen u čistě Windows cesty), jinak složka `….claude` z cesty pluginu (i se zpětnými lomítky), jinak ''.
+  - `register.tsx`: `home` → `configDir` (nastaví `session.start`), cesty `${configDir}/mods-logs/…`, `/projects`, `/settings.json`. Před `session.start` `log()` ani `flush()` nic nezapisují (dřív `/.claude/mods-logs` v kořeni disku).
+  - README: stats log pod `CLAUDE_CONFIG_DIR`, když je nastavený. Testy: `claudeDir` (config dir, Windows root, HOME, nic). CC 208.
+
 - [ ] 8. Rychlá cesta bez klasifikátoru (30–60 min). „yes“, „ok“, „d“, „option 2“, čísla a velmi krátké odpovědi na otázku agenta → `keep` bez volání modelu. Sdílené pro všechny platformy v `core/router.ts`, napojit v `register.tsx:576-591`, `adapters/codex/hook.ts`, `adapters/opencode/prompt-router.ts`. Ověření: unit testy (žádné volání runneru); živý eval `test/cases.json` případy `yes`, `option2`, `thanks`, `cz_yes`, `es_yes` dál `keep`; README ř. 96 a 592 sedí s kódem.
 - [ ] 9. Soukromí ve statistikách (30 min). `promptKey` ukládá 200 znaků promptu na 90 dní (`register.tsx:499`, `register.tsx:1063`). Podle rozhodnutí níže zkrátit nebo hashovat (trial páruje session podle prvních 60 znaků, commit d45e3d9), a popsat v README v sekci Savings stats, co se ukládá.
 
