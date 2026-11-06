@@ -202,8 +202,16 @@ export async function uninstall(home = codexHome(), now = Date.now()) {
   return out
 }
 
+// TODO(codex): Codex support is paused. A hook cannot switch a chat's model or effort (only add
+// context or block), so the router can only print a /model line. Re-enable install when Codex gets a
+// way to change effort from outside (hook output or app-server API). Uninstall still works; --force installs anyway.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const run = process.argv.includes('--uninstall') ? uninstall : install
+  const unin = process.argv.includes('--uninstall')
+  if (!unin && !process.argv.includes('--force')) {
+    console.error('prompt-router: Codex support is paused for now (it cannot switch effort). Use Claude Code or OpenCode, or pass --force.')
+    process.exit(1)
+  }
+  const run = unin ? uninstall : install
   run().then(
     lines => console.log(lines.join('\n')),
     err => {

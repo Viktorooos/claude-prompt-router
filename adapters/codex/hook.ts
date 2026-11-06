@@ -1,3 +1,4 @@
+// TODO(codex): Codex support is paused; install.ts refuses to install it. See the TODO there.
 // Prompt Router for OpenAI Codex (CLI and the desktop app, which share ~/.codex), as a
 // UserPromptSubmit hook: `node <abs path>/hook.ts`, installed into ~/.codex/hooks.json by install.ts.
 //

@@ -10,17 +10,15 @@
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 <br>
 ![Claude Code](https://img.shields.io/badge/Claude_Code-mod-d97757?style=flat-square)
-![Codex](https://img.shields.io/badge/Codex-CLI_+_desktop-10a37f?style=flat-square)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-4b5563?style=flat-square)
 
-<sub>Unit tests: Claude Code 190 · Codex 95 · OpenCode 70</sub>
+<sub>Unit tests: Claude Code 190 · OpenCode 70</sub>
 
 [How it works](#how-it-works) •
 [Quick start](#quick-start) •
 [Compare](#compare) •
 [Concepts](#concepts) •
 [Claude Code](#claude-code) •
-[Codex](#codex) •
 [OpenCode](#opencode) •
 [FAQ](#faq) •
 [Development](#development) •
@@ -61,7 +59,6 @@ flowchart LR
     Q --> X[Platform action]
     A --> X
     X --- CC["🟠 Claude Code<br/>switch tool · Agent · start_session"]
-    X --- CX["⚫ Codex<br/>/model line · spawn_agent · codex command"]
     X --- OC["🔵 OpenCode<br/>per-message hold · task · router_session"]
 ```
 
@@ -96,7 +93,7 @@ On a new chat's **first prompt** it also checks the model: Opus picked for a ren
 Plain replies to the agent pass through untouched with **no classifier call at all**: up to five words that are each a yes / no / ok / thanks / go on word (English, Czech, Spanish, German, French: `yes, go on`, `ano, pokračuj`, `sí, hazlo`, `díky`), `option 2` / `možnost 2`, a number or a single letter (`3`, `b`). A reply with any word of its own (`yes, but use Postgres`) or a re-work sign (`still wrong`) goes to the classifier as usual. Other answers to the agent's questions, slash commands and prompts where nothing needs to change pass through untouched too.
 
 > [!NOTE]
-> **Architecture.** [`plugins/prompt-router/core/router.ts`](plugins/prompt-router/core/router.ts) holds the shared logic: the classifier prompt, parsing its reply, the routing rules. [`hooks/register.tsx`](plugins/prompt-router/hooks/register.tsx) (Claude Code), [`adapters/codex/`](adapters/codex) and [`adapters/opencode/`](adapters/opencode) only wire it to each platform.
+> **Architecture.** [`plugins/prompt-router/core/router.ts`](plugins/prompt-router/core/router.ts) holds the shared logic: the classifier prompt, parsing its reply, the routing rules. [`hooks/register.tsx`](plugins/prompt-router/hooks/register.tsx) (Claude Code) and [`adapters/opencode/`](adapters/opencode) only wire it to each platform.
 
 <a id="quick-start"></a>
 ## 🚀 Quick start
@@ -104,7 +101,6 @@ Plain replies to the agent pass through untouched with **no classifier call at a
 | Agent | Install | Then | Full guide |
 | --- | --- | --- | --- |
 | 🟠 **Claude Code** | `/plugin marketplace add Viktorooos/prompt-router`<br>`/plugin install prompt-router@prompt-router` | Open a new chat | [Claude Code](#claude-code) |
-| ⚫ **Codex** | `git clone https://github.com/Viktorooos/prompt-router.git`<br>`node prompt-router/adapters/codex/install.ts` | `codex` → `/hooks` → trust **"Routing..."**; restart the desktop app | [Codex](#codex) |
 | 🔵 **OpenCode** | `git clone https://github.com/Viktorooos/prompt-router.git`<br>`node prompt-router/adapters/opencode/install.ts` | Restart OpenCode | [OpenCode](#opencode) |
 
 <a id="compare"></a>
@@ -112,23 +108,23 @@ Plain replies to the agent pass through untouched with **no classifier call at a
 
 The decisions are the same everywhere. What each platform lets a plugin do differs.
 
-| | 🟠 [Claude Code](#claude-code) | ⚫ [Codex](#codex) | 🔵 [OpenCode](#opencode) |
-| --- | --- | --- | --- |
-| **Runs as** | a mod (plugin) | `UserPromptSubmit` hook (CLI) + MCP tool `route` (desktop) | a plugin |
-| **Covers** | desktop app, CLI, VS Code, Remote Control | Codex CLI and the ChatGPT desktop app (shared `~/.codex`) | CLI / TUI and desktop |
-| **Switches effort** (`auto`) | ✅ | ❌ shows a `/model <model> <effort>` line to run | ✅ per-message hold; can change mid-turn |
-| **Switches model** (`auto`) | ✅ | ❌ same `/model` line | ✅ from the next message |
-| **Ask mode** | ✅ dialog | ⚠️ the agent asks in a text message | ✅ question tool (text if missing) |
-| **Subagent** | ✅ Agent tool with model and effort | ✅ `spawn_agent` with `model` and `reasoning_effort` | ✅ `task` with a `router-<tier>` subagent |
-| **New session** | ✅ `start_session` in the app; ⚠️ a `claude …` command elsewhere | ⚠️ a `codex -m …` command to run | ✅ `router_session` tool (fallback: an `opencode` command) |
-| **Model check on first prompt** | ✅ | ⚠️ as a suggestion | ✅ |
-| **Here on another model** (later prompts) | ✅ asks Subagent or Stay here | ✅ asks Subagent (`spawn_agent`) or Stay here | ✅ asks Subagent (`task`) or Stay here |
-| **Notice** (`auto`, `notifications`) | toast + footer label | system message + `/model` line | toast |
-| **Savings stats** (`stats`) | `/router stats` (table + page with a graph), saving in the footer | `/router stats` (text table) | `router_stats` tool (text table) |
-| **`/router` command** (lists every option and where it came from) | ✅ | ⚠️ typed as a prompt; the TUI may take it as unknown | ✅ config command + toast |
-| **Default classifier** | Sonnet | `gpt-6-luna` (tier `light`) | `anthropic/claude-sonnet-5-5` |
-| **Options live in** | `~/.claude/settings.json` (`pluginConfigs`) or `/plugin` | `~/.codex/prompt-router.json` | `~/.config/opencode/prompt-router.json` or `opencode.json` |
-| **Status** | used daily | hook run with the real classifier on macOS; Windows unit-tested only | ⚠️ unit-tested only, never run live |
+| | 🟠 [Claude Code](#claude-code) | 🔵 [OpenCode](#opencode) |
+| --- | --- | --- |
+| **Runs as** | a mod (plugin) | a plugin |
+| **Covers** | desktop app, CLI, VS Code, Remote Control | CLI / TUI and desktop |
+| **Switches effort** (`auto`) | ✅ | ✅ per-message hold; can change mid-turn |
+| **Switches model** (`auto`) | ✅ | ✅ from the next message |
+| **Ask mode** | ✅ dialog | ✅ question tool (text if missing) |
+| **Subagent** | ✅ Agent tool with model and effort | ✅ `task` with a `router-<tier>` subagent |
+| **New session** | ✅ `start_session` in the app; ⚠️ a `claude …` command elsewhere | ✅ `router_session` tool (fallback: an `opencode` command) |
+| **Model check on first prompt** | ✅ | ✅ |
+| **Here on another model** (later prompts) | ✅ asks Subagent or Stay here | ✅ asks Subagent (`task`) or Stay here |
+| **Notice** (`auto`, `notifications`) | toast + footer label | toast |
+| **Savings stats** (`stats`) | `/router stats` (table + page with a graph), saving in the footer | `router_stats` tool (text table) |
+| **`/router` command** (lists every option and where it came from) | ✅ | ✅ config command + toast |
+| **Default classifier** | Sonnet | `anthropic/claude-sonnet-5-5` |
+| **Options live in** | `~/.claude/settings.json` (`pluginConfigs`) or `/plugin` | `~/.config/opencode/prompt-router.json` or `opencode.json` |
+| **Status** | used daily | ⚠️ unit-tested only, never run live |
 
 <a id="concepts"></a>
 ## 🧠 Concepts
@@ -148,14 +144,14 @@ Shared by all three platforms.
 
 ### Models
 
-The router thinks in four tiers. Each platform maps them to its own models. In Codex and OpenCode the mapping is yours: any provider, mixed if you like (cheap tiers on one, strong ones on another).
+The router thinks in four tiers. Each platform maps them to its own models. In OpenCode the mapping is yours: any provider, mixed if you like (cheap tiers on one, strong ones on another).
 
-| Tier (Codex, OpenCode) | Claude Code | For | Claude price (in / out per 1M) | Codex default | OpenCode default |
-| --- | --- | --- | --- | --- | --- |
-| **`light`** | Haiku | Running, reading, searching, short answers | $0.10 / $0.50 | `gpt-6-luna` | `anthropic/claude-haiku-5-5` |
-| **`standard`** | Sonnet | Mechanical edits by an existing pattern | $2 / $10 | `gpt-6.1-terra` | `anthropic/claude-sonnet-5-5` |
-| **`strong`** | Opus | New logic, debugging, review, anything risky | $4 / $20 | `gpt-6.1-sol` | `anthropic/claude-opus-5-5` |
-| **`top`** | Fable | Only where Opus at high effort is likely not enough | $10 / $50 | `gpt-6-astra` | `anthropic/claude-fable-5-1` |
+| Tier (OpenCode) | Claude Code | For | Claude price (in / out per 1M) | OpenCode default |
+| --- | --- | --- | --- | --- |
+| **`light`** | Haiku | Running, reading, searching, short answers | $0.10 / $0.50 | `anthropic/claude-haiku-5-5` |
+| **`standard`** | Sonnet | Mechanical edits by an existing pattern | $2 / $10 | `anthropic/claude-sonnet-5-5` |
+| **`strong`** | Opus | New logic, debugging, review, anything risky | $4 / $20 | `anthropic/claude-opus-5-5` |
+| **`top`** | Fable | Only where Opus at high effort is likely not enough | $10 / $50 | `anthropic/claude-fable-5-1` |
 
 <a id="fable"></a>
 <details>
@@ -171,7 +167,6 @@ Fable is rare on purpose.
 
 It is offered only when your platform has it:
 - Claude Code: your model picker lists it.
-- Codex: it is in `~/.codex/models_cache.json`, or the chat already runs on it.
 - OpenCode: a provider lists `models.fable`, or the chat runs on it.
 
 </details>
@@ -198,15 +193,15 @@ The same keys on every platform. Each feature has its own switch. The defaults k
 | `project` | text (empty: a software project) | What your chats are about, in a few words. |
 | `rules` | text (empty) | Your own routing rules. They win over the built-in ones. |
 | `language` | `auto`, or a language name | The language of the reason and of the questions. `auto` uses each prompt's language. |
-| `classifier` | `sonnet`, `haiku`, `opus`; in Codex and OpenCode the tiers `standard`, `light`, `strong` (Codex default: `light`) | The model tier that makes the call. Haiku (`light`) is cheaper and less accurate, Opus (`strong`) the most accurate and expensive. |
+| `classifier` | `sonnet`, `haiku`, `opus`; in OpenCode the tiers `standard`, `light`, `strong` | The model tier that makes the call. Haiku (`light`) is cheaper and less accurate, Opus (`strong`) the most accurate and expensive. |
 | `effortDetection` | `ask`, `auto`, `off` | The effort for a prompt that stays here. `ask`: a question first. `auto`: just switch. `off`: never touch the effort; "Do it here" and "Stay here" have no level. |
 | `firstChatDetection` | `ask`, `auto`, `off` | The model on a new chat's first prompt. `ask`: a question first. `auto`: just switch. `off`: keep the model. |
-| `midChatModelDetection` | `ask`, `auto`, `off` | A later prompt that stays here but fits another model. `ask`: offer Subagent or Stay here. `auto`: no question; the agent uses the subagent only for a larger self-contained job that needs the other model, keeps a quick question or short answer here (the effort judged as `effortDetection` says) and tells you in one sentence what it chose. The chat's model never changes. `off`: judge only the effort. Not in the Codex desktop app, which has no subagents. |
-| `subagentSuggestions` | `ask`, `auto`, `off` | `ask`: offer a subagent for a self-contained task. `auto` (Claude Code and Codex): no "Where should this go?"; the subagent starts right away and the agent says so in one sentence (Claude Code also shows a toast, Codex a system message, with `notifications: on`). It covers the other-model offer too while `midChatModelDetection` is `ask`; with `midChatModelDetection: auto` the agent still decides itself. A new-session offer still asks. In OpenCode `auto` works like `ask`. `off`: the prompt stays here (effort and the other-model offer still apply). The Codex desktop app has no subagents, so there it is always `off`. |
+| `midChatModelDetection` | `ask`, `auto`, `off` | A later prompt that stays here but fits another model. `ask`: offer Subagent or Stay here. `auto`: no question; the agent uses the subagent only for a larger self-contained job that needs the other model, keeps a quick question or short answer here (the effort judged as `effortDetection` says) and tells you in one sentence what it chose. The chat's model never changes. `off`: judge only the effort. |
+| `subagentSuggestions` | `ask`, `auto`, `off` | `ask`: offer a subagent for a self-contained task. `auto` (Claude Code): no "Where should this go?"; the subagent starts right away and the agent says so in one sentence (Claude Code also shows a toast with `notifications: on`). It covers the other-model offer too while `midChatModelDetection` is `ask`; with `midChatModelDetection: auto` the agent still decides itself. A new-session offer still asks. In OpenCode `auto` works like `ask`. `off`: the prompt stays here (effort and the other-model offer still apply). |
 | `sessionSuggestions` | `ask`, `off` | `ask`: offer a new session for an unrelated task. `off`: the prompt stays here. |
 | `newSessionAt` | `50%`, `off`, `40%`, `60%`, `70%` | Once the chat holds this share of its model's context window, any prompt that would stay here is offered as a new session, a follow-up too: every reply re-reads the whole context. The reason says how full the chat is. In Claude Code the window is cut to where the chat compacts (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`). `off`, or `sessionSuggestions: off`: never. |
-| `notifications` | `on`, `off` | `on`: a toast after an automatic change, and a footer label in Claude Code (Codex: a system message). `off`: none of these; the changes still happen. |
-| `compareWith` | `opus-medium`, any `<model>-<effort>` (`haiku`, `sonnet`, `opus`, `fable` × `low` … `max`), `first`, `history` (Claude Code); in Codex the tiers: `strong-medium` (default), `light-low`, … | What the [savings stats](#savings-stats) compare with. Default Opus at medium effort (Anthropic's pick for everyday work), the same for every chat. `first`: the model the chat started on (the main chat's for a subagent), the behaviour before this option. `history`: the mix of models and efforts you ran before installing the router, weighted by tokens (see [savings stats](#savings-stats)). Claude Code and Codex; OpenCode always uses `first`. |
+| `notifications` | `on`, `off` | `on`: a toast after an automatic change, and a footer label in Claude Code. `off`: none of these; the changes still happen. |
+| `compareWith` | `opus-medium`, any `<model>-<effort>` (`haiku`, `sonnet`, `opus`, `fable` × `low` … `max`), `first`, `history` (Claude Code) | What the [savings stats](#savings-stats) compare with. Default Opus at medium effort (Anthropic's pick for everyday work), the same for every chat. `first`: the model the chat started on (the main chat's for a subagent), the behaviour before this option. `history`: the mix of models and efforts you ran before installing the router, weighted by tokens (see [savings stats](#savings-stats)). Claude Code; OpenCode always uses `first`. |
 | `stats` | `on`, `off` | Claude Code. `on`: note each decision and each turn's token use in a local file for [savings stats](#savings-stats). `off`: nothing is noted. Default `on`. |
 | `openPane` | `off`, `on` | Claude Code. `on`: the Prompt Router pane opens by itself when a session starts (shown from 144 terminal columns, 110 once you have opened it with `/router panel`), or else on your first prompt. `off`: only `/router panel` opens it. |
 
@@ -215,7 +210,6 @@ Where to put them:
 | Platform | File | Key |
 | --- | --- | --- |
 | 🟠 Claude Code | `~/.claude/settings.json`, or `/plugin` → prompt-router → Configure | `pluginConfigs` › `prompt-router@prompt-router` › `options` |
-| ⚫ Codex | `~/.codex/prompt-router.json` | top level |
 | 🔵 OpenCode | `~/.config/opencode/prompt-router.json`, or the plugin's options in `opencode.json` | top level |
 
 `/router` shows the value of every option and where it came from: set, an old key, or the default. Each session also writes them once to the log.
@@ -237,7 +231,7 @@ Payments, vouchers, auth: opus, high.
 Copy changes on the marketing site: haiku, low.
 ```
 
-Name the tier either way: `haiku`/`sonnet`/`opus`/`fable` or `light`/`standard`/`strong`/`top`. Codex and OpenCode map it to your models.
+Name the tier either way: `haiku`/`sonnet`/`opus`/`fable` or `light`/`standard`/`strong`/`top`. OpenCode maps it to your models.
 
 ### Accuracy and cost
 
@@ -249,7 +243,7 @@ Last live eval: **123 cases**, including the Fable / xhigh / max boundaries. `te
 | Opus | ✅ 123 / 123 |
 | Haiku | ⚠️ 114 / 123 (none of the misses raised a tier) |
 
-One classifier call per prompt (none for a plain reply such as `yes` or `option 2`): low effort, at most 150 output tokens, on the model you pick in `classifier`. With the default Sonnet in Claude Code, that is a fraction of a cent per prompt. In Codex it runs on your ChatGPT plan as a stripped-down `codex exec` (no MCP servers, tools or project notes): about 12k input tokens, mostly cached, and about 4 s before each prompt. The savings come from not running a 200k-token chat on a question that needed a fresh one.
+One classifier call per prompt (none for a plain reply such as `yes` or `option 2`): low effort, at most 150 output tokens, on the model you pick in `classifier`. With the default Sonnet in Claude Code, that is a fraction of a cent per prompt. The savings come from not running a 200k-token chat on a question that needed a fresh one.
 
 <a id="savings-stats"></a>
 ### Savings stats
@@ -263,7 +257,6 @@ It is an **estimate**, kept honest:
 - **History** `compareWith: history` (Claude Code): compares with what you really ran before the router. Once, in the background (it never holds a prompt or the session's start), `scripts/history-scan.mjs` reads the transcripts in `~/.claude/projects/*/*.jsonl` older than the first record of the stats log, streamed and only the assistant replies, and adds up their tokens per model and effort (a transcript with no effort counts as medium). Plain Node, no model calls; on about 6 GB of transcripts it took 5 s. The result is kept in `~/.claude/mods-logs/prompt-router-history.json` and never recomputed (delete the file to count again). Each turn is then priced on every part of the mix, for example 75 % Opus high, 15 % Opus extra high, 5 % Opus max, and the prices weighted by the shares. Until the count is done, or with no sessions from before the router, it compares with Opus medium and `/router stats` says so; `/router`, `/router stats` and the panel show the mix.
 - **Saved** = the same tokens on that model minus what they cost. With a fixed `compareWith` (the default `opus-medium`) every turn counts, also a subagent the router did not offer (for example the built-in Explore on Haiku): the number says what the work cost against always running on that model, not only what the router itself moved. With `first`, a subagent the router did not offer saves nothing.
 - **Effort is not re-priced**: the prices do not depend on effort, only the number of tokens does, and how many tokens another effort would have made cannot be known from one turn. So what a lower effort saves is not counted; a subagent's turns are priced like any other turn.
-- **Codex**: turns are priced at the OpenAI API list prices of the GPT models (`gpt-6-luna`, `gpt-6.1-terra`, `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-astra` in `core/prices.ts`, standard tier up to 272K input tokens; Fast mode and long context cost more and are not counted), so `/router stats` shows dollars as in Claude Code. `compareWith` names a tier and a router effort level (`strong-medium`), priced at the list price of the GPT model that tier maps to in `models` (`gpt-6.1-sol` by default). A model missing from the price list stays *without a price*.
 - The **classifier's own cost** is taken off: **net saving** = saved − classifier.
 - A **stronger model** the router picked is shown as **extra cost**, apart, never hidden in the net.
 - A turn cut off before it finished has no token count in the log. `/router stats` (never a prompt or the panel) then reads its chat's transcript with `scripts/usage-scan.mjs` (plain Node, no model calls; only the chats with such a turn) and takes the tokens of the requests since the turn before; the panel counts it as unknown. A model with no price claims no saving.
@@ -362,106 +355,6 @@ Claude Code is the reference platform. Notes per client:
 ```bash
 claude plugin uninstall prompt-router@prompt-router
 ```
-
----
-
-<a id="codex"></a>
-## ⚫ Codex
-
-The Codex CLI and the ChatGPT desktop app share `~/.codex`, so one install covers both.
-
-### Requirements
-
-- Codex **0.166+** (CLI), logged in, on macOS, Linux or Windows (Windows: unit-tested only). The classifier runs on your ChatGPT login, no API key.
-- Node **26+** (the hook runs TypeScript directly).
-- A clone of this repo. The hook runs from it, so keep it where it is.
-
-### Install
-
-```bash
-git clone https://github.com/Viktorooos/prompt-router.git
-node prompt-router/adapters/codex/install.ts
-```
-
-Then **trust the hook once**: run `codex`, type `/hooks`, trust **"Routing..."**, and start a new session.
-
-<details>
-<summary><b>What the installer changes</b></summary>
-
-All in `~/.codex` (`$CODEX_HOME` is respected), each file after a backup:
-
-| File | Change |
-| --- | --- |
-| `hooks.json` | Merges a `UserPromptSubmit` hook (`node <repo>/adapters/codex/hook.ts`), keeping your other hooks. Backup: `hooks.json.bak-prompt-router-<time>`. |
-| `prompt-router.json` | Written with the defaults when there is none. |
-| `config.toml` | A `prompt_router` MCP server (`node <repo>/adapters/codex/mcp.ts`, tool `route`, approved without a prompt), between marker comments. |
-| `AGENTS.md` | A short rule, between marker comments: call `route` with the prompt first, and skip the call when the hook's note is already there. Once the hook has classified a prompt it always leaves a note (at least `[Prompt Router: checked, …]`). |
-
-</details>
-
-> [!IMPORTANT]
-> Codex runs a new or changed hook only after you trust it. Trust it again after every update that changes the hook command (for example after moving the repo and installing again).
-
-**ChatGPT desktop app.** It runs no `UserPromptSubmit` hooks (tested with 0.166). Instead it uses the MCP tool `route` plus the `AGENTS.md` rule. `route` runs the same code as the hook and returns the same note; when the hook already classified the same prompt in the last two minutes, `route` returns the hook's answer instead of classifying it again, so a prompt is classified once. Restart the desktop app after installing. The cost is one tool call per prompt (3–4 s), and the model may now and then skip the rule.
-
-### Options
-
-`~/.codex/prompt-router.json`: the [shared keys](#options) plus the Codex ones.
-
-<details>
-<summary><b>Default file and Codex-only keys</b></summary>
-
-```json
-{
-  "classifier": "light",
-  "effortDetection": "ask",
-  "firstChatDetection": "ask",
-  "midChatModelDetection": "ask",
-  "subagentSuggestions": "ask",
-  "sessionSuggestions": "ask",
-  "newSessionAt": "50%",
-  "notifications": "on",
-  "compareWith": "strong-medium",
-  "project": "",
-  "rules": "",
-  "language": "auto",
-  "enabled": true,
-  "timeoutMs": 20000,
-  "models": { "light": "gpt-6-luna", "standard": "gpt-6.1-terra", "strong": "gpt-6.1-sol", "top": "gpt-6-astra" },
-  "efforts": { "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "max" }
-}
-```
-
-| Key | What it does |
-| --- | --- |
-| `models` | The Codex model for each tier (the old keys `haiku`…`fable` still work) |
-| `efforts` | The Codex reasoning effort for each router level; a model that does not take a level (per `models_cache.json`) gets the nearest lower one |
-| `enabled` | `/router off` and `/router on` write it |
-| `timeoutMs` | The classifier's time limit |
-
-</details>
-
-The classifier is a read-only `codex exec` on the `classifier` class (`gpt-6-luna`) at low effort, with your MCP servers, tools and notes left out: about **4 s and 12k input tokens (mostly cached) per prompt**. A `config.toml` with its own model provider keeps your full config. Log: `~/.codex/log/prompt-router.log`; the current task per chat (to match an accepted offer): `~/.codex/log/prompt-router-tasks.json`.
-
-### Differences
-
-> [!WARNING]
-> Codex cannot switch a running chat's model or effort from a hook (tested: a running session does not re-read `config.toml` either).
-> - **auto**: you get one line, `Prompt Router: for this, switch with /model <model> <effort>` (also as a system message), and the agent carries on at the current setting.
-> - **ask**: the agent asks in a text message, with the options as a numbered list. On **Switch** you get the same `/model` line; it applies from your next prompt.
-
-- **New session** gives you a command to run in a new terminal: `codex -m <model> -c model_reasoning_effort=<effort> "<task>"`.
-- **Subagent** is `spawn_agent` with `model` and `reasoning_effort`. Without that tool the agent says so and does it here.
-- **Fable** (`gpt-6-astra`) is offered only when it is in `~/.codex/models_cache.json` or the chat already runs on it.
-- **`/router`** typed as a prompt may be taken by the TUI as an unknown command (not verified). You can also edit `enabled` instead.
-
-### Uninstall
-
-```bash
-node prompt-router/adapters/codex/install.ts --uninstall
-```
-
-Removes only the router's entry from `hooks.json`, the MCP server block from `config.toml` and the rule from `AGENTS.md` (each after a backup). Your options file stays.
 
 ---
 
@@ -571,7 +464,6 @@ Removes the shim (only if it is the router's) and puts back the newest file it r
 - Run `/router`. It lists every option, its value and where it came from. The log has the same line for each session, with the folder of the copy that wrote it.
 - In Claude Code, put them under the full id `prompt-router@prompt-router` in `pluginConfigs`. An entry under plain `prompt-router` is used only when there is no full-id entry, and `/router` tells you to rename it.
 - Check that no second copy of the mod runs (`claude plugin list`, and any dev copy under `~/.claude/dev-mods/`). A copy without your options falls back to `ask`.
-- In Codex, `auto` still cannot switch the chat; you get the `/model` line instead of a question.
 - A later prompt that stays here but fits another model always asks **Subagent** or **Stay here**, also in `auto`: the chat's model never changes mid-chat. In `auto` the question has one **Stay here** option, and the new effort is set when you pick it.
 
 </details>
@@ -598,13 +490,6 @@ Fable is offered only when your platform has it, and only for the rare cases in 
 </details>
 
 <details>
-<summary><b>Codex runs nothing after the install.</b></summary>
-
-Trust the hook: `codex` → `/hooks` → trust "Routing...", then start a new session. Errors go to `~/.codex/log/prompt-router.log`. In the desktop app, restart it so it picks up the MCP server.
-
-</details>
-
-<details>
 <summary><b>Can I use it with the Effort Optimizer mod?</b></summary>
 
 Use one of them, not both: they both set effort per prompt.
@@ -621,7 +506,6 @@ Canned classifier replies, no model calls. From the repo root:
 ```bash
 claude plugin test plugins/prompt-router       # Claude Code mod: 190
 claude plugin validate plugins/prompt-router   # manifest and options check
-node --test adapters/codex/test/               # Codex: 95
 node --test adapters/shared/test/              # tier names: 6
 node --test adapters/opencode/test/            # OpenCode: 70 (mock client)
 ```
@@ -649,7 +533,6 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 | [`core/prices.ts`](plugins/prompt-router/core/prices.ts) | Model prices per 1M tokens (the only place with prices) |
 | [`core/stats.ts`](plugins/prompt-router/core/stats.ts) | Savings stats from the log: summary, per day, text table, page |
 | [`hooks/register.tsx`](plugins/prompt-router/hooks/register.tsx) | Claude Code wiring: the dialogs, the `switch` tool, `/router`, the stats log |
-| [`adapters/codex/`](adapters/codex) | `install.ts`, `hook.ts` (CLI hook), `mcp.ts` (desktop `route` tool) |
 | [`adapters/opencode/`](adapters/opencode) | `install.ts`, `prompt-router.ts` (the plugin) |
 | [`test/router.test.ts`](plugins/prompt-router/test/router.test.ts) | Unit tests with canned classifier replies |
 | [`test/cases.json`](plugins/prompt-router/test/cases.json) + [`expected.json`](plugins/prompt-router/test/expected.json) | Live eval cases and the right answers |
@@ -663,13 +546,13 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models` (e.
 
 | Version | Changes |
 | --- | --- |
-| **0.10.0** | Savings are an estimate from list prices only. Declined offers and repeated prompts (redo) are logged; a redo counts as a correction in the balance per task. A task's cost includes its subagents and the classifier. Cut-off turns get their tokens from the chat's transcript (`scripts/usage-scan.mjs`, only in `/router stats`). Effort is no longer re-priced by a guess. Codex and OpenCode log the same task fields (prompt key, follows, redo, accepted and declined offers). A plain reply (`yes`, `ok`, `option 2`, a number or a letter, in five languages) keeps the prompt with no classifier call, on all platforms. The stats log keeps no prompt text, only a hash of it. Codex: one classification per prompt (the hook's answer is reused by `route`); a lighter classifier run (about 12k input tokens and 4 s instead of 23k and 7.5 s); the app's own generated requests are skipped; GPT models have OpenAI list prices, so `/router stats` shows dollars; Windows support (unit-tested). Claude Code: parallel sessions no longer lose stats or log lines; the config folder comes from `CLAUDE_CONFIG_DIR`, `HOME` or `USERPROFILE`. |
+| **0.10.0** | Savings are an estimate from list prices only. Declined offers and repeated prompts (redo) are logged; a redo counts as a correction in the balance per task. A task's cost includes its subagents and the classifier. Cut-off turns get their tokens from the chat's transcript (`scripts/usage-scan.mjs`, only in `/router stats`). Effort is no longer re-priced by a guess. OpenCode logs the same task fields (prompt key, follows, redo, accepted and declined offers). A plain reply (`yes`, `ok`, `option 2`, a number or a letter, in five languages) keeps the prompt with no classifier call, on all platforms. The stats log keeps no prompt text, only a hash of it. Claude Code: parallel sessions no longer lose stats or log lines; the config folder comes from `CLAUDE_CONFIG_DIR`, `HOME` or `USERPROFILE`. |
 | **0.9.2** | Panel: folds stay open after a settings change; no effort button for `compareWith: history`. |
-| **0.9.1** | `compareWith: history`: the savings compare with the models and efforts you ran before the router, weighted by tokens, counted once from the transcripts. New option `compareWith`: the savings compare with Opus medium by default (Codex: `strong-medium`), any other model and effort, or `first` (the chat's first model, as before); old data is repriced from its tokens. `subagentSuggestions: auto` starts the suggested subagent with no question and says so in one line (Claude Code and Codex). |
-| **0.9.0** | Savings stats on all three platforms. Claude Code: `/router stats` (Today / 7 days / Total, and a page with a graph of the last 30 days) and today's net saving in the footer. An estimate from list prices: the classifier's cost is taken off, a stronger model is shown as extra cost apart, effort only as counts. Codex: `/router stats` text table from Stop/SubagentStop turn tokens. OpenCode: `router_stats` tool. New option `stats`. |
-| **0.8.0** | One switch per feature: `effortDetection`, `firstChatDetection`, `midChatModelDetection`, `subagentSuggestions`, `sessionSuggestions`, `notifications`. The old `effortMode` and `modelMode` still work. `/router` lists every option and where it came from, and the log records them once per session. Codex and OpenCode: a prompt that stays here but fits another model offers a subagent on that model or staying here. `midChatModelDetection: auto` lets the agent choose between the two itself, with no question. Codex and OpenCode options name tiers (`light`, `standard`, `strong`, `top`) instead of Claude models; the old keys still work. OpenCode subagents are `router-<tier>`, and its questions show the real model. |
+| **0.9.1** | `compareWith: history`: the savings compare with the models and efforts you ran before the router, weighted by tokens, counted once from the transcripts. New option `compareWith`: the savings compare with Opus medium by default, any other model and effort, or `first` (the chat's first model, as before); old data is repriced from its tokens. `subagentSuggestions: auto` starts the suggested subagent with no question and says so in one line (Claude Code). |
+| **0.9.0** | Savings stats on both platforms. Claude Code: `/router stats` (Today / 7 days / Total, and a page with a graph of the last 30 days) and today's net saving in the footer. An estimate from list prices: the classifier's cost is taken off, a stronger model is shown as extra cost apart, effort only as counts. OpenCode: `router_stats` tool. New option `stats`. |
+| **0.8.0** | One switch per feature: `effortDetection`, `firstChatDetection`, `midChatModelDetection`, `subagentSuggestions`, `sessionSuggestions`, `notifications`. The old `effortMode` and `modelMode` still work. `/router` lists every option and where it came from, and the log records them once per session. OpenCode: a prompt that stays here but fits another model offers a subagent on that model or staying here. `midChatModelDetection: auto` lets the agent choose between the two itself, with no question. OpenCode options name tiers (`light`, `standard`, `strong`, `top`) instead of Claude models; the old keys still work. OpenCode subagents are `router-<tier>`, and its questions show the real model. |
 | **0.7.0** | Claude Code: a prompt that stays here but fits another model offers a subagent on that model or staying here; the chat's model never changes mid-chat (it would break the prompt cache) |
-| **0.6.0** | Codex and OpenCode adapters (`adapters/`), the router logic moved to a shared `core/router.ts` |
+| **0.6.0** | OpenCode adapter (`adapters/`), the router logic moved to a shared `core/router.ts` |
 | **0.5.1** | Options under the short key `prompt-router` are read (with a hint to rename it); the classifier sees only the typed text (the app's reminder blocks are stripped); `start_session` is offered only where it exists, the terminal gets a `claude --model … --effort …` command |
 | **0.5.0** | Fable, xhigh and max with narrow rules; switching through the mod's own `switch` tool |
 | **0.4.1** | Asks before changing model or effort; unrelated tasks in big chats go to a new session |

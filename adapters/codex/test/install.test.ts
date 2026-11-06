@@ -83,7 +83,8 @@ test('a hooks.json that does not parse is left alone', async () => {
 test('the script installs and uninstalls under $CODEX_HOME', () => {
   const h = tmp('pr-cxhome-')
   const env = { ...process.env, CODEX_HOME: h }
-  assert.match(execFileSync(process.execPath, [SCRIPT], { env, encoding: 'utf8' }), /Installed the UserPromptSubmit hook/)
+  assert.throws(() => execFileSync(process.execPath, [SCRIPT], { env, encoding: 'utf8', stdio: 'pipe' }), /paused/)
+  assert.match(execFileSync(process.execPath, [SCRIPT, '--force'], { env, encoding: 'utf8' }), /Installed the UserPromptSubmit hook/)
   assert.match(execFileSync(process.execPath, [SCRIPT, '--uninstall'], { env, encoding: 'utf8' }), /Removed/)
 })
 
