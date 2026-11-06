@@ -92,13 +92,20 @@ export function knownModel(v: unknown): Model | '' {
   return ALL_MODELS.find(m => t.includes(m)) ?? ''
 }
 
+// The router's model a platform maps to this model id (the Codex and OpenCode `models` option), or ''.
+export function mappedModel(models: Partial<Record<Model, string>>, id: string): Model | '' {
+  return (id && ALL_MODELS.find(m => models[m] === id)) || ''
+}
+
 // Whether effort level or model `a` is above `b` (low … max, haiku … fable); false when either is unknown.
-export function above(a: unknown, b: unknown): boolean {
+// `models`: the platform's mapping (Codex slugs, OpenCode ids), so its model ids rank by their tier too.
+export function above(a: unknown, b: unknown, models?: Partial<Record<Model, string>>): boolean {
   const la = asLevel(a)
   const lb = asLevel(b)
   if (la && lb) return LEVELS.indexOf(la) > LEVELS.indexOf(lb)
-  const ma = knownModel(a)
-  const mb = knownModel(b)
+  const tier = (v: unknown) => (models && typeof v === 'string' && mappedModel(models, v)) || knownModel(v)
+  const ma = tier(a)
+  const mb = tier(b)
   return !!ma && !!mb && ALL_MODELS.indexOf(ma) > ALL_MODELS.indexOf(mb)
 }
 

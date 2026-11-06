@@ -504,6 +504,21 @@ test('balance: routed tasks against the control medians of their class, with qua
   expect(opus.minutesPerTask).toBeNull()
 })
 
+test('balance: control tasks count only for the class the router wanted: a subagent, or a move up, is not a cheaper here', () => {
+  const sub = Array.from({ length: MIN_CONTROL }, (_, i) =>
+    task(`ks${i}`, { where: 'keep', holdout: true, wanted: { model: 'haiku', effort: 'low' }, wantedWhere: 'subagent' }, [{ model: 'opus', usd: 50 }])).flat()
+  const up = Array.from({ length: MIN_CONTROL }, (_, i) =>
+    task(`ku${i}`, { where: 'keep', holdout: true, from: { model: 'haiku', effort: 'low' }, wanted: { model: 'opus', effort: 'high' } }, [{ model: 'haiku', usd: 50 }])).flat()
+  const hereHaiku = task('r1', { trial: 'router', to: { model: 'haiku', effort: 'low' } }, [{ usd: 1 }])
+  const fableToOpus = task('r2', { trial: 'router', from: { model: 'fable', effort: 'medium' }, to: { model: 'opus', effort: 'medium' } }, [{ model: 'opus', usd: 1 }])
+  const b = balance([...sub, ...up, ...hereHaiku, ...fableToOpus])
+  expect(b.control).toBe(2 * MIN_CONTROL)
+  expect([b.measured, b.estimated]).toEqual([0, 2])
+  // A subagent to Haiku is measured against the control tasks that wanted that subagent.
+  const subRouted = task('r3', { trial: 'router', where: 'subagent', to: { model: 'haiku', effort: 'low' } }, [{ usd: 1 }])
+  expect(balance([...sub, ...subRouted]).measured).toBe(1)
+})
+
 test('balance: fewer control tasks than MIN_CONTROL fall back to the re-pricing, with no time saved', () => {
   const records = [...CONTROL(MIN_CONTROL - 1), ...task('a', { to: { model: 'haiku', effort: 'low' } }, [{ usd: 1, durationMs: 60 * SEC }])]
   const b = balance(records)
@@ -797,6 +812,48 @@ test('trial: kinds come from where the router sent (or wanted to send) the task;
   expect(n('dearer')).toEqual([1, 0])
   expect(n('subagent')).toEqual([0, 1])
   expect(n('session')).toBe(null)
+})
+
+test('trial: a router task that kept the setting (or moved neither way) is in no cheaper/dearer row, only in all', () => {
+  const records = [
+    ...routerTask('kept', [1], { where: 'keep', to: { model: 'opus', effort: 'medium' } }),
+    ...routerTask('same', [1], { outcome: 'asked', to: { model: 'opus', effort: 'medium' } }),
+    // No effort in the chat and none in the pick: the same setting.
+    ...routerTask('blank', [1], { where: 'keep', from: { model: 'opus', effort: '' }, to: { model: 'opus', effort: '' } }),
+  ]
+  const rows = trial(records)
+  expect(rows.find(x => x.kind === 'all')!.router.tasks).toBe(3)
+  expect(rows.find(x => x.kind === 'cheaper')).toBeUndefined()
+  expect(rows.find(x => x.kind === 'dearer')).toBeUndefined()
+})
+
+test('trial: Codex and OpenCode model ids rank by the tier the platform maps them to', () => {
+  const codex = { haiku: 'gpt-6-luna', sonnet: 'gpt-6.1-terra', opus: 'gpt-6.1-sol', fable: 'gpt-6-astra' }
+  const records = [
+    ...routerTask('down', [1], { platform: 'codex', from: { model: 'gpt-6.1-sol', effort: 'medium' }, to: { model: 'gpt-6-luna', effort: 'medium' } }),
+    ...routerTask('up', [1], { platform: 'codex', from: { model: 'gpt-6-luna', effort: 'medium' }, to: { model: 'gpt-6-astra', effort: 'medium' } }),
+    ...controlTask('kdown', [1], { platform: 'codex', from: { model: 'gpt-6-astra', effort: 'low' }, wanted: { model: 'gpt-6.1-terra', effort: 'low' } }),
+  ]
+  const rows = trial(records, -Infinity, codex)
+  const n = (kind: string) => { const r = rows.find(x => x.kind === kind); return r ? [r.router.tasks, r.control.tasks] : null }
+  expect(n('cheaper')).toEqual([1, 1])
+  expect(n('dearer')).toEqual([1, 0])
+})
+
+test('trial: a session started from a started session still counts for the task at the root', () => {
+  const t0 = NOW - DAY
+  const a = task('a', { trial: 'router', where: 'session', to: { model: 'opus', effort: 'medium' } }, [{ usd: 1 }])
+  const toB = 'build the export screen with the csv writer and the column picker'
+  const toC = 'write the tests for the csv writer of the export screen in the app'
+  const spawnB: Entry = { kind: 'spawn', ts: t0 + 50, platform: 'claude-code', chat: 'a', key: toB }
+  const b = task('b', { ts: t0 + 60, key: toB, where: 'here', to: { model: 'opus', effort: 'medium' } }, [{ ts: t0 + 70, usd: 2 }])
+  const spawnC: Entry = { kind: 'spawn', ts: t0 + 80, platform: 'claude-code', chat: 'b', key: toC }
+  const c = task('c', { ts: t0 + 90, key: toC, where: 'here', to: { model: 'opus', effort: 'medium' } }, [{ ts: t0 + 95, usd: 4 }])
+  const rows = trial([...a, spawnB, ...b, spawnC, ...c])
+  const all = rows.find(x => x.kind === 'all')!
+  expect(all.router.tasks).toBe(1)
+  // 1 + 2 + 4, and three classifier calls of $0.01.
+  close(all.router.usd, 7.03)
 })
 
 test('trial: `since` keeps the tasks that started then or later', () => {

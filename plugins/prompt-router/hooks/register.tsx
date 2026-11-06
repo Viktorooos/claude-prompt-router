@@ -572,6 +572,13 @@ async function holdsOut($: EngineInterface, text: string, p: Pick | null, now: L
   return r.quiet
 }
 
+// A tool call that did not run: denied, or an error result (at the top or in `result`).
+function failed(r: unknown) {
+  if (!r || typeof r !== 'object') return false
+  const o = r as { deny?: unknown; isError?: unknown; result?: { isError?: unknown } | null }
+  return 'deny' in o || !!o.isError || !!(o.result && typeof o.result === 'object' && o.result.isError)
+}
+
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
 async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!enabled || e.command || e.isMeta) return e
@@ -604,7 +611,8 @@ async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptS
     return e
   }
 
-  if (await holdsOut($, text, p, now)) {
+  // A here prompt typed over a running turn is left alone below whatever the group, so it is not drawn.
+  if (await holdsOut($, text, p.where === 'here' && e.turnId ? null : p, now)) {
     await noteDecision($, 'keep', { model: pickedFrom, effort: now }, 'applied', now, p, { model: p.model, effort: p.effort }, heldWhere(p))
     return e
   }
@@ -1058,7 +1066,7 @@ export const register: Register = (on, options) => {
       const a = e as { tool?: unknown; questions?: unknown; prompt?: unknown }
       const name = String(a.tool ?? '')
       if (name === 'AskUserQuestion' && Array.isArray(a.questions) && a.questions.some(q => (q as { header?: unknown })?.header === 'Prompt Router')) routerAsked = true
-      if (/(^|__)start_session$/.test(name) && !(r && typeof r === 'object' && ('deny' in r || ('isError' in r && r.isError)))) {
+      if (/(^|__)start_session$/.test(name) && !failed(r)) {
         if (lastAsked?.where === 'session') await noteAccept($)
         if (enabled && cfg.stats === 'on') pending.push({ kind: 'spawn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, key: promptKey(String(a.prompt ?? '')) })
       }

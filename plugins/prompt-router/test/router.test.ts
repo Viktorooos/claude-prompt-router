@@ -1212,6 +1212,21 @@ test('holdout: a suggested subagent or session in a control task is not offered'
   for (const d of ds.filter((d: any) => !d.holdout)) expect(d.trial).toBe('router')
 })
 
+test('holdout: a prompt typed over a running turn is never drawn (the router leaves it alone anyway)', { options: { effortDetection: 'auto', holdoutPct: '30' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, PICK.here)
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' } }))
+  await start($)
+  for (let i = 0; i < 30; i++) await $.prompt.submit({ text: `and push branch ${i}`, wait: false, origin: { kind: 'composer' }, turnId: 't1' })
+  await $.turn.complete(TURN_DONE)
+  const ds = statsLines(seen).filter((x: any) => x.kind === 'decision')
+  expect(ds.length).toBe(30)
+  for (const d of ds) {
+    expect(d.where).toBe('keep')
+    expect(d.trial).toBeUndefined()
+    expect(d.holdout).toBeUndefined()
+  }
+})
+
 test('holdout: the control group is 30 % by default, 10 % one step away', () => {
   expect(toConfig({}).holdoutPct).toBe('30')
   expect(SWITCHES.holdoutPct[0]).toBe('30')
@@ -1263,6 +1278,20 @@ test('stats: a started session is noted with its prompt and takes the session of
   expect(spawn.chat).toBe(d.chat)
   expect(spawn.key).toBe('build the export screen')
   expect(lines.filter((x: any) => x.kind === 'accept').map((a: any) => [a.decision, a.outcome])).toEqual([[d.ts, undefined]])
+})
+
+test('stats: a start_session that failed (isError in its result) is no spawn and takes no offer', async ($: any, on: any) => {
+  const seen = engine(on, PICK.session)
+  on('tool.call', (_: unknown, e: any) => (/start_session$/.test(e.tool) ? { result: { isError: true, content: [{ type: 'text', text: 'no such project' }] } } : { result: {} }))
+  on('turn.complete', () => USED)
+  await start($)
+  await submit($, 'build the export screen')
+  await $.tool.call({ tool: 'AskUserQuestion', questions: [{ header: 'Prompt Router', question: 'Where should this go?', options: [] }] })
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', prompt: 'Build the export screen', initiation: 'user_asked' })
+  await $.turn.complete(TURN_DONE)
+  const lines = statsLines(seen)
+  expect(lines.filter((x: any) => x.kind === 'spawn')).toEqual([])
+  expect(lines.filter((x: any) => x.kind === 'accept' && x.outcome !== 'declined')).toEqual([])
 })
 
 test('stats: a decision names the transcript it belongs to, and a prompt that redoes the last answer', async ($: any, on: any) => {

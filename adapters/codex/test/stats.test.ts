@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -324,6 +324,49 @@ test('trial: a prompt that names a setting, an xhigh pick, or nothing to change 
   await send('ok', { codexHome: h, reply: withFollows(PICK.same, 'new'), now: T0 + 120_000, draw })
   assert.equal(draws, 0)
   assert.ok((readStats(h) as Decision[]).every(d => d.trial === undefined && d.holdout === undefined))
+})
+
+test('trial: a prompt over a running turn, or one mapped to the chat\'s own Codex setting, is never drawn', async () => {
+  let draws = 0
+  const draw = () => (draws++, true)
+  // t2 is still open in the rollout: a prompt for turn t3 is typed over it.
+  const steer = await send('also that one', { reply: PICK.here, turn: 't3', now: T0, draw })
+  assert.equal(steer.r, null)
+  // Low and medium are the same Codex effort: nothing to switch.
+  const h = home({ efforts: { low: 'medium' } })
+  const same = await send('rename it', { codexHome: h, reply: PICK.here, now: T0, draw })
+  assert.equal(same.r, null)
+  assert.equal(draws, 0)
+  for (const d of [...readStats(steer.home), ...readStats(h)] as Decision[]) assert.deepEqual([d.where, d.trial, d.holdout], ['keep', undefined, undefined])
+})
+
+test('trial: the end of a turn (Stop) keeps the task going, so a long turn does not split it', async () => {
+  const h = home()
+  let draws = 0
+  const draw = () => (draws++, true)
+  await send('fix the login bug', { codexHome: h, reply: PICK.subagent, now: T0, draw })
+  // The turn ran for 40 minutes; the next prompt 5 minutes after it goes on with the task.
+  await handleStop({ session_id: 's1', hook_event_name: 'Stop', transcript_path: rollout([started('t1'), ctx('t1', 'gpt-6.1-sol')]) }, { codexHome: h, now: T0 + 40 * 60_000 })
+  const next = await send('and the logout one', { codexHome: h, reply: withFollows(PICK.here, 'continues'), now: T0 + 45 * 60_000, draw })
+  assert.equal(next.r, null)
+  assert.equal(draws, 1)
+  const b = (readStats(h).filter(r => r.kind === 'decision') as Decision[])[1]
+  assert.deepEqual([b.where, b.holdout, b.trial], ['keep', true, undefined])
+})
+
+test('the task file is replaced whole (written aside, then renamed), never rewritten in place', async () => {
+  const h = home()
+  await send('fix the login bug', { codexHome: h, reply: PICK.subagent, now: T0 })
+  const file = join(h, 'log', 'prompt-router-tasks.json')
+  const before = readFileSync(file, 'utf8')
+  // A second name for the same file: an in-place write would change it too.
+  const other = join(h, 'tasks-link.json')
+  linkSync(file, other)
+  await send('fix the login bug', { codexHome: h, reply: PICK.subagent, now: T0 + 60_000, session: 's2' })
+  assert.equal(readFileSync(other, 'utf8'), before)
+  const after = JSON.parse(readFileSync(file, 'utf8'))
+  assert.deepEqual(Object.keys(after).sort(), ['s1', 's2'])
+  assert.deepEqual(readdirSync(join(h, 'log')).filter(f => f.includes('.tmp')), [])
 })
 
 test('accept: the Stop hook sees spawn_agent in the turn after a subagent offer, once', async () => {

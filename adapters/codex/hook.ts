@@ -26,7 +26,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync } from 'node:fs'
-import { appendFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url'
 import { fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, heldWhere, inHoldout, isRedo, preferSession, describeOptions, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, trialExempt, typed, wantsChange } from '../../plugins/prompt-router/core/router.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, heldWhere, inHoldout, isRedo, mappedModel, preferSession, describeOptions, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, toConfig, trialExempt, typed, wantsChange } from '../../plugins/prompt-router/core/router.ts'
 import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
 import { placeTask } from '../../plugins/prompt-router/core/stats.ts'
@@ -223,11 +223,6 @@ export async function readHistory(path: string | null | undefined): Promise<Hist
   return h
 }
 
-// The router class of a Codex model: by the mapping, else none (an unmapped model is not switched).
-function routerModel(models: Record<Model, string>, slug: string): Model | '' {
-  return ALL_MODELS.find(m => models[m] === slug) ?? ''
-}
-
 function schemaFile() {
   const dir = mkdtempSync(join(tmpdir(), 'prompt-router-'))
   return { dir, file: join(dir, 'schema.json'), out: join(dir, 'last.txt') }
@@ -383,11 +378,21 @@ async function readTasks(home: string, now: number): Promise<Record<string, Chat
   }
 }
 
-async function saveTasks(home: string, tasks: Record<string, ChatTask>) {
+// Saves one chat's task. Other chats' hooks run in their own processes, so the file is read again
+// right before the write and only this chat's entry changes; the new file is written aside and
+// renamed over the old one, so no reader ever sees half of it.
+async function saveTask(home: string, chat: string, task: ChatTask | undefined, now: number) {
+  const file = paths(home).tasks
+  const tmp = `${file}.${process.pid}.tmp`
   try {
     await mkdir(join(home, 'log'), { recursive: true })
-    await writeFile(paths(home).tasks, JSON.stringify(tasks))
+    const tasks = await readTasks(home, now)
+    if (task) tasks[chat] = task
+    else delete tasks[chat]
+    await writeFile(tmp, JSON.stringify(tasks))
+    await rename(tmp, file)
   } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {})
     await log(home, 'tasks', err)
   }
 }
@@ -418,14 +423,14 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   const effortOf = (slug: string, l: Level) => effortFor(o.efforts, levels, slug, l)
   const ctx: NoteCtx = { cfg: o.cfg, models: o.models, effortOf, noSubagent: deps.noSubagent }
   // Fable only when the chat runs on its model or Codex lists it.
-  const avail: Model[] = routerModel(o.models, model) === 'fable' || levels.has(o.models.fable) ? [...ALL_MODELS] : [...BASE_MODELS]
+  const avail: Model[] = mappedModel(o.models, model) === 'fable' || levels.has(o.models.fable) ? [...ALL_MODELS] : [...BASE_MODELS]
   const users = [...h.users]
   // The rollout may already hold this prompt; the classifier sees it once, as the new one.
   if (users.at(-1) === text) users.pop()
   const all = [...users, text]
   // Mid-chat, a here prompt that fits another model is offered to a subagent on it (the chat's own
   // model never changes: that would break its prompt cache), so the classifier names that model.
-  const curClass = routerModel(o.models, model)
+  const curClass = mappedModel(o.models, model)
   const hereModel = !deps.noSubagent && !!curClass
   const c: Chat = { first: all[0] ?? '', recent: all.slice(-4, -1), reply: h.reply, model, now, tokens: h.tokens, window: h.window, conf: o.cfg, isFirst: h.isFirst, hereModel, models: avail }
   const runner = deps.runner ?? codexRunner
@@ -447,7 +452,7 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
     await appendStats(home, d).catch(err => log(home, 'stats', err))
     const t = tasks[chat]
     if (t && where !== 'keep') t.offer = where === 'subagent' ? ts : undefined
-    if (t) await saveTasks(home, tasks)
+    if (t) await saveTask(home, chat, t, ts)
   }
   const keep = async () => {
     await decide('keep', from)
@@ -460,12 +465,25 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
   let p: Pick | null = parsed && preferSession(allowed(parsed, o.cfg), h, o.cfg)
   await log(home, 'pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${h.tokens ?? '?'} tok | first ${h.isFirst} | ${clip(reply, 200)}`)
   // The first prompt of a chat has nothing to leave: only its model and effort count.
-  if (p && h.isFirst) p = { ...p, where: 'here', first: { now: routerModel(o.models, model) } }
+  if (p && h.isFirst) p = { ...p, where: 'here', first: { now: mappedModel(o.models, model) } }
   // Mid-chat, a here prompt that fits another model is offered to a subagent on it.
   const other = !!p && p.where === 'here' && hereModel && !h.isFirst && p.model !== curClass && o.cfg.midChatModelDetection !== 'off'
   const routed = p && other ? { ...p, other: { now: curClass as Model } } : p
-  // The trial: the prompt's task, and whether the router stays quiet in it (a control task).
-  const eligible = !!routed && wantsChange(routed, now, o.cfg) && !trialExempt(text, routed)
+  // A prompt typed over a running turn (steer) belongs to that work.
+  const midTurn = h.openTurns.some(t => t !== input.turn_id)
+  // A here prompt: what would change, and whether the router leaves it as it is anyway (typed over a
+  // running turn, or the pick maps to the chat's own Codex setting).
+  const start = p?.first?.now
+  const changeModel = !!p && !!start && p.model !== start && o.cfg.firstChatDetection !== 'off'
+  const changeEffort = !!p && p.effort !== now && o.cfg.effortDetection !== 'off'
+  const slug = p && changeModel ? o.models[p.model] : model
+  const level: Level = p && changeEffort ? p.effort : now || p?.effort || 'medium' // 'medium': no pick, unused
+  // Mapped to the same Codex setting: nothing to switch.
+  const sameSetting = slug === model && !!now && effortOf(slug, level) === effortOf(model, now)
+  const idle = p?.where === 'here' && (midTurn || !model || (!other && ((!changeModel && !changeEffort) || sameSetting)))
+  // The trial: the prompt's task, and whether the router stays quiet in it (a control task). A prompt
+  // the router leaves alone anyway is not drawn.
+  const eligible = !!routed && !idle && wantsChange(routed, now, o.cfg) && !trialExempt(text, routed)
   const placed = placeTask(tasks[chat] ?? null, { ts, key, follows }, { eligible, control: () => (deps.draw ?? inHoldout)(`${chat}:${ts}:${key}`, Number(o.cfg.holdoutPct)) })
   tasks[chat] = { ...tasks[chat], ...placed.task }
   trial = placed.trial
@@ -474,11 +492,9 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
     await decide('keep', from, 'applied', { wanted: { model: o.models[p.model], effort: p.effort }, where: heldWhere(routed) })
     return null
   }
-  // A prompt typed over a running turn (steer) belongs to that work.
-  const midTurn = h.openTurns.some(t => t !== input.turn_id)
 
   if (p.where === 'here') {
-    if (midTurn || !model) return keep()
+    if (idle) return keep()
     if (other) {
       // Mapped to the same Codex effort: Stay here just goes on.
       const effort = p.effort !== now && !(now && effortOf(model, p.effort) === effortOf(model, now))
@@ -489,14 +505,6 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
       await decide('subagent', { model: o.models[p.model], effort: p.effort }, o.cfg.midChatModelDetection === 'auto' ? 'applied' : 'asked')
       return out(`[${(o.cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(ctx, p, cur, effort)}]`, suggests(o, effortOf, p))
     }
-    const start = p.first?.now
-    const changeModel = !!start && p.model !== start && o.cfg.firstChatDetection !== 'off'
-    const changeEffort = p.effort !== now && o.cfg.effortDetection !== 'off'
-    if (!changeModel && !changeEffort) return keep()
-    const slug = changeModel ? o.models[p.model] : model
-    const level = changeEffort ? p.effort : (now || p.effort)
-    // Mapped to the same Codex setting: nothing to switch.
-    if (slug === model && now && effortOf(slug, level) === effortOf(model, now)) return keep()
     // Codex cannot be switched from here: the same line both ways, auto goes on, ask asks first.
     const asks = (changeModel && o.cfg.firstChatDetection === 'ask') || (changeEffort && o.cfg.effortDetection === 'ask')
     const sys = line(ctx, slug, level, p.why)
@@ -514,16 +522,20 @@ export async function handle(input: Input, deps: Deps = {}): Promise<Output | nu
 }
 
 // A main turn that called spawn_agent after the router offered (or ran) a subagent: the offer was taken.
+// The end of a main turn also moves the task's end, as the Claude Code mod does: a long turn does not
+// split its task.
 async function noteSpawn(home: string, input: Input, now: number) {
   const chat = input.session_id ?? ''
-  const tasks = await readTasks(home, now)
-  const offer = tasks[chat]?.offer
-  if (offer === undefined || !input.transcript_path) return
-  const text = await readFile(input.transcript_path, 'utf8').catch(() => '')
-  if (!spawnedAgent(text)) return
-  await appendStats(home, { kind: 'accept', ts: now, platform: 'codex', chat, decision: offer }, now)
-  delete tasks[chat].offer
-  await saveTasks(home, tasks)
+  const task = (await readTasks(home, now))[chat]
+  if (!task) return
+  task.end = now
+  const offer = task.offer
+  const text = offer !== undefined && input.transcript_path ? await readFile(input.transcript_path, 'utf8').catch(() => '') : ''
+  if (offer !== undefined && spawnedAgent(text)) {
+    await appendStats(home, { kind: 'accept', ts: now, platform: 'codex', chat, decision: offer }, now)
+    delete task.offer
+  }
+  await saveTask(home, chat, task, now)
 }
 
 // Stop / SubagentStop: the finished turn's tokens from the rollout, for the statistics. The

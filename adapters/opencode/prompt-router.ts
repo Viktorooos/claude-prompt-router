@@ -301,8 +301,11 @@ export function routerPlugin(tool: ToolFn) {
         const main = m?.modelHold?.base ?? m?.cur.model
         if (main && (started.has(sid) || agent.startsWith('router-'))) baseline = modelID(main)
       } else {
-        const base = chats.get(sid)?.modelHold?.base
+        const st = chats.get(sid)
+        const base = st?.modelHold?.base
         if (base) baseline = modelID(base)
+        // The end of a main-chat turn moves its task's end, as in Claude Code: a long turn does not split it.
+        if (st?.task) st.task.end = Date.now()
       }
       const usage = usageOf(info.tokens)
       const any = usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0
@@ -456,8 +459,11 @@ export function routerPlugin(tool: ToolFn) {
       const ts = Date.now()
       const key = promptKey(text)
       const redo = isRedo(text)
-      // The trial: the prompt's task, and whether the router stays quiet in it (a control task).
-      const eligible = !!p && wantsChange(p, now, cfg) && !trialExempt(text, p)
+      // A prompt typed over a running turn belongs to that work.
+      const midTurn = !!p && (await isBusy(sid))
+      // The trial: the prompt's task, and whether the router stays quiet in it (a control task). A here
+      // prompt over a running turn is left alone below whatever the group, so it is not drawn.
+      const eligible = !!p && !(p.where === 'here' && midTurn) && wantsChange(p, now, cfg) && !trialExempt(text, p)
       const placed = placeTask(st.task, { ts, key, follows }, { eligible, control: () => draw(`${sid}:${ts}:${key}`, Number(cfg.holdoutPct)) })
       st.task = placed.task
       // held: a control-group prompt, what the router wanted instead.
@@ -469,7 +475,6 @@ export function routerPlugin(tool: ToolFn) {
       if (!p) return note('keep', 'applied', fromSide)
       if (placed.quiet) return note('keep', 'applied', fromSide, { wanted: { model: p.model, effort: p.effort }, where: heldWhere(p) })
       st.last = p
-      const midTurn = await isBusy(sid)
       const proposed = { model: p.model as string, effort: p.effort }
 
       if (p.where === 'here') {

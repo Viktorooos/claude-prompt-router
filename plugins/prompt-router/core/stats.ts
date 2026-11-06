@@ -3,7 +3,7 @@
 // the saving, a stronger model is shown as extra cost, an effort change is left to the trial, and
 // the balance takes all of them in.
 import { LEVELS, MODEL_NAMES, NAMES, above, asLevel, knownModel } from './router.ts'
-import type { Level } from './router.ts'
+import type { Level, Model } from './router.ts'
 import { cost } from './prices.ts'
 import type { Usage } from './prices.ts'
 
@@ -418,9 +418,17 @@ export function failureOf(e: Episode): Failure {
   return failure(reasons)
 }
 
-// A class of tasks: where the router sent it and the model it picked (for a control task, the model
-// it would have picked). Control tasks exist only for `here`, so other classes always fall back.
+// A class of tasks: where the router sent it and the model it picked (for a control task, where it
+// would have sent it and the model it would have picked).
 const classOf = (where: string, model: string) => `${where}:${model}`
+
+// A move down: a cheaper model, or a subagent or session on the same model (a fresh context), or a
+// lower effort here. lower: down with neither the model nor the effort higher, the only moves measured
+// against control tasks (an escalation, even a partial one, falls back to the re-pricing).
+function moveOf(where: string, from: Decision['from'], to: Decision['to']) {
+  const down = above(from.model, to.model) || (from.model === to.model && (where !== 'here' || above(from.effort, to.effort)))
+  return { down, lower: down && !above(to.model, from.model) && !above(to.effort, from.effort) }
+}
 
 // Control tasks a class needs before its medians replace the token re-pricing.
 export const MIN_CONTROL = 5
@@ -495,7 +503,11 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
   for (const e of eps) {
     const d = e.decisions[0]!
     if (!d.holdout || !d.wanted) continue
-    const k = classOf('here', d.wanted.model)
+    // Only the control tasks of a move the routed tasks are measured against: where the router wanted
+    // the task to go, and a move down (the control group now holds back raises too).
+    const where = d.wantedWhere ?? 'here'
+    if (!moveOf(where, d.from, d.wanted).lower) continue
+    const k = classOf(where, d.wanted.model)
     const c = control.get(k) ?? { usd: [], ms: [] }
     control.set(k, c)
     // Without the router there is no classifier: only the turns count.
@@ -540,11 +552,8 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     const later = e.decisions[1] ? turnsUsd(e.turns.filter(t => t.ts >= e.decisions[1]!.ts)) : 0
     const rework = f * later
     const k = classOf(d.where, d.to.model)
-    // A subagent or session on the same model is cheaper (a fresh context); on a stronger one it is an escalation.
-    const down = above(d.from.model, d.to.model) || (d.from.model === d.to.model && (d.where !== 'here' || above(d.from.effort, d.to.effort)))
-    // Control tasks are only held back from a move down (neither the model nor the effort higher), so
-    // an escalation, even a partial one, is never measured against them.
-    const lower = down && !above(d.to.model, d.from.model) && !above(d.to.effort, d.from.effort)
+    // A subagent or session on a stronger model is an escalation, not a cheaper pick.
+    const { down, lower } = moveOf(d.where, d.from, d.to)
     const cu = lower ? usdSpread.get(k) : undefined
     let without: Spread
     if (cu) {
@@ -620,15 +629,20 @@ const SPAWN_WINDOW = 15 * 60_000
 // The new session's first prompt and the spawn's words: the same start (the prompt may get a note added).
 const sameStart = (a: string | undefined, b: string) => !!a && a.slice(0, 60) === b.slice(0, 60)
 
-// Where the router sent the task (or wanted to, in control): a fresh context, or here cheaper or dearer.
-// A chat with no effort set runs at the reference's.
-function kindOf(d: Decision, control: boolean): TaskKind {
+// Where the router sent the task (or wanted to, in control): a fresh context, or here cheaper or dearer
+// (the model first, then the effort). A chat with no effort set runs at the reference's. null: here at
+// the same setting (a router task whose first prompt the router kept as it was): it counts in `all` only.
+// `models`: the platform's model mapping, so Codex slugs and OpenCode ids rank by their tier.
+function kindOf(d: Decision, control: boolean, models?: Partial<Record<Model, string>>): TaskKind | null {
   const where = control ? (d.wantedWhere ?? 'here') : d.where
   if (where === 'subagent' || where === 'session') return where
   const to = (control ? d.wanted : d.to) ?? d.to
   const from = { model: d.from.model, effort: d.from.effort || REFERENCE.effort }
   const eff = to.effort || from.effort
-  return above(from.model, to.model) || (from.model === to.model && above(from.effort, eff)) ? 'cheaper' : 'dearer'
+  if (above(from.model, to.model, models)) return 'cheaper'
+  if (above(to.model, from.model, models)) return 'dearer'
+  if (from.model !== to.model) return null
+  return above(from.effort, eff) ? 'cheaper' : above(eff, from.effort) ? 'dearer' : null
 }
 
 function armOf(d: Decision): 'router' | 'control' | null {
@@ -650,7 +664,8 @@ function welch(control: readonly number[], router: readonly number[]): Range | n
   return { value, low: value - half, high: value + half }
 }
 
-export function trial(records: readonly Entry[], since = -Infinity): TrialRow[] {
+// `models`: the platform's model mapping (Codex, OpenCode), so its model ids rank by their tier.
+export function trial(records: readonly Entry[], since = -Infinity, models?: Partial<Record<Model, string>>): TrialRow[] {
   const eps = episodes(records).filter(e => e.decisions.length)
   // A session the task started: its first prompt has the spawn's words, within SPAWN_WINDOW.
   const child = new Map<Episode, Episode>()
@@ -660,9 +675,18 @@ export function trial(records: readonly Entry[], since = -Infinity): TrialRow[] 
     const kid = eps.find(e => e.chat !== s.chat && !child.has(e) && sameStart(e.decisions[0]!.key, s.key) && e.start >= s.ts && e.start - s.ts <= SPAWN_WINDOW)
     if (parent && kid) child.set(kid, parent)
   }
+  // A session started from a started session belongs to the task at the root of the chain.
+  const root = (e: Episode) => {
+    const seen = new Set<Episode>()
+    while (child.has(e) && !seen.has(e)) {
+      seen.add(e)
+      e = child.get(e)!
+    }
+    return e
+  }
   const price = new Map<Episode, { usd: number; cls: number }>()
   for (const e of eps) {
-    const owner = child.get(e) ?? e
+    const owner = root(e)
     const c = price.get(owner) ?? { usd: 0, cls: 0 }
     c.usd += turnsUsd(e.turns)
     c.cls += e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
@@ -678,7 +702,8 @@ export function trial(records: readonly Entry[], since = -Infinity): TrialRow[] 
     if (!arm) continue
     const c = price.get(e)!
     const usd = arm === 'router' ? c.usd + c.cls : c.usd
-    for (const k of ['all', kindOf(d, arm === 'control')] as const) group(k)[arm].push(usd)
+    const kind = kindOf(d, arm === 'control', models)
+    for (const k of kind ? (['all', kind] as const) : (['all'] as const)) group(k)[arm].push(usd)
   }
   const stats = (xs: number[]): ArmStats => ({ tasks: xs.length, usd: xs.length ? mean(xs) : 0 })
   const order = ['all', 'cheaper', 'dearer', 'subagent', 'session'] as const
