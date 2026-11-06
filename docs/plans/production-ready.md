@@ -116,6 +116,8 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
 
 - [ ] 10. První živý běh (60 min, jen se souhlasem s instalací OpenCode). Nainstalovat OpenCode, porovnat použité hooky a klienta (`chat.message`, `chat.params`, `client.session.*`, `client.tui.showToast`) s typy `@opencode-ai/plugin`/`@opencode-ai/sdk`, opravit názvy a tvary, upravit mock v `adapters/opencode/test/helpers.ts:34-50` podle skutečných odpovědí. Cesty konfigurace přes `XDG_CONFIG_HOME` a Windows (`install.ts:36`, `prompt-router.ts:103-104`), import shimu na Windows přes `file://` URL (`install.ts:40-43`). Ověření: plugin se načte, jeden prompt zaloguje rozhodnutí, `router_stats` vrátí tabulku; `node --test adapters/opencode/test/`.
 
+  Přeskočeno: instalace OpenCode čeká na souhlas uživatele.
+
 ### D. Vydání
 
 - [ ] 11. Dokumentace (30 min). README: odznak verze, počty testů (410) a případů evaluace (132), řádek „Unreleased“ v changelogu patří k 0.9.1, řádek o ceně klasifikátoru v Codexu podle měření z kroku 1, tabulka Status.
@@ -131,6 +133,7 @@ Cíl: router na žádné platformě nestojí víc, než ušetří, neztrácí da
 - Codex se má chovat stejně jako v Claude desktop (pokyn uživatele 2026-11-06): stejné funkce i výchozí hodnoty a statistiky v dolarech podle ceníku API OpenAI (krok 4). Kde Codex pluginu něco nedovolí (sám přepnout model nebo effort), co nejbližší náhrada a v README to přiznat.
 - Codex: obě vrstvy proti dvojí klasifikaci (poznámka z hooku i deduplikace v `route`), protože desktopová appka teď spouští hook i MCP nástroj.
 - Rychlá cesta patří do `core/router.ts`, aby se platformy nerozešly.
+- `promptKey` se ukládá jako hash, ne text (pokyn uživatele 2026-11-06, krok 9).
 
 ## Paralelně
 
