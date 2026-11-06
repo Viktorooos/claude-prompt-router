@@ -7,7 +7,7 @@
       "name": "prompt-router",
       "source": "./plugins/prompt-router",
       "description": "Routes each prompt to this chat, a subagent or a new session, picks the model and effort, sets effort here by itself and has Claude ask before moving work elsewhere",
-      "version": "0.9.1"
+      "version": "0.9.2"
     }
   ]
 }
