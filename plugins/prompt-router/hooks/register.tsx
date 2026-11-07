@@ -172,7 +172,13 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
 
 // The pane draws still: the app puts an image back on every hover, press and focus, and an animated
 // drawing replayed each time.
+// TEMP trace for the scroll bug: what redraws the pane and how its window moves.
+function trace($: EngineInterface, what: string) {
+  log($, 'trace', what).catch(() => {})
+}
+
 function redraw($: EngineInterface) {
+  trace($, `redraw tickOnly=${tickOnly} held=${paneHeld}`)
   try {
     $.ui.invalidate('ui.render')
   } catch {
@@ -977,6 +983,7 @@ export const register: Register = (on, options) => {
     drawnMinute = ''
     drawnClock = null
     paneHeld = !!(await $.state.get(PANE_HELD).then(r => r.value, () => false))
+    trace($, `session.start held=${paneHeld}`)
     cacheTicker?.cancel()
     cacheTicker = null
     // Every second, apart from anything else the pane does: the terminal repaints just the countdown
@@ -1344,19 +1351,27 @@ export const register: Register = (on, options) => {
   // Which control in the pane holds the focus: a press or a pick puts it on that control, the ring
   // moving off (a click on the pane, Escape) frees it. Observed only.
   on('ui.press', { plugin: 'prompt-router' }, async ($, e, next) => {
+    trace($, `press ${e.element}`)
     await holdPane($, true)
     return next(e)
   })
   on('ui.select', { plugin: 'prompt-router' }, async ($, e, next) => {
+    trace($, `select ${e.element}=${e.value}`)
     await holdPane($, true)
     return next(e)
   })
   on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    trace($, `focus element=${e.element ?? '-'} origin=${JSON.stringify(e.origin)}`)
     await holdPane($, !!e.element)
+    return next(e)
+  })
+  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
+    trace($, `scroll by=${e.by} offset=${e.offset} rows=${e.bodyRows}/${e.contentRows} origin=${JSON.stringify(e.origin)}`)
     return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    trace($, `render ${e.surface} offset=${e.props.scroll?.offset} rows=${e.props.scroll?.bodyRows} focused=${e.props.isFocused}`)
     const d = await paneData($)
     const term = e.surface === 'terminal'
     const report = d.savings?.report[panePeriod] ?? null
