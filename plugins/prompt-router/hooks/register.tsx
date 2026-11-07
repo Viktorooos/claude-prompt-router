@@ -1484,6 +1484,22 @@ export const register: Register = (on, options) => {
           {stat('saved-with', 'With router', usd(withUsd), savedColor)}
         </Box>
       ) : null,
+      // TEMP hover diagnostic: remove once the chart hover is settled.
+      <Box key="diag" flexDirection="column" gap={0} width="100%">
+        <Text bold>DIAG hover: najeď na každý řádek</Text>
+        <Box key="diag-a" hover={{ backgroundColor: 'red' }}><Text>A: barva pozadí, bez scope</Text></Box>
+        <Box key="diag-b"><Text>B: text bez scope (červený?)</Text><Text hover={{ color: 'red' }}> ●</Text></Box>
+        <Box key="diag-c" flexDirection="row" gap={1}><Text>C: odhalení Textu, bez scope</Text><Box display="none" hover={{ display: 'flex' }}><Text color="red">← C ODHALENO</Text></Box></Box>
+        <Box key="diag-d" flexDirection="row" gap={1}><Text>D: odhalení Svg, bez scope</Text><Box display="none" hover={{ display: 'flex' }}><Svg source={dotSvg('#e00', 12)} alt="D" height={12} /></Box></Box>
+        <Box key="diag-e" flexDirection="row" gap={1}><Text>E: absolutní odhalení, bez scope</Text><Box position="absolute" top={0} left={30} display="none" hover={{ display: 'flex' }}><Text color="red">E ODHALENO</Text></Box></Box>
+        <Box key="diag-f" hover={{ scope: 'diag-f', backgroundColor: 'red' }}><Text>F: barva pozadí se scope</Text></Box>
+        <Box key="diag-g" flexDirection="row" gap={1}><Text hover={{ scope: 'diag-g', color: 'red' }}>G: odhalení se scope</Text><Box display="none" hover={{ scope: 'diag-g', display: 'flex' }}><Text color="red">← G ODHALENO</Text></Box></Box>
+        <Box key="diag-h" flexDirection="row" width="100%">
+          {[0, 1, 2, 3].map((i) => (
+            <Box key={`diag-h-${i}`} width={0} flexGrow={1} hover={{ backgroundColor: 'red' }}><Text>{`H${i}`}</Text></Box>
+          ))}
+        </Box>
+      </Box>,
       trend ? (
         <Box key="saved-trend" flexDirection="column" gap={0} width="100%">
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
