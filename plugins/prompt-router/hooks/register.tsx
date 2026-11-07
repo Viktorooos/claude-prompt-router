@@ -1487,16 +1487,17 @@ export const register: Register = (on, options) => {
       // TEMP hover diagnostic: remove once the chart hover is settled.
       <Box key="diag" flexDirection="column" gap={0} width="100%">
         <Text bold>DIAG hover: najeď na každý řádek</Text>
-        <Box key="diag-a" hover={{ backgroundColor: 'red' }}><Text>A: barva pozadí, bez scope</Text></Box>
-        <Box key="diag-b"><Text>B: text bez scope (červený?)</Text><Text hover={{ color: 'red' }}> ●</Text></Box>
-        <Box key="diag-c" flexDirection="row" gap={1}><Text>C: odhalení Textu, bez scope</Text><Box display="none" hover={{ display: 'flex' }}><Text color="red">← C ODHALENO</Text></Box></Box>
-        <Box key="diag-d" flexDirection="row" gap={1}><Text>D: odhalení Svg, bez scope</Text><Box display="none" hover={{ display: 'flex' }}><Svg source={dotSvg('#e00', 12)} alt="D" height={12} /></Box></Box>
-        <Box key="diag-e" flexDirection="row" gap={1}><Text>E: absolutní odhalení, bez scope</Text><Box position="absolute" top={0} left={30} display="none" hover={{ display: 'flex' }}><Text color="red">E ODHALENO</Text></Box></Box>
-        <Box key="diag-f" hover={{ scope: 'diag-f', backgroundColor: 'red' }}><Text>F: barva pozadí se scope</Text></Box>
-        <Box key="diag-g" flexDirection="row" gap={1}><Text hover={{ scope: 'diag-g', color: 'red' }}>G: odhalení se scope</Text><Box display="none" hover={{ scope: 'diag-g', display: 'flex' }}><Text color="red">← G ODHALENO</Text></Box></Box>
-        <Box key="diag-h" flexDirection="row" width="100%">
+        <Box key="diag-i" flexDirection="row" gap={1} hover={{ scope: 'diag-i' }}><Text>I: spouštěč jen se scope</Text><Box display="none" hover={{ scope: 'diag-i', display: 'flex' }}><Text color="red">← I ODHALENO</Text></Box></Box>
+        <Box key="diag-j" hover={{ backgroundColor: 'red' }}><Svg source={sparkSvg([1, 3, 2, 5], 1, 24, '#888')} alt="J" height={24} /></Box>
+        <Box key="diag-k"><Text hover={{ color: 'transparent' }}>K: tento text při najetí zmizí</Text></Box>
+        <Box key="diag-l" flexDirection="row" width="100%">
           {[0, 1, 2, 3].map((i) => (
-            <Box key={`diag-h-${i}`} width={0} flexGrow={1} hover={{ backgroundColor: 'red' }}><Text>{`H${i}`}</Text></Box>
+            <Box key={`diag-l-${i}`} width={0} flexGrow={1}>
+              <Svg source={sparkSvg([1, 3, 2, 5], i, 24, '#888')} alt="L" height={24} />
+              <Box position="absolute" top={0} left={0} width="100%" display="none" hover={{ display: 'flex' }}>
+                <Svg source={sparkSvg([1, 3, 2, 5], i, 24, '#e00', true)} alt="L" height={24} />
+              </Box>
+            </Box>
           ))}
         </Box>
       </Box>,
@@ -1517,9 +1518,9 @@ export const register: Register = (on, options) => {
           {/* One column per day in the flow, each its slice of the line as a plain image and a hover
               area of its own: the pane does the hover, no sandboxed frame. An absolute Box takes no
               pointer of its own (it counts as its parent's), so the columns cannot sit in one. */}
-          <Box key="spark-cols" flexDirection="row" width="100%" hover={{ scope: 'spark-any' }}>
+          <Box key="spark-cols" flexDirection="row" width="100%" hover={{ scope: 'spark-any', backgroundColor: `${savedColor}00` }}>
             {dayPoints.map((p, i) => (
-              <Box key={`spark-col-${i}`} width={0} flexGrow={1} hover={{ scope: `spark-day-${i}` }}>
+              <Box key={`spark-col-${i}`} width={0} flexGrow={1} hover={{ scope: `spark-day-${i}`, backgroundColor: `${savedColor}00` }}>
                 <Svg source={sparkSvg(dayValues, i, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
                 <Box position="absolute" top={0} left={0} width="100%" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
                   <Svg source={sparkSvg(dayValues, i, SPARK_PX, savedColor, true)} alt={p.head} height={SPARK_PX} />
