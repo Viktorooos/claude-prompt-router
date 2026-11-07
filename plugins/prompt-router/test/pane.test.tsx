@@ -740,42 +740,26 @@ test('This chat shows what the last reply cost (the /cost total it added, classi
   expect(await draw('terminal')).toMatch(/Last reply \$0\.42\nThis session \$1\.62/)
 })
 
-test('while a control in the pane holds the focus, the desktop countdown goes by the minute: a redraw every second would keep pulling the pane back to that control', async ($: any, on: any) => {
-  const now = 20 * 86_400_000 + 12 * HOUR
-  const opts = { now }
-  const seen = engine(on, opts)
-  const ticks: (() => void)[] = []
-  on('clock.every', () => new Promise<any>(res => ticks.push(() => res({ value: undefined }))))
-  on('turn.complete', () => ({ text: '', usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 4_000 } }))
+test('a click on a setting does not take the focus on the desktop: the app keeps the focused control in view and pulled the pane back to it on every scroll', async ($: any, on: any) => {
+  engine(on, {})
+  // What reaches the engine beneath the plugins: a focus move the mod let through.
+  const landed: any[] = []
+  on('ui.focus', (_: unknown, e: any) => { landed.push(e); return {} })
   await start($)
-  await $.turn.complete({ answer: '', durationMs: 5_000, isAborted: false, turnId: 't1', reason: 'answer' })
-  // 4:55 left: the minute reads 4 for the next seconds.
-  opts.now = now + 5_000
+  const move = (element: string, origin: any = { kind: 'person' }) =>
+    $.ui.focus({ component: 'Pane', requestId: PANE.requestId, plugin: 'prompt-router', element, origin })
   let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0)) }
-  const tick = async () => {
-    await settle()
-    const before = seen.redraws
-    ticks.shift()!()
-    await settle()
-    return seen.redraws - before
-  }
-  // A pick in the settings: the Select keeps the focus.
-  await ui.select({ key: 'pick-effortDetection', value: 'auto' })
-  const steps: number[] = []
-  for (const s of [6, 7, 8]) {
-    opts.now = now + s * 1_000
-    steps.push(await tick())
-  }
-  opts.now = now + 61_000
-  steps.push(await tick())
-  expect(steps).toEqual([0, 0, 0, 1])
-  // Meanwhile the card shows whole minutes, not seconds that stand still.
+  await move('pick-effortDetection')
+  expect(landed).toHaveLength(0)
+  // A plugin's own move and a move off the controls still go through.
+  await move('pick-effortDetection', { kind: 'plugin', name: 'other' })
+  await $.ui.focus({ component: 'Pane', requestId: PANE.requestId, origin: { kind: 'person' } })
+  expect(landed).toHaveLength(2)
   await ui.unmount()
-  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const svgs = JSON.stringify(await ui.findAll({ type: 'Svg' }))
-  expect(svgs).toMatch(/>3 min</)
-  expect(svgs).not.toMatch(/>3:59</)
+  // The terminal steps through the controls with Tab: the ring moves there.
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await move('pick-effortDetection')
+  expect(landed).toHaveLength(3)
   await ui.unmount()
 })
 
@@ -809,3 +793,4 @@ test('in the terminal the ticker repaints only the countdown Raster, no pane red
   expect(await tick()).toBe(1)
   await ui.unmount()
 })
+

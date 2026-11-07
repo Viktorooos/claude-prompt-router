@@ -36,8 +36,6 @@ declare module 'claude-code' {
       cache: Shaped<CacheMark | null>
       /** What the last main-chat reply cost in USD, for the pane. */
       spend: Shaped<{ usd: number } | null>
-      /** Whether a control in the pane holds the focus, kept across the reload that saving an option causes. */
-      paneHeld: boolean | null
       /** The pane's open folds, kept across the reload that saving an option causes. */
       paneOpen: string[] | null
     }

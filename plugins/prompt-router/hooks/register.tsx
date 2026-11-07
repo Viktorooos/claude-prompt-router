@@ -51,26 +51,13 @@ let sessionCwd = ''
 let transcriptFile = ''
 let cacheTicker: { cancel: () => void } | null = null
 let drawnCache = ''
-let drawnMinute = ''
 let drawnClock: { state: CacheView['state']; name: string; columns: number; cells: number } | null = null
 // A redraw the ticker asked for only to move the countdown: the pane reuses the savings it read last
 // (under a minute old, nothing new pending) instead of reading the whole stats log every second.
 let tickOnly = false
-// Whether a control in the pane (a setting's Select, a Button) holds the focus. The app keeps the
-// focused control in view on every redraw, so while one does a redraw every second would keep
-// pulling the pane back to it: the desktop countdown then goes by the minute. In $.state too, since
-// saving an option reloads the mod while the control keeps the focus.
-let paneHeld = false
-const PANE_HELD = { plugin: 'prompt-router', key: 'paneHeld' } as const
-async function holdPane($: EngineInterface, held: boolean) {
-  if (paneHeld === held) return
-  paneHeld = held
-  try {
-    await $.state.set(PANE_HELD, held)
-  } catch {
-    // Kept for this load only.
-  }
-}
+// The surface the pane last drew on: on the desktop a click on a control must not take the focus ring
+// (see the ui.focus hook).
+let paneSurface = ''
 let savingsMemo: { at: number; pending: number; value: unknown } | null = null
 
 // Claude Code's config folder (~/.claude or CLAUDE_CONFIG_DIR), known from session.start on.
@@ -172,13 +159,7 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
 
 // The pane draws still: the app puts an image back on every hover, press and focus, and an animated
 // drawing replayed each time.
-// TEMP trace for the scroll bug: what redraws the pane and how its window moves.
-function trace($: EngineInterface, what: string) {
-  log($, 'trace', what).catch(() => {})
-}
-
 function redraw($: EngineInterface) {
-  trace($, `redraw tickOnly=${tickOnly} held=${paneHeld}`)
   try {
     $.ui.invalidate('ui.render')
   } catch {
@@ -884,8 +865,6 @@ async function markCache($: EngineInterface, model: string, durationMs: number |
 // while the cache counts down, never once it lapsed).
 // What the card shows of the cache, to the second: a change is what the ticker moves on.
 const cacheLabel = (v: CacheView) => `${v.state}|${cacheClock(v) || cacheTime(v)}`
-// The same to the minute, what the desktop card shows while a control holds the focus.
-const minuteLabel = (v: CacheView) => `${v.state}|${cacheTime(v)}`
 // The terminal countdown Raster's key, the address $.ui.blit repaints.
 const CLOCK_KEY = 'cache-clock'
 
@@ -980,10 +959,7 @@ export const register: Register = (on, options) => {
     sessionCwd = typeof e.cwd === 'string' ? e.cwd : ''
     transcriptFile = ''
     drawnCache = ''
-    drawnMinute = ''
     drawnClock = null
-    paneHeld = !!(await $.state.get(PANE_HELD).then(r => r.value, () => false))
-    trace($, `session.start held=${paneHeld}`)
     cacheTicker?.cancel()
     cacheTicker = null
     // Every second, apart from anything else the pane does: the terminal repaints just the countdown
@@ -1004,7 +980,6 @@ export const register: Register = (on, options) => {
           return
         }
       }
-      if (paneHeld && minuteLabel(v) === drawnMinute) return
       drawnCache = label
       tickOnly = true
       redraw($)
@@ -1348,30 +1323,17 @@ export const register: Register = (on, options) => {
   // The pane beside the chat, kept to what people look for: how much the router saved, this chat's
   // context and when it asks for a new session, and the settings, each with one line on what it does.
   // The rest (the strict balance, accuracy, the models) is under Details, always open.
-  // Which control in the pane holds the focus: a press or a pick puts it on that control, the ring
-  // moving off (a click on the pane, Escape) frees it. Observed only.
-  on('ui.press', { plugin: 'prompt-router' }, async ($, e, next) => {
-    trace($, `press ${e.element}`)
-    await holdPane($, true)
-    return next(e)
-  })
-  on('ui.select', { plugin: 'prompt-router' }, async ($, e, next) => {
-    trace($, `select ${e.element}=${e.value}`)
-    await holdPane($, true)
-    return next(e)
-  })
+  // The desktop app keeps the control that holds the focus ring in view, so after a click on a setting
+  // every scroll up was pulled back to it until the person clicked the pane elsewhere. There a click
+  // on a control leaves the ring where it was (the press or pick still goes through); the terminal,
+  // where Tab steps through the controls, moves it as usual.
   on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    trace($, `focus element=${e.element ?? '-'} origin=${JSON.stringify(e.origin)}`)
-    await holdPane($, !!e.element)
-    return next(e)
-  })
-  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    trace($, `scroll by=${e.by} offset=${e.offset} rows=${e.bodyRows}/${e.contentRows} origin=${JSON.stringify(e.origin)}`)
+    if (paneSurface && paneSurface !== 'terminal' && e.element && e.origin.kind === 'person') return {}
     return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    trace($, `render ${e.surface} offset=${e.props.scroll?.offset} rows=${e.props.scroll?.bodyRows} focused=${e.props.isFocused}`)
+    paneSurface = e.surface
     const d = await paneData($)
     const term = e.surface === 'terminal'
     const report = d.savings?.report[panePeriod] ?? null
@@ -1545,7 +1507,6 @@ export const register: Register = (on, options) => {
     // it lapsed or the chat moved to another model, grey before the first reply.
     const cv = d.cache.view
     drawnCache = cacheLabel(cv)
-    drawnMinute = minuteLabel(cv)
     const live = cv.state !== 'none'
     const cTone = CACHE_TONE[cv.state]
     const cColor = TONES[cTone][0]
@@ -1572,8 +1533,6 @@ export const register: Register = (on, options) => {
     // without Raster here it is Text, and the ticker redraws the pane instead.
     const clockCols = Math.max(cells, Math.min(cols, 60))
     const counting = cv.state === 'warm' || cv.state === 'soon'
-    // While a control holds the focus the ticker redraws by the minute, so the card shows minutes then.
-    const cShown = paneHeld ? (cv.leftMs < 60_000 ? '<1 min' : `${Math.floor(cv.leftMs / 60_000)} min`) : cClock
     drawnClock = term && counting && Raster ? { state: cv.state, name: cacheName, columns: clockCols, cells } : null
     const cacheCard = term ? section('cache',
       title('cache-title', 'Cache'),
@@ -1596,7 +1555,7 @@ export const register: Register = (on, options) => {
         strong: true,
         right: counting ? (
           <Box flexDirection="column" alignItems="flex-end">
-            <Svg source={bigNumberSvg(cShown, cColor, 96, 30)} alt={`Cache ${cTime}`} width={Math.max(76, cShown.length * 18)} height={38} />
+            <Svg source={bigNumberSvg(cClock, cColor, 96, 30)} alt={`Cache ${cTime}`} width={cClock.length > 4 ? 92 : 76} height={38} />
             <Text dimColor>left</Text>
           </Box>
         ) : undefined,
