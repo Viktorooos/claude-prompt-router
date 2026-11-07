@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, sparkDaySvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -471,25 +471,21 @@ test('drawings: tone, bars, sparklines and times', () => {
   const left = splitBarSvg(-0.5, '#e0483f', 100, 8)
   expect(left).toMatch(/<rect x="25" width="25" [^>]*fill="#e0483f"/)
   expect(left).not.toMatch(/@keyframes|<script|on\w+=/)
-  const day = (value: number, k: string) => ({ value, head: `${k} head`, detail: `${k} detail` })
-  const spark = sparkSvg([day(0, 'a'), day(0.1, 'b'), day(-0.05, 'c'), day(0.3, 'd')], { head: 'idle head', detail: 'idle detail' })
+  const spark = sparkSvg([0, 0.1, -0.05, 0.3])
   // Full width: the line stretches (its stroke does not), the days sit at percent positions.
   expect(spark).toMatch(/^<svg [^>]*width="100%"/)
   expect(spark).toMatch(/preserveAspectRatio="none"/)
   expect(spark).toMatch(/vector-effect="non-scaling-stroke"/)
   expect(spark).toMatch(/cx="87.5%"/)
-  // Hover: every day has its readout, shown on its column's :hover; the idle readout hides meanwhile.
-  for (const k of ['a', 'b', 'c', 'd']) expect(spark).toMatch(new RegExp(`>${k} head</text>[^]*>${k} detail</text>`))
-  expect(spark).toMatch(/>idle head</)
-  expect(spark).toMatch(/\.h:hover \.g,\.h:hover \.a,\.h:hover \.d,\.h:hover \.t\{visibility:visible\}/)
-  expect(spark).toMatch(/\.c:hover~\.i,\.c:hover~\.e,\.c:hover~\.r\{visibility:hidden\}/)
-  // A clean hover: no <title> (the frame shows it as a grey tooltip box), and the day's column is an
-  // invisible hit area that never lights; the day shows as a soft guide and a dot on a halo.
-  expect(spark).not.toMatch(/<title>/)
-  expect(spark).toMatch(/\.z\{fill:#000;fill-opacity:0\}/)
-  expect(spark).not.toMatch(/\.z\{[^}]*opacity:\.|:hover \.z/)
-  expect(spark).toMatch(/<line class="g"[^>]*\/><circle class="a"[^>]*r="8"\/><circle class="d"[^>]*r="4"\/>/)
-  expect(spark).not.toMatch(/animation|transition|<script|on\w+=/)
+  // A plain image: no hover of its own and no <title>; the pane lays the hover over it.
+  expect(spark).not.toMatch(/<title>|:hover/)
+  // A day's highlight: a soft guide down its column and its dot on a halo, at the plot's own point.
+  const hi = sparkDaySvg([0, 0.1, -0.05, 0.3], 1)
+  expect(hi).toMatch(/<line x1="37.5%"[^>]*stroke="url\(#g\)"[^>]*\/><circle class="a" cx="37.5%"[^>]*r="8"[^>]*\/><circle class="d" cx="37.5%"[^>]*r="4"/)
+  const cy = (svg: string, x: string) => svg.match(new RegExp(`cx="${x}" cy="([\\d.]+)"`))?.[1]
+  expect(cy(hi, '37.5%')).toBeDefined()
+  expect(cy(sparkDaySvg([0, 0.1, -0.05, 0.3], 3), '87.5%')).toBe(cy(spark, '87.5%'))
+  for (const svg of [spark, hi]) expect(svg).not.toMatch(/animation|transition|<script|on\w+=/)
   expect(dayLabel('2026-11-05')).toBe('Thu 5 Nov')
   for (const s of [ring, left, spark]) expect(s.length).toBeLessThan(20_000)
 })
@@ -740,26 +736,20 @@ test('This chat shows what the last reply cost (the /cost total it added, classi
   expect(await draw('terminal')).toMatch(/Last reply \$0\.42\nThis session \$1\.62/)
 })
 
-test('a click on a setting does not take the focus on the desktop: the app keeps the focused control in view and pulled the pane back to it on every scroll', async ($: any, on: any) => {
-  engine(on, {})
-  // What reaches the engine beneath the plugins: a focus move the mod let through.
-  const landed: any[] = []
-  on('ui.focus', (_: unknown, e: any) => { landed.push(e); return {} })
+test('the day chart hovers without a sandboxed frame: with one, a click on a setting pulled the desktop pane\'s scroll to its bottom', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  engine(on, { now, log: [TURN(now - HOUR), TURN(now - 3 * 86_400_000)].join('\n') })
   await start($)
-  const move = (element: string, origin: any = { kind: 'person' }) =>
-    $.ui.focus({ component: 'Pane', requestId: PANE.requestId, plugin: 'prompt-router', element, origin })
-  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await move('pick-effortDetection')
-  expect(landed).toHaveLength(0)
-  // A plugin's own move and a move off the controls still go through.
-  await move('pick-effortDetection', { kind: 'plugin', name: 'other' })
-  await $.ui.focus({ component: 'Pane', requestId: PANE.requestId, origin: { kind: 'person' } })
-  expect(landed).toHaveLength(2)
-  await ui.unmount()
-  // The terminal steps through the controls with Tab: the ring moves there.
-  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await move('pick-effortDetection')
-  expect(landed).toHaveLength(3)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // No Svg anywhere in the pane is drawn as a frame.
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).not.toMatch(/isInteractive/)
+  // One invisible column per day lights its own hover group; the group shows that day's highlight and numbers.
+  const chart = JSON.stringify(await ui.find({ key: 'saved-spark' }))
+  expect(chart.match(/"key":"spark-col-\d+"/g)).toHaveLength(7)
+  expect(chart).toMatch(/"key":"spark-col-6"[^}]*\},"hover":\{"scope":"spark-day-6"\}/)
+  expect(chart).toMatch(/"key":"spark-day-6","position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\},"children":\[\{"type":"Svg"[^]*?: saved \$\d+\.\d\d/)
+  // The idle readout clears while a day is hovered.
+  expect(chart).toMatch(/"hover":\{"color":"transparent"\}[^]*days: saved/)
   await ui.unmount()
 })
 

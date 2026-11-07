@@ -7,7 +7,7 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
-import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkDaySvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
 
@@ -26,6 +26,8 @@ const VIOLET = '#8b7cf6'
 const BLUE = '#5b9cf6'
 const TEAL = '#36b3a8'
 const PANE = 'prompt-router'
+// The day chart's height in pixels on the desktop.
+const SPARK_PX = 108
 const PANE_TITLE = 'Prompt Router'
 // Change the tag when LastDecision's fields change: a value an older copy stored then reads as none.
 const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })
@@ -55,9 +57,6 @@ let drawnClock: { state: CacheView['state']; name: string; columns: number; cell
 // A redraw the ticker asked for only to move the countdown: the pane reuses the savings it read last
 // (under a minute old, nothing new pending) instead of reading the whole stats log every second.
 let tickOnly = false
-// The surface the pane last drew on: on the desktop a click on a control must not take the focus ring
-// (see the ui.focus hook).
-let paneSurface = ''
 let savingsMemo: { at: number; pending: number; value: unknown } | null = null
 
 // Claude Code's config folder (~/.claude or CLAUDE_CONFIG_DIR), known from session.start on.
@@ -159,13 +158,7 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
 
 // The pane draws still: the app puts an image back on every hover, press and focus, and an animated
 // drawing replayed each time.
-// TEMP trace for the scroll bug.
-function trace($: EngineInterface, what: string) {
-  log($, 'trace', what).catch(() => {})
-}
-
 function redraw($: EngineInterface) {
-  trace($, `redraw tickOnly=${tickOnly}`)
   try {
     $.ui.invalidate('ui.render')
   } catch {
@@ -1329,30 +1322,7 @@ export const register: Register = (on, options) => {
   // The pane beside the chat, kept to what people look for: how much the router saved, this chat's
   // context and when it asks for a new session, and the settings, each with one line on what it does.
   // The rest (the strict balance, accuracy, the models) is under Details, always open.
-  // The desktop app keeps the control that holds the focus ring in view, so after a click on a setting
-  // every scroll up was pulled back to it until the person clicked the pane elsewhere. There a click
-  // on a control leaves the ring where it was (the press or pick still goes through); the terminal,
-  // where Tab steps through the controls, moves it as usual.
-  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    const deny = !!(paneSurface && paneSurface !== 'terminal' && e.element && e.origin.kind === 'person')
-    trace($, `focus element=${e.element ?? '-'} origin=${JSON.stringify(e.origin)} denied=${deny}`)
-    if (deny) return {}
-    return next(e)
-  })
-
-  // TEMP diagnostics for the scroll bug.
-  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    trace($, `scroll by=${e.by} offset=${e.offset} rows=${e.bodyRows}/${e.contentRows} origin=${JSON.stringify(e.origin)}`)
-    return next(e)
-  })
-  on('ui.select', { requestId: PANE }, async ($, e, next) => {
-    trace($, `select ${e.element}=${e.value}`)
-    return next(e)
-  })
-
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    paneSurface = e.surface
-    trace($, `render ${e.surface} offset=${e.props.scroll?.offset} rows=${e.props.scroll?.bodyRows} focused=${e.props.isFocused}`)
     const d = await paneData($)
     const term = e.surface === 'terminal'
     const report = d.savings?.report[panePeriod] ?? null
@@ -1455,6 +1425,7 @@ export const register: Register = (on, options) => {
     const trend = days.some(x => Math.abs(x.balanceUsd) >= 0.005) && panePeriod !== 'today'
     // The chart's readout: each day's net and what it was made of, shown while the day is hovered.
     const dayWord = (v: number) => (v < 0 ? 'cost' : 'saved')
+    const dayValues = days.map(x => x.balanceUsd)
     const dayPoints = days.map(x => ({
       value: x.balanceUsd,
       head: `${dayLabel(x.day)}: ${dayWord(x.balanceUsd)} ${usd(Math.abs(x.balanceUsd))}`,
@@ -1516,7 +1487,30 @@ export const register: Register = (on, options) => {
       trend ? (
         <Box key="saved-trend" flexDirection="column" gap={0} width="100%">
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
-          <Svg source={sparkSvg(dayPoints, dayIdle, 108, savedColor)} alt={`Saved per day: ${dayIdle.head}`} height={108} isInteractive />
+          {/* The plot is a plain image. Over it, one invisible column per day lights its own hover
+              group, which shows that day's highlight and numbers; the idle readout turns transparent
+              while any column is hovered. The pane does the hover, so no sandboxed frame. */}
+          <Box key="saved-spark" width="100%">
+            <Svg source={sparkSvg(dayValues, SPARK_PX, savedColor)} alt={`Saved per day: ${dayIdle.head}`} height={SPARK_PX} />
+            {dayPoints.map((p, i) => (
+              <Box key={`spark-day-${i}`} position="absolute" top={0} left={0} width="100%" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
+                <Svg source={sparkDaySvg(dayValues, i, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
+                <Box position="absolute" top={0} left={0} flexDirection="column">
+                  <Text bold>{p.head}</Text>
+                  <Text dimColor>{p.detail}</Text>
+                </Box>
+              </Box>
+            ))}
+            <Box key="spark-hit" position="absolute" top={0} left={0} width="100%" height="100%" flexDirection="row">
+              <Box position="absolute" top={0} left={0} flexDirection="column">
+                <Text bold hover={{ color: 'transparent' }}>{dayIdle.head}</Text>
+                <Text dimColor hover={{ color: 'transparent' }}>{dayIdle.detail}</Text>
+              </Box>
+              {dayPoints.map((p, i) => (
+                <Box key={`spark-col-${i}`} width={0} flexGrow={1} height="100%" hover={{ scope: `spark-day-${i}` }} />
+              ))}
+            </Box>
+          </Box>
         </Box>
       ) : null,
     ], { tint: `${savedColor}0d` })
@@ -1574,11 +1568,13 @@ export const register: Register = (on, options) => {
         strong: true,
         right: counting ? (
           <Box flexDirection="column" alignItems="flex-end">
-            <Text bold color={cColor}>{`${cClock} left`}</Text>
+            <Svg source={bigNumberSvg(cClock, cColor, 96, 30)} alt={`Cache ${cTime}`} width={cClock.length > 4 ? 92 : 76} height={38} />
+            <Text dimColor>left</Text>
           </Box>
         ) : undefined,
       }),
       <Box key="cache-v" flexDirection="column" gap={0}>
+        {counting ? <Svg source={cacheBarSvg(cv, 8)} alt={`Cache ${cTime}`} height={14} /> : null}
         <Box flexDirection="row" justifyContent="space-between" gap={2}>
           <Text dimColor>{`Last reply ${lastAt}`}</Text>
           <Text dimColor>{cKind}</Text>

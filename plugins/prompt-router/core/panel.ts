@@ -68,30 +68,31 @@ ${STILL}
 </style><rect class="t" width="${width}" height="${height}" rx="${n(height / 2)}"/>${len >= 0.5 ? `<rect x="${x}" width="${len}" height="${height}" rx="2" fill="${color}"/>` : ''}<line class="m" x1="${mid}" y1="0" x2="${mid}" y2="${height}"/></svg>`
 }
 
-// One day of the saving chart: its value and the two lines the readout shows while it is hovered.
-export type SparkPoint = { value: number; head: string; detail: string }
 
-// The net saving per day across the whole width: a line with a soft area under it, the last day's
-// dot, and a readout over the plot. Drawn for the sandboxed frame (Svg isInteractive): each day owns
-// an invisible column; hovering it shows a soft guide, the day's dot on a halo, and swaps the readout
-// for that day's numbers, at once (no animation or transition, like every drawing in the pane). No
-// <title>: the frame would show it as a grey tooltip over the chart, and the Svg's alt names it.
-// The line is stretched to the width (non-scaling stroke), the dots and columns sit at percent
-// positions, so nothing is distorted at any width. idle: the readout while no day is hovered.
-export function sparkSvg(points: readonly SparkPoint[], idle: { head: string; detail: string }, height = 108, color: string = ACCENT): string {
+// The chart's geometry, shared by the plot and each day's highlight so they line up exactly. Each day
+// owns an equal column and its point sits in the column's middle; the top rows stay free for the
+// readout the pane writes over them.
+function sparkGeom(values: readonly number[], height: number) {
   const VB = 1000
   const top = 40
   const py = 7
-  const values = points.map(p => p.value)
   const lo = Math.min(0, ...values)
   const hi = Math.max(0, ...values)
   const span = hi - lo || 1
-  const count = Math.max(1, points.length)
-  // Each day owns an equal column; its point sits in the column's middle.
+  const count = Math.max(1, values.length)
   const pct = (i: number) => n(((i + 0.5) / count) * 100)
   const y = (v: number) => n(top + py + ((hi - v) / span) * (height - top - 2 * py))
-  const zero = y(0)
-  const pts = values.map((v, i) => [n((pct(i) / 100) * VB), y(v)] as const)
+  return { VB, top, lo, pct, y, zero: y(0), pts: values.map((v, i) => [n((pct(i) / 100) * VB), y(v)] as const) }
+}
+
+// The net saving per day across the whole width: a line with a soft area under it and the last day's
+// dot, drawn as a plain image. The line is stretched to the width (non-scaling stroke) and the dots
+// sit at percent positions, so nothing is distorted at any width. No sandboxed frame (Svg
+// isInteractive): on the desktop a click on a setting then pulled the pane's scroll to its bottom.
+// The pane lays an invisible column per day over it and shows sparkDaySvg and the day's numbers while
+// one is hovered; no <title>, the Svg's alt names it.
+export function sparkSvg(values: readonly number[], height = 108, color: string = ACCENT): string {
+  const { VB, lo, pct, zero, pts } = sparkGeom(values, height)
   let line = pts.length ? `M${pts[0]![0]} ${pts[0]![1]}` : ''
   for (let i = 1; i < pts.length; i++) {
     const [x0, y0] = pts[i - 1]!
@@ -102,30 +103,18 @@ export function sparkSvg(points: readonly SparkPoint[], idle: { head: string; de
   const last = pts[pts.length - 1]
   const area = last ? `${line} L${last[0]} ${zero} L${pts[0]![0]} ${zero}Z` : ''
   const empty = values.every(v => Math.abs(v) < 0.005)
-  const readout = (cls: string, head: string, detail: string) =>
-    `<g class="${cls}"><text class="k" x="2" y="14" ${FONT} font-size="12" font-weight="600">${esc(head)}</text><text class="m" x="2" y="31" ${FONT} font-size="11.5">${esc(detail)}</text></g>`
-  const cols = points
-    .map((p, i) => `<g class="h"><rect class="z" x="${n((i / count) * 100)}%" y="0" width="${n(100 / count)}%" height="${height}"/><line class="g" x1="${pct(i)}%" y1="${top}" x2="${pct(i)}%" y2="${height}"/><circle class="a" cx="${pct(i)}%" cy="${pts[i]![1]}" r="8"/><circle class="d" cx="${pct(i)}%" cy="${pts[i]![1]}" r="4"/>${readout('t', p.head, p.detail)}</g>`)
-    .join('')
-  // The last day's dot comes after the columns, so a hovered day can hide it (.c:hover~).
-  const lastDot = last && !empty ? `<circle class="r" cx="${pct(points.length - 1)}%" cy="${last[1]}" r="6"/><circle class="e" cx="${pct(points.length - 1)}%" cy="${last[1]}" r="3.2"/>` : ''
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img" aria-label="${esc(idle.head)}"><style>
-${INK}
-.l{fill:none;stroke:${empty ? '#8a8f98' : color};stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
-.f{fill:url(#f)}
-.o{stroke:#8a8f98;stroke-opacity:.35;stroke-width:1;stroke-dasharray:3 3}
-.e{fill:${color}}.r{fill:${color};opacity:.22}
-.z{fill:#000;fill-opacity:0}
-.g{stroke:url(#g);stroke-width:1.5;stroke-linecap:round}
-.a{fill:${color};opacity:.18}
-.d{fill:${color};stroke:#fff;stroke-width:2}
-@media (prefers-color-scheme: dark){.d{stroke:#1d1f23}.a{opacity:.28}}
-.g,.a,.d,.t,.e,.r,.i{pointer-events:none}
-.g,.a,.d,.t{visibility:hidden}.h:hover .g,.h:hover .a,.h:hover .d,.h:hover .t{visibility:visible}
-.c:hover~.i,.c:hover~.e,.c:hover~.r{visibility:hidden}
-</style><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="${empty ? 0 : 0.3}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="${top}" x2="0" y2="${height}"><stop offset="0" stop-color="${color}" stop-opacity="0"/><stop offset=".35" stop-color="${color}" stop-opacity=".45"/><stop offset="1" stop-color="${color}" stop-opacity=".12"/></linearGradient></defs>
-<svg width="100%" height="${height}" viewBox="0 0 ${VB} ${height}" preserveAspectRatio="none">${lo < 0 || empty ? `<line class="o" x1="0" y1="${zero}" x2="${VB}" y2="${zero}" vector-effect="non-scaling-stroke"/>` : ''}${area ? `<path class="f" d="${area}"/>` : ''}${line ? `<path class="l" d="${line}" vector-effect="non-scaling-stroke"/>` : ''}</svg>
-<g class="c">${cols}</g>${lastDot}${readout('i', idle.head, idle.detail)}</svg>`
+  const lastDot = last && !empty ? `<circle cx="${pct(values.length - 1)}%" cy="${last[1]}" r="6" fill="${color}" opacity=".22"/><circle cx="${pct(values.length - 1)}%" cy="${last[1]}" r="3.2" fill="${color}"/>` : ''
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="${empty ? 0 : 0.3}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
+<svg width="100%" height="${height}" viewBox="0 0 ${VB} ${height}" preserveAspectRatio="none">${lo < 0 || empty ? `<line x1="0" y1="${zero}" x2="${VB}" y2="${zero}" stroke="#8a8f98" stroke-opacity=".35" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>` : ''}${area ? `<path d="${area}" fill="url(#f)"/>` : ''}${line ? `<path d="${line}" fill="none" stroke="${empty ? '#8a8f98' : color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` : ''}</svg>${lastDot}</svg>`
+}
+
+// One day's highlight, laid over sparkSvg while the day is hovered: a soft guide down its column and
+// its dot on a halo. Transparent everywhere else, so the plot shows through.
+export function sparkDaySvg(values: readonly number[], i: number, height = 108, color: string = ACCENT): string {
+  const { top, pct, pts } = sparkGeom(values, height)
+  const x = `${pct(i)}%`
+  const cy = pts[i]?.[1] ?? 0
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.d{stroke:#fff}@media (prefers-color-scheme: dark){.d{stroke:#1d1f23}.a{opacity:.28}}</style><defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="${top}" x2="0" y2="${height}"><stop offset="0" stop-color="${color}" stop-opacity="0"/><stop offset=".35" stop-color="${color}" stop-opacity=".45"/><stop offset="1" stop-color="${color}" stop-opacity=".12"/></linearGradient></defs><line x1="${x}" y1="${top}" x2="${x}" y2="${height}" stroke="url(#g)" stroke-width="1.5" stroke-linecap="round"/><circle class="a" cx="${x}" cy="${cy}" r="8" fill="${color}" opacity=".18"/><circle class="d" cx="${x}" cy="${cy}" r="4" fill="${color}" stroke-width="2"/></svg>`
 }
 
 // A local day key (2026-11-05) as the chart's readout names it: Thu 5 Nov.
