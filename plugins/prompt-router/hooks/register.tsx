@@ -4,7 +4,7 @@ import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMe
 import type { LastDecision, Level } from '../types'
 import { ALL_MODELS, BASE_MODELS, claudeDir, quickReply, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, isRedo, promptKey, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
-import { cacheCosts, usageOf } from '../core/prices.ts'
+import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
 import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
@@ -31,6 +31,19 @@ const PANE_TITLE = 'Prompt Router'
 const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })
 // The chat's prompt cache for the Cache card; in $.state, so a reload (saving an option) keeps it.
 const CACHE = atom({ plugin: 'prompt-router', key: 'cache' } as const, null, { shape: 'cache-1' })
+// What the last main-chat reply cost, for the This chat card: the session's /cost total when the prompt
+// went in subtracted from it when the reply ended, so its subagents and the classifier count too.
+const SPEND = atom({ plugin: 'prompt-router', key: 'spend' } as const, null, { shape: 'spend-1' })
+// The session's /cost total as the current prompt went in (null: not known).
+let spendBase: number | null = null
+async function sessionUsd($: EngineInterface): Promise<number | null> {
+  try {
+    const total = (await $.session.usage()).cost?.usd
+    return typeof total === 'number' ? total : null
+  } catch {
+    return null
+  }
+}
 // The session's folder and transcript (found on the first reply), the ticker that counts the cache
 // down every second, the card's label as last shown, and the terminal's countdown Raster as drawn
 // (its card name and width; null: the pane draws no Raster to repaint).
@@ -38,10 +51,26 @@ let sessionCwd = ''
 let transcriptFile = ''
 let cacheTicker: { cancel: () => void } | null = null
 let drawnCache = ''
+let drawnMinute = ''
 let drawnClock: { state: CacheView['state']; name: string; columns: number; cells: number } | null = null
 // A redraw the ticker asked for only to move the countdown: the pane reuses the savings it read last
 // (under a minute old, nothing new pending) instead of reading the whole stats log every second.
 let tickOnly = false
+// Whether a control in the pane (a setting's Select, a Button) holds the focus. The app keeps the
+// focused control in view on every redraw, so while one does a redraw every second would keep
+// pulling the pane back to it: the desktop countdown then goes by the minute. In $.state too, since
+// saving an option reloads the mod while the control keeps the focus.
+let paneHeld = false
+const PANE_HELD = { plugin: 'prompt-router', key: 'paneHeld' } as const
+async function holdPane($: EngineInterface, held: boolean) {
+  if (paneHeld === held) return
+  paneHeld = held
+  try {
+    await $.state.set(PANE_HELD, held)
+  } catch {
+    // Kept for this load only.
+  }
+}
 let savingsMemo: { at: number; pending: number; value: unknown } | null = null
 
 // Claude Code's config folder (~/.claude or CLAUDE_CONFIG_DIR), known from session.start on.
@@ -849,6 +878,8 @@ async function markCache($: EngineInterface, model: string, durationMs: number |
 // while the cache counts down, never once it lapsed).
 // What the card shows of the cache, to the second: a change is what the ticker moves on.
 const cacheLabel = (v: CacheView) => `${v.state}|${cacheClock(v) || cacheTime(v)}`
+// The same to the minute, what the desktop card shows while a control holds the focus.
+const minuteLabel = (v: CacheView) => `${v.state}|${cacheTime(v)}`
 // The terminal countdown Raster's key, the address $.ui.blit repaints.
 const CLOCK_KEY = 'cache-clock'
 
@@ -859,8 +890,11 @@ async function paneData($: EngineInterface) {
   const last = await read($, LAST)
   let tokens = last?.tokens ?? null
   let window = last?.window ?? null
+  let sessionCost: number | null = null
   try {
-    const ctx = (await $.session.usage()).context
+    const u = await $.session.usage()
+    if (typeof u.cost?.usd === 'number') sessionCost = u.cost.usd
+    const ctx = u.context
     if (ctx.tokens) {
       tokens = ctx.tokens
       window = (await usableWindow($, ctx.window)) ?? window
@@ -889,7 +923,8 @@ async function paneData($: EngineInterface) {
   const mark = await read($, CACHE)
   const view = cacheView(mark, model, now)
   const cache = { mark, view, costs: cacheCosts(tokens, model || mark?.model, view.ttl) }
-  return { now, last, tokens, window: win, share, at, cache, model, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
+  const spend = { last: (await read($, SPEND))?.usd ?? null, session: sessionCost }
+  return { now, last, tokens, window: win, share, at, cache, spend, model, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
 }
 
 // openPane on: opens the pane unasked at the session's start (placed from 144 terminal columns,
@@ -939,7 +974,9 @@ export const register: Register = (on, options) => {
     sessionCwd = typeof e.cwd === 'string' ? e.cwd : ''
     transcriptFile = ''
     drawnCache = ''
+    drawnMinute = ''
     drawnClock = null
+    paneHeld = !!(await $.state.get(PANE_HELD).then(r => r.value, () => false))
     cacheTicker?.cancel()
     cacheTicker = null
     // Every second, apart from anything else the pane does: the terminal repaints just the countdown
@@ -960,6 +997,7 @@ export const register: Register = (on, options) => {
           return
         }
       }
+      if (paneHeld && minuteLabel(v) === drawnMinute) return
       drawnCache = label
       tickOnly = true
       redraw($)
@@ -1046,6 +1084,8 @@ export const register: Register = (on, options) => {
   })
 
   on('prompt.submit', async ($, e, next) => {
+    // Before the classifier runs, so the reply's cost includes it.
+    spendBase = await sessionUsd($)
     await openPaneUnasked($, true)
     let out = e
     try {
@@ -1126,6 +1166,15 @@ export const register: Register = (on, options) => {
   // Each finished turn (main chat or subagent): its tokens and the model it would have run on.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
+    // The reply's cost: what the session's total grew by since the prompt went in; without a total, the
+    // turn's own usage at list price. Noting it redraws the pane.
+    if (!e.agentId) {
+      const total = await sessionUsd($)
+      const own = cost(usageOf(r.usage) ?? {}, r.usage?.model ?? seenModel)
+      const reply = total != null && spendBase != null ? Math.max(0, total - spendBase) : own
+      spendBase = null
+      if (reply != null) await update($, SPEND, () => ({ usd: reply })).catch(() => {})
+    }
     // A main-chat turn that sent a request read or wrote the chat's cache. Noting it redraws the
     // pane (the drawing reads it), alongside the stats below; any other main turn redraws here.
     const marking = !e.agentId && r.usage
@@ -1292,6 +1341,21 @@ export const register: Register = (on, options) => {
   // The pane beside the chat, kept to what people look for: how much the router saved, this chat's
   // context and when it asks for a new session, and the settings, each with one line on what it does.
   // The rest (the strict balance, accuracy, the models) is under Details, always open.
+  // Which control in the pane holds the focus: a press or a pick puts it on that control, the ring
+  // moving off (a click on the pane, Escape) frees it. Observed only.
+  on('ui.press', { plugin: 'prompt-router' }, async ($, e, next) => {
+    await holdPane($, true)
+    return next(e)
+  })
+  on('ui.select', { plugin: 'prompt-router' }, async ($, e, next) => {
+    await holdPane($, true)
+    return next(e)
+  })
+  on('ui.focus', { requestId: PANE }, async ($, e, next) => {
+    await holdPane($, !!e.element)
+    return next(e)
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
@@ -1466,6 +1530,7 @@ export const register: Register = (on, options) => {
     // it lapsed or the chat moved to another model, grey before the first reply.
     const cv = d.cache.view
     drawnCache = cacheLabel(cv)
+    drawnMinute = minuteLabel(cv)
     const live = cv.state !== 'none'
     const cTone = CACHE_TONE[cv.state]
     const cColor = TONES[cTone][0]
@@ -1492,6 +1557,8 @@ export const register: Register = (on, options) => {
     // without Raster here it is Text, and the ticker redraws the pane instead.
     const clockCols = Math.max(cells, Math.min(cols, 60))
     const counting = cv.state === 'warm' || cv.state === 'soon'
+    // While a control holds the focus the ticker redraws by the minute, so the card shows minutes then.
+    const cShown = paneHeld ? (cv.leftMs < 60_000 ? '<1 min' : `${Math.floor(cv.leftMs / 60_000)} min`) : cClock
     drawnClock = term && counting && Raster ? { state: cv.state, name: cacheName, columns: clockCols, cells } : null
     const cacheCard = term ? section('cache',
       title('cache-title', 'Cache'),
@@ -1514,7 +1581,7 @@ export const register: Register = (on, options) => {
         strong: true,
         right: counting ? (
           <Box flexDirection="column" alignItems="flex-end">
-            <Svg source={bigNumberSvg(cClock, cColor, 96, 30)} alt={`Cache ${cTime}`} width={cClock.length > 4 ? 92 : 76} height={38} />
+            <Svg source={bigNumberSvg(cShown, cColor, 96, 30)} alt={`Cache ${cTime}`} width={Math.max(76, cShown.length * 18)} height={38} />
             <Text dimColor>left</Text>
           </Box>
         ) : undefined,
@@ -1562,12 +1629,18 @@ export const register: Register = (on, options) => {
     const ctxRight = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'context not known yet'
     const used = d.share == null ? '' : `${Math.round(d.share)} % used`
     const asks = d.at ? `asks for a new session at ${d.at} % (${kTokens((d.window * d.at) / 100)})` : 'never asks for a new session'
+    // What the last reply and the whole session cost, as /cost counts it (subagents and the classifier
+    // included); before the first reply, nothing.
+    const lastUsd = d.spend.last == null ? '–' : usd(d.spend.last)
+    const sessionUsdText = d.spend.session == null ? '–' : usd(d.spend.session)
+    const spendRow = d.spend.last != null || !!d.spend.session
     const chat = term ? section('chat',
       title('chat-title', 'This chat'),
       <Box key="ctx" flexDirection="column">
         {row('ctx-head', d.header, ctxRight, { dim: false })}
         <Text color={TONE_THEME[d.tone]}>{`${barText(d.share, d.at, cells)} ${d.share == null ? '–' : `${Math.round(d.share)}%`}`}</Text>
         <Text dimColor>{[used, asks].filter(Boolean).join(' · ')}</Text>
+        {spendRow ? row('chat-cost', `Last reply ${lastUsd}`, `This session ${sessionUsdText}`, { dim: true }) : null}
       </Box>,
     ) : card('chat', [
       head('chat-head', 'gauge', TONES[d.tone][0], 'This chat', d.header),
@@ -1581,6 +1654,12 @@ export const register: Register = (on, options) => {
         <Svg source={contextBarSvg(d.share, d.at, px, 10)} alt={`Context ${d.share == null ? 'unknown' : `${Math.round(d.share)}%`}${d.at ? `, new session at ${d.at}%` : ''}`} height={16} />
         <Text dimColor>{`${asks[0]!.toUpperCase()}${asks.slice(1)}. ${d.at ? 'The tick on the bar marks it.' : ''}`.trim()}</Text>
       </Box>,
+      spendRow ? (
+        <Box key="chat-cost" flexDirection="row" gap={3}>
+          {stat('chat-last', 'Last reply', lastUsd)}
+          {stat('chat-session', 'This session', sessionUsdText)}
+        </Box>
+      ) : null,
     ])
 
     // Settings: a name, its values as buttons (the chosen one highlighted) and one line on what it does.

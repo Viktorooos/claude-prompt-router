@@ -17,7 +17,7 @@ const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetectio
   .map(k => ({ key: `prompt-router.${k}`, label: k, kind: 'choice', value: '', options: [], provider: { plugin: 'prompt-router', tier: 'user' }, isLocked: false }))
 
 // The engine beneath the plugin, as far as the pane needs it.
-function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string; rows?: any[]; settings?: string } = {}): Seen {
+function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string; rows?: any[]; settings?: string; cost?: number } = {}): Seen {
   const seen: Seen = { writes: new Map(), sets: [], store: new Map(), opened: [], sent: [], redraws: 0, state: new Map(), statsReads: 0, blits: [], blitDeny: '' }
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
@@ -30,7 +30,7 @@ function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens:
     ],
   }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('session.usage', () => ({ value: { startedAt: 0, context: opts.usage ?? { tokens: 94_000, window: 200_000 }, rateLimits: [] } }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: opts.usage ?? { tokens: 94_000, window: 200_000 }, rateLimits: [], ...(opts.cost != null ? { cost: { usd: opts.cost } } : {}) } }))
   on('config.list', () => ({ value: [{ key: 'effort', label: 'Effort', kind: 'choice', value: 'medium', options: ['low', 'medium', 'high', 'xhigh', 'max'], provider: { plugin: 'engine' }, isLocked: false }, ...(opts.rows ?? MOD_ROWS)] }))
   on('config.set', (_: unknown, e: any) => {
     if (opts.rows && !opts.rows.some(r => r.key === e.key)) throw new Error(`no /config row with key ${e.key}`)
@@ -717,6 +717,65 @@ test('the countdown ticks every second on its own: the desktop redraws on each n
   opts.now = now + 40 * 60_000
   steps.push(await tick())
   expect(steps).toEqual([0, 1, 0, 1, 1, 0])
+  await ui.unmount()
+})
+
+test('This chat shows what the last reply cost (the /cost total it added, classifier and subagents in) and the whole session', async ($: any, on: any) => {
+  const opts: { now: number; cost: number } = { now: 20 * 86_400_000 + 12 * HOUR, cost: 1.2 }
+  engine(on, opts)
+  on('turn.complete', () => ({ text: '', usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 4_000 } }))
+  await start($)
+  const draw = async (surface: 'desktop' | 'terminal') => {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const t = await textsOf(ui)
+    await ui.unmount()
+    return t
+  }
+  // Before any reply in this session: the total only.
+  expect(await draw('desktop')).toMatch(/Last reply\n–\nThis session\n\$1\.20/)
+  await $.prompt.submit({ text: 'fix the search', wait: false, origin: { kind: 'composer' } })
+  opts.cost = 1.62
+  await $.turn.complete({ answer: '', durationMs: 5_000, isAborted: false, turnId: 't1', reason: 'answer' })
+  expect(await draw('desktop')).toMatch(/Last reply\n\$0\.42\nThis session\n\$1\.62/)
+  expect(await draw('terminal')).toMatch(/Last reply \$0\.42\nThis session \$1\.62/)
+})
+
+test('while a control in the pane holds the focus, the desktop countdown goes by the minute: a redraw every second would keep pulling the pane back to that control', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const opts = { now }
+  const seen = engine(on, opts)
+  const ticks: (() => void)[] = []
+  on('clock.every', () => new Promise<any>(res => ticks.push(() => res({ value: undefined }))))
+  on('turn.complete', () => ({ text: '', usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 4_000 } }))
+  await start($)
+  await $.turn.complete({ answer: '', durationMs: 5_000, isAborted: false, turnId: 't1', reason: 'answer' })
+  // 4:55 left: the minute reads 4 for the next seconds.
+  opts.now = now + 5_000
+  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0)) }
+  const tick = async () => {
+    await settle()
+    const before = seen.redraws
+    ticks.shift()!()
+    await settle()
+    return seen.redraws - before
+  }
+  // A pick in the settings: the Select keeps the focus.
+  await ui.select({ key: 'pick-effortDetection', value: 'auto' })
+  const steps: number[] = []
+  for (const s of [6, 7, 8]) {
+    opts.now = now + s * 1_000
+    steps.push(await tick())
+  }
+  opts.now = now + 61_000
+  steps.push(await tick())
+  expect(steps).toEqual([0, 0, 0, 1])
+  // Meanwhile the card shows whole minutes, not seconds that stand still.
+  await ui.unmount()
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const svgs = JSON.stringify(await ui.findAll({ type: 'Svg' }))
+  expect(svgs).toMatch(/>3 min</)
+  expect(svgs).not.toMatch(/>3:59</)
   await ui.unmount()
 })
 
