@@ -750,12 +750,14 @@ test('the day chart hovers without a sandboxed frame: with one, a click on a set
   // One column per day, in the flow (an absolute Box takes no pointer of its own), lights its own hover
   // group: the day's highlight over its slice and the day's numbers in the readout.
   expect(chart.match(/"key":"spark-col-\d+"/g)).toHaveLength(7)
-  expect(chart).toMatch(/"key":"spark-col-6","width":0,"flexGrow":1\},"hover":\{"scope":"spark-day-6"\},"children":\[\{"type":"Svg"[^]*?"position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\}/)
+  expect(chart).toMatch(/"key":"spark-col-6","width":0,"flexGrow":1\},"hover":\{"scope":"spark-day-6","backgroundColor":"#00000000"\},"children":\[\{"type":"Svg"[^]*?"position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\}/)
   expect(chart).not.toMatch(/"key":"spark-cols","position"|"key":"spark-col-\d+","position"/)
   expect(chart).toMatch(/"key":"spark-read-6","position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\},"children":\[\{"type":"Text"[^]*?: saved \$\d+\.\d\d/)
-  // The period's readout clears while any day is hovered.
-  expect(chart).toMatch(/"key":"spark-cols"[^}]*\},"hover":\{"scope":"spark-any"\}/)
-  expect(chart).toMatch(/"hover":\{"scope":"spark-any","color":"transparent"\},"children":\["7 days: saved/)
+  // A scope alone never lit the group in the desktop app: the column's hover carries a style too.
+  expect(chart).not.toMatch(/"hover":\{"scope":"spark-day-\d+"\}/)
+  // The period's readout stays (a hover cannot hide it); the day's numbers show in two rows kept below it.
+  expect(chart).toMatch(/"children":\["7 days: saved[^]*"key":"spark-read","height":2/)
+  expect(chart).not.toMatch(/spark-any|transparent/)
   await ui.unmount()
 })
 
