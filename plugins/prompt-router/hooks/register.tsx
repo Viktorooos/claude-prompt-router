@@ -1489,7 +1489,7 @@ export const register: Register = (on, options) => {
         <Text bold>DIAG hover: najeď na každý řádek</Text>
         <Box key="diag-i" flexDirection="row" gap={1} hover={{ scope: 'diag-i' }}><Text>I: spouštěč jen se scope</Text><Box display="none" hover={{ scope: 'diag-i', display: 'flex' }}><Text color="red">← I ODHALENO</Text></Box></Box>
         <Box key="diag-j" hover={{ backgroundColor: 'red' }}><Svg source={sparkSvg([1, 3, 2, 5], 1, 24, '#888')} alt="J" height={24} /></Box>
-        <Box key="diag-k"><Text hover={{ color: 'transparent' }}>K: tento text při najetí zmizí</Text></Box>
+        <Box key="diag-k"><Text hover={{ color: '#00000000' }}>K: tento text při najetí zmizí</Text></Box>
         <Box key="diag-l" flexDirection="row" width="100%">
           {[0, 1, 2, 3].map((i) => (
             <Box key={`diag-l-${i}`} width={0} flexGrow={1}>
@@ -1506,8 +1506,8 @@ export const register: Register = (on, options) => {
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
           {/* The readout: the period while no day is hovered, the day's numbers while one is. */}
           <Box flexDirection="column">
-            <Text bold hover={{ scope: 'spark-any', color: 'transparent' }}>{dayIdle.head}</Text>
-            <Text dimColor hover={{ scope: 'spark-any', color: 'transparent' }}>{dayIdle.detail}</Text>
+            <Text bold hover={{ scope: 'spark-any', color: '#00000000', dimColor: false }}>{dayIdle.head}</Text>
+            <Text dimColor hover={{ scope: 'spark-any', color: '#00000000', dimColor: false }}>{dayIdle.detail}</Text>
             {dayPoints.map((p, i) => (
               <Box key={`spark-read-${i}`} position="absolute" top={0} left={0} flexDirection="column" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
                 <Text bold>{p.head}</Text>
@@ -1518,9 +1518,9 @@ export const register: Register = (on, options) => {
           {/* One column per day in the flow, each its slice of the line as a plain image and a hover
               area of its own: the pane does the hover, no sandboxed frame. An absolute Box takes no
               pointer of its own (it counts as its parent's), so the columns cannot sit in one. */}
-          <Box key="spark-cols" flexDirection="row" width="100%" hover={{ scope: 'spark-any', backgroundColor: `${savedColor}00` }}>
+          <Box key="spark-cols" flexDirection="row" width="100%" hover={{ scope: 'spark-any', backgroundColor: '#00000000' }}>
             {dayPoints.map((p, i) => (
-              <Box key={`spark-col-${i}`} width={0} flexGrow={1} hover={{ scope: `spark-day-${i}`, backgroundColor: `${savedColor}00` }}>
+              <Box key={`spark-col-${i}`} width={0} flexGrow={1} hover={{ scope: `spark-day-${i}`, backgroundColor: '#00000000' }}>
                 <Svg source={sparkSvg(dayValues, i, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
                 <Box position="absolute" top={0} left={0} width="100%" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
                   <Svg source={sparkSvg(dayValues, i, SPARK_PX, savedColor, true)} alt={p.head} height={SPARK_PX} />
