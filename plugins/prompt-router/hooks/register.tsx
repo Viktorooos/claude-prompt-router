@@ -159,7 +159,13 @@ async function currentLevel($: EngineInterface): Promise<Level | ''> {
 
 // The pane draws still: the app puts an image back on every hover, press and focus, and an animated
 // drawing replayed each time.
+// TEMP trace for the scroll bug.
+function trace($: EngineInterface, what: string) {
+  log($, 'trace', what).catch(() => {})
+}
+
 function redraw($: EngineInterface) {
+  trace($, `redraw tickOnly=${tickOnly}`)
   try {
     $.ui.invalidate('ui.render')
   } catch {
@@ -1328,12 +1334,25 @@ export const register: Register = (on, options) => {
   // on a control leaves the ring where it was (the press or pick still goes through); the terminal,
   // where Tab steps through the controls, moves it as usual.
   on('ui.focus', { requestId: PANE }, async ($, e, next) => {
-    if (paneSurface && paneSurface !== 'terminal' && e.element && e.origin.kind === 'person') return {}
+    const deny = !!(paneSurface && paneSurface !== 'terminal' && e.element && e.origin.kind === 'person')
+    trace($, `focus element=${e.element ?? '-'} origin=${JSON.stringify(e.origin)} denied=${deny}`)
+    if (deny) return {}
+    return next(e)
+  })
+
+  // TEMP diagnostics for the scroll bug.
+  on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
+    trace($, `scroll by=${e.by} offset=${e.offset} rows=${e.bodyRows}/${e.contentRows} origin=${JSON.stringify(e.origin)}`)
+    return next(e)
+  })
+  on('ui.select', { requestId: PANE }, async ($, e, next) => {
+    trace($, `select ${e.element}=${e.value}`)
     return next(e)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     paneSurface = e.surface
+    trace($, `render ${e.surface} offset=${e.props.scroll?.offset} rows=${e.props.scroll?.bodyRows} focused=${e.props.isFocused}`)
     const d = await paneData($)
     const term = e.surface === 'terminal'
     const report = d.savings?.report[panePeriod] ?? null
@@ -1497,7 +1516,7 @@ export const register: Register = (on, options) => {
       trend ? (
         <Box key="saved-trend" flexDirection="column" gap={0} width="100%">
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
-          <Svg source={sparkSvg(dayPoints, dayIdle, 108, savedColor)} alt={`Saved per day: ${dayIdle.head}`} height={108} isInteractive />
+          <Svg source={sparkSvg(dayPoints, dayIdle, 48, savedColor)} alt={`Saved per day: ${dayIdle.head}`} height={48} />
         </Box>
       ) : null,
     ], { tint: `${savedColor}0d` })
@@ -1555,13 +1574,11 @@ export const register: Register = (on, options) => {
         strong: true,
         right: counting ? (
           <Box flexDirection="column" alignItems="flex-end">
-            <Svg source={bigNumberSvg(cClock, cColor, 96, 30)} alt={`Cache ${cTime}`} width={cClock.length > 4 ? 92 : 76} height={38} />
-            <Text dimColor>left</Text>
+            <Text bold color={cColor}>{`${cClock} left`}</Text>
           </Box>
         ) : undefined,
       }),
       <Box key="cache-v" flexDirection="column" gap={0}>
-        {counting ? <Svg source={cacheBarSvg(cv, 8)} alt={`Cache ${cTime}`} height={14} /> : null}
         <Box flexDirection="row" justifyContent="space-between" gap={2}>
           <Text dimColor>{`Last reply ${lastAt}`}</Text>
           <Text dimColor>{cKind}</Text>
