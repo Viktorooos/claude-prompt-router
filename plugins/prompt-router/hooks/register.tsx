@@ -6,10 +6,10 @@ import { ALL_MODELS, BASE_MODELS, claudeDir, quickReply, DECIDE_OTHER, DEFAULT_W
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
+import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
 import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CardIcon } from '../core/panel.ts'
-import type { Balance, Balances, Compare, Decision, Entry, History, Report, UsageScan } from '../core/stats.ts'
+import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -828,11 +828,11 @@ async function paneData($: EngineInterface) {
   const at = cfg.sessionSuggestions === 'off' ? 0 : Number.parseInt(cfg.newSessionAt, 10) || 0
   const model = knownModel(seenModel || (await chatModel($)))
   const effort = await currentLevel($)
-  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances } | null = null
+  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances; perPct: number | null } | null = null
   if (cfg.stats === 'on') {
     const records = [...parseLog(await readStats($)), ...pending.items]
     const c = compareNow()
-    savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now) }
+    savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now), perPct: limitRate(records) }
   }
   return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
 }
@@ -1058,12 +1058,23 @@ export const register: Register = (on, options) => {
       if (!e.agentId) routerAsked = false
       const manual = !e.agentId && manualUp
       if (!e.agentId) manualUp = false
+      // The weekly limit's fill after a main-chat turn: what the person's plan really spent (limitRate).
+      let week: Turn['week']
+      if (!e.agentId) {
+        try {
+          const w = (await $.session.usage()).rateLimits.find(x => x.kind === 'seven_day')
+          if (w) week = { pct: w.percentUsed, ...(w.resetsAt ? { resets: w.resetsAt } : {}) }
+        } catch {
+          // No reading: the turn goes without one.
+        }
+      }
       pending.push({
         kind: 'turn', ts: await $.clock.now(), platform: 'claude-code', chat: chatId, ...(e.agentId ? { agentId: e.agentId } : {}), model, baseline: base, ...(usage ? { usage } : {}),
         ...(typeof e.durationMs === 'number' ? { durationMs: e.durationMs } : {}),
         ...(manual ? { manual: true } : {}),
         ...(agent?.context && requests ? { mainContext: agent.context, requests } : {}),
         ...(switched ? { switched: true } : {}),
+        ...(week ? { week } : {}),
         ...(!e.agentId && stepEffort?.effort && stepEffort.base ? { effort: stepEffort.effort, baseEffort: stepEffort.base } : {}),
       })
       await flush($)
@@ -1337,6 +1348,29 @@ export const register: Register = (on, options) => {
       ) : null,
     ], { tint: `${savedColor}0d` })
 
+    // What you got: the context subagents kept out of the chat, the cheaper picks, the plan limit.
+    const nums = s ? glance(s, d.window, d.savings?.perPct ?? null) : []
+    const numbers = !nums.length ? null : term ? section('numbers',
+      title('numbers-title', 'What you got'),
+      ...nums.map(n => (
+        <Box key={`num-${n.key}`} flexDirection="column">
+          {row(`num-${n.key}-row`, n.label, n.value, { bold: true })}
+          <Text dimColor>{n.sub}</Text>
+        </Box>
+      )),
+    ) : card('numbers', [
+      head('numbers-head', 'spark', TEAL, 'What you got', 'From the log, same period as above'),
+      <Box key="numbers-grid" flexDirection="row" flexWrap="wrap" gap={1}>
+        {nums.map(n => (
+          <Box key={`num-${n.key}`} flexDirection="column" width={narrow ? '100%' : '48%'} flexGrow={1} borderStyle="round" borderColor={`${TEAL}38`} backgroundColor={`${TEAL}0f`} paddingX={1}>
+            <Text dimColor>{n.label}</Text>
+            <Text bold>{n.value}</Text>
+            <Text dimColor wrap="wrap">{n.sub}</Text>
+          </Box>
+        ))}
+      </Box>,
+    ])
+
     // This chat: its context against the share where the router asks for a new session.
     const ctxRight = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'context not known yet'
     const used = d.share == null ? '' : `${Math.round(d.share)} % used`
@@ -1553,6 +1587,8 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" gap={term ? 1 : narrow ? 1 : 2} padding={term ? 0 : 1}>
         {term ? <Text dimColor>{`Prompt Router · ${enabled ? 'on' : 'off'}`}</Text> : null}
         {saved ?? tabs}
+        {term && numbers ? rule('rule-numbers') : null}
+        {numbers}
         {term && (saved || tabs) ? rule('rule-chat') : null}
         {chat}
         {d.savings ? null : <Text dimColor>Savings stats are off.</Text>}

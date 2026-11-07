@@ -296,6 +296,22 @@ test('Details, always open: the strict balance, how often it was right, where th
   }
 })
 
+test('What you got sits under You saved on both surfaces: cheaper picks and the plan limit', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  engine(on, { now, log: taskLog(now) })
+  await start($)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const texts = await textsOf(ui)
+    expect(texts).toMatch(surface === 'terminal' ? /What you got/ : /What you got\nFrom the log, same period as above/)
+    expect(texts).toMatch(/Cheaper picks saved\n\$\d+\.\d\d\nat list price/)
+    expect(texts).toMatch(/Cost, all in\n\d+ % (less|more)\n[+−]\$\d+\.\d\d than without the router/)
+    expect(texts.indexOf('You saved')).toBeLessThan(texts.indexOf('What you got'))
+    expect(texts.indexOf('What you got')).toBeLessThan(texts.indexOf('This chat'))
+    await ui.unmount()
+  }
+})
+
 test('a press on a value saves the option the way /config does, and the pane shows it chosen', async ($: any, on: any) => {
   const seen = engine(on)
   await start($)

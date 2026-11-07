@@ -23,7 +23,7 @@ const EFFORT_ROW = {
 type Seen = { prompts: string[]; models: string[]; sent: string[]; sets: unknown[]; toasts: string[]; store: Map<string, unknown>; writes: string[]; modes: string[][] }
 
 // Stands for the engine beneath the plugin: each `$` call it makes is answered here.
-function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[]; noEffortRow?: boolean; now?: number; usage?: { tokens: number; window?: number } } = {}): Seen {
+function engine(on: any, reply: string | (() => string), opts: { isFirst?: boolean; model?: string; rows?: unknown[]; files?: Record<string, string>; tools?: string[]; surfaces?: string[]; messages?: unknown[]; noEffortRow?: boolean; now?: number; usage?: { tokens: number; window?: number }; rateLimits?: unknown[] } = {}): Seen {
   const seen: Seen = { prompts: [], models: [], sent: [], sets: [], toasts: [], store: new Map(), writes: [], modes: [] }
   const messages = opts.messages ?? (opts.isFirst
     ? []
@@ -42,7 +42,7 @@ function engine(on: any, reply: string | (() => string), opts: { isFirst?: boole
   })
   on('session.messages', () => ({ value: messages }))
   on('session.model', () => ({ value: opts.model ?? 'claude-opus-5-5' }))
-  on('session.usage', () => ({ value: { startedAt: 0, context: opts.usage ?? { tokens: 85000 }, rateLimits: [] } }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: opts.usage ?? { tokens: 85000 }, rateLimits: opts.rateLimits ?? [] } }))
   on('config.list', () => ({ value: [...(opts.noEffortRow ? [] : [EFFORT_ROW]), ...(opts.rows ?? [])] }))
   on('config.set', (_: unknown, e: any) => {
     seen.sets.push(e.value)
@@ -999,6 +999,18 @@ test('stats: the decision keeps what the classifier read as follows, the turn it
   expect(d.follows).toBe('corrects')
   expect(d.classifier.ms).toBe(0)
   expect(t.durationMs).toBe(4200)
+})
+
+test('stats: a main-chat turn notes the weekly limit\'s fill and reset; a subagent\'s turn does not', async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "keep", "model": "keep", "effort": "keep", "why": "fine"}', { rateLimits: [{ kind: 'five_hour', percentUsed: 40 }, { kind: 'seven_day', percentUsed: 23.5, resetsAt: '2026-11-10T08:00:00Z' }] })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-opus-5-5' } }))
+  await start($)
+  await submit($, 'look at this')
+  await $.turn.complete(TURN_DONE)
+  await $.turn.complete({ ...TURN_DONE, agentId: 'a1' })
+  const turns = statsLines(seen).filter((r: any) => r.kind === 'turn')
+  expect(turns[0].week).toEqual({ pct: 23.5, resets: '2026-11-10T08:00:00Z' })
+  expect(turns[1].week).toBeUndefined()
 })
 
 test('stats: a keep reply still notes follows; a reply without it notes none', async ($: any, on: any) => {

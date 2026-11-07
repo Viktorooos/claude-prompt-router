@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import { promptKey } from '../core/router.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, usd, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -773,4 +773,44 @@ test('an old text key and the new hash of the same prompt never match: the old o
   ]
   expect(parseLog(ds.map(d => JSON.stringify(d)).join('\n')).length).toBe(2)
   expect(episodes(ds).length).toBe(2)
+})
+
+test('the summary counts the new tokens subagents took in, never the main chat\'s', () => {
+  const s = summarize([
+    turn('opus', 'opus'),
+    turn('haiku', 'opus', { agentId: 'a1' }),
+    turn('haiku', 'opus', { agentId: 'a2', usage: undefined }),
+  ], NOW).today
+  expect(s.offloadTokens).toBe(U.input + U.cacheWrite)
+})
+
+test('glance shows only the figures with data: context kept out, cheaper picks and the plan limit', () => {
+  expect(glance(summarize([], NOW).today)).toEqual([])
+  const sub = (n: number) => turn('haiku', 'opus', { agentId: `a${n}`, usage: { input: 100_000, output: 0, cacheRead: 0, cacheWrite: 150_000 } })
+  const s = summarize([sub(1), sub(2), turn('haiku', 'opus'), turn('opus', 'haiku')], NOW).today
+  const g = Object.fromEntries(glance(s, 200_000).map(x => [x.key, x]))
+  expect(g.offload!.value).toBe('500 k tokens')
+  expect(g.offload!.sub).toBe('read by subagents instead, ≈ 2 full contexts')
+  expect(g.cheaper!.value).toBe(usd(s.savedUsd))
+  expect(g.cheaper!.sub).toMatch(/^at list price; stronger picks used \$\d+\.\d\d$/)
+  // No weekly reading yet: the share is of what the work would have cost without the router.
+  expect(g.limit!.label).toBe('Cost, all in')
+  expect(g.limit!.value).toBe(`${Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100)} % ${s.balanceUsd < 0 ? 'more' : 'less'}`)
+  // With the measured price of 1 % of the weekly limit, money reads as a share of it.
+  const w = Object.fromEntries(glance(s, 200_000, 2).map(x => [x.key, x]))
+  expect(w.cheaper!.sub).toMatch(new RegExp(`^≈ ${(s.savedUsd / 2).toFixed(1).replace('.', '\\.')} % of your weekly limit`))
+  expect(w.limit!.label).toBe('Weekly limit, all in')
+  expect(w.limit!.sub).toMatch(/1 % of your limit ≈ \$2\.00, measured$/)
+})
+
+test('limitRate: list price between weekly readings per point the fill moved, resets and drops left out', () => {
+  const t = (ts: number, usd: number, week?: { pct: number; resets?: string }) => turn('opus', 'opus', { ts: NOW - DAY + ts, usd, ...(week ? { week } : {}) })
+  // Nothing before the first reading counts; 1 → 3 % for $4 + $2, then a reset ($9 left out), then 0.5 → 1.5 % for $1.
+  const r = [t(1, 50), t(2, 0, { pct: 1, resets: 'A' }), t(3, 4), t(4, 2, { pct: 3, resets: 'A' }), t(5, 9, { pct: 0.5, resets: 'B' }), t(6, 1, { pct: 1.5, resets: 'B' })]
+  expect(limitRate(r)).toBe(7 / 3)
+  // Until the fill moved MIN_PCT points there is no figure.
+  expect(limitRate([t(1, 1, { pct: 1, resets: 'A' }), t(2, 1, { pct: 1 + MIN_PCT / 2, resets: 'A' })])).toBeNull()
+  // A classifier's price counts too.
+  const d = decision({ ts: NOW - DAY + 3, classifier: { model: 'haiku', usage: U, usd: 1 } })
+  expect(limitRate([t(1, 0, { pct: 0, resets: 'A' }), d, t(4, 3, { pct: 2, resets: 'A' })])).toBe(2)
 })
