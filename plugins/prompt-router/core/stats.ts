@@ -62,6 +62,8 @@ export type Turn = {
   /** A main-chat turn that ran after the person moved the model or effort picker above what the
    *  router had set: a sign its pick was too low. */
   manual?: true
+  /** A main-chat turn: the weekly limit's fill after it, as the platform reports it (subscriptions only). */
+  week?: { pct: number; resets?: string }
 }
 
 // The user took an asked decision (switched, or ran the suggested subagent). `decision` is its `ts`.
@@ -116,6 +118,8 @@ export type Summary = {
   unknownTurns: number
   /** Turns whose saving could not be priced (a model not in the price list). */
   unpricedTurns: number
+  /** New tokens subagents took in (input and cache writes): work that stayed out of the main chat. */
+  offloadTokens: number
   tokens: { [model: string]: Usage }
 }
 
@@ -128,7 +132,7 @@ function empty(): Summary {
     prompts: 0, modelChanges: 0, effortDown: 0, effortUp: 0, subagents: 0, sessions: 0, asked: 0, declined: 0,
     actualUsd: 0, withoutUsd: 0, savedUsd: 0, extraUsd: 0, classifierUsd: 0, netUsd: 0, netPct: 0, balanceUsd: 0, balancePct: 0,
     referenceUsd: 0, vsReferenceUsd: 0, vsReferencePct: 0, pricedTurns: 0, perTurnUsd: 0,
-    unknownTurns: 0, unpricedTurns: 0, routed: 0, rework: 0, accuracyPct: null, tokens: {},
+    unknownTurns: 0, unpricedTurns: 0, offloadTokens: 0, routed: 0, rework: 0, accuracyPct: null, tokens: {},
   }
 }
 
@@ -198,6 +202,7 @@ function priceWithout(t: Turn, usage: Usage, actual: number, listActual: number 
 }
 
 function addTurn(s: Summary, turn: Turn, c: Compare) {
+  if (turn.agentId && turn.usage) s.offloadTokens += (turn.usage.input ?? 0) + (turn.usage.cacheWrite ?? 0)
   if (!turn.usage) {
     s.unknownTurns++
     return
@@ -781,6 +786,61 @@ ${b ? balanceHtml(b) : ''}
 }
 
 // A dollar amount with its sign always shown: +$0.42 saved, −$0.14 lost.
+// Tokens in words that fit a tile: 950, 48 k, 7.1 M.
+const tokensWord = (t: number) => (t >= 1e6 ? `${(t / 1e6).toFixed(1)} M` : t >= 1e3 ? `${Math.round(t / 1e3)} k` : String(Math.round(t)))
+
+// What 1 % of the weekly limit costs at list price, read off the person's own plan: between two readings
+// of the weekly fill in the same window, the list price of everything logged in between (turns and the
+// classifier) against how far the fill moved. Pairs across a reset or going down are left out. Use the
+// plan has outside the log (claude.ai, other apps) moves the fill too, so the figure leans low.
+// null until the fill moved at least MIN_PCT points.
+export const MIN_PCT = 2
+export function limitRate(records: readonly Entry[]): number | null {
+  const sorted = [...records].sort((a, b) => a.ts - b.ts)
+  let usdSum = 0
+  let pctSum = 0
+  let last: { pct: number; resets?: string } | null = null
+  let between = 0
+  for (const r of sorted) {
+    if (r.kind === 'turn') between += turnUsd(r)
+    else if (r.kind === 'decision') between += classifierUsd(r)
+    if (r.kind !== 'turn' || !r.week) continue
+    if (last && last.resets === r.week.resets && r.week.pct >= last.pct) {
+      usdSum += between
+      pctSum += r.week.pct - last.pct
+    }
+    last = r.week
+    between = 0
+  }
+  return pctSum >= MIN_PCT && usdSum > 0 ? usdSum / pctSum : null
+}
+
+const pctWord = (p: number) => (p < 10 ? p.toFixed(1) : String(Math.round(p)))
+
+// The pane's "What you got" card: what the router gave the person in the period, each a figure and one
+// line on it; only figures with data show. With `perPct` (limitRate) money also reads as a share of the
+// person's weekly limit; without it, as a share of what the work would have cost without the router.
+export function glance(s: Summary, window = 200_000, perPct: number | null = null): { key: string; label: string; value: string; sub: string }[] {
+  const out: { key: string; label: string; value: string; sub: string }[] = []
+  const pctOf = (v: number) => (s.withoutUsd > 0 ? Math.round((Math.abs(v) / s.withoutUsd) * 100) : 0)
+  const week = (v: number) => `≈ ${pctWord(Math.abs(v) / perPct!)} % of your weekly limit`
+  if (s.offloadTokens >= 1000) {
+    const full = Math.floor(s.offloadTokens / window)
+    out.push({ key: 'offload', label: 'Kept out of your chat', value: `${tokensWord(s.offloadTokens)} tokens`, sub: `read by subagents instead${full >= 1 ? `, ≈ ${full} full ${full === 1 ? 'context' : 'contexts'}` : ''}` })
+  }
+  if (s.savedUsd >= 0.005) {
+    const extra = s.extraUsd >= 0.005 ? `; stronger picks used ${usd(s.extraUsd)}` : ''
+    out.push({ key: 'cheaper', label: 'Cheaper picks saved', value: usd(s.savedUsd), sub: `${perPct ? week(s.savedUsd) : 'at list price'}${extra}` })
+  }
+  if (s.withoutUsd >= 0.01) {
+    const more = s.balanceUsd < 0
+    out.push(perPct
+      ? { key: 'limit', label: `Weekly limit, all in`, value: `≈ ${pctWord(Math.abs(s.balanceUsd) / perPct)} % ${more ? 'more' : 'less'}`, sub: `${signed(s.balanceUsd)}; 1 % of your limit ≈ ${usd(perPct)}, measured` }
+      : { key: 'limit', label: 'Cost, all in', value: `${pctOf(s.balanceUsd)} % ${more ? 'more' : 'less'}`, sub: `${signed(s.balanceUsd)} than without the router; your weekly limit shows once it has moved ${MIN_PCT} %` })
+  }
+  return out
+}
+
 export const signed = (n: number) => `${n < 0 ? '−' : '+'}$${Math.abs(n).toFixed(2)}`
 
 // Below this many routed tasks the balance is a rough figure (a few tasks can swing it either way).
