@@ -10,7 +10,7 @@ const PANE = {
 
 const SESSION_PICK = '{"where": "session", "model": "sonnet", "effort": "medium", "work": "new", "why": "unrelated feature"}'
 
-type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[]; redraws: number; state: Map<string, unknown> }
+type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[]; redraws: number; state: Map<string, unknown>; statsReads: number; blits: any[]; blitDeny: string }
 
 // The mod's /config rows where the engine lists them (a terminal session); the desktop app lists none.
 const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions', 'newSessionAt', 'notifications', 'stats', 'openPane', 'compareWith', 'classifier']
@@ -18,7 +18,7 @@ const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetectio
 
 // The engine beneath the plugin, as far as the pane needs it.
 function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens: number; window?: number }; log?: string; rows?: any[]; settings?: string } = {}): Seen {
-  const seen: Seen = { writes: new Map(), sets: [], store: new Map(), opened: [], sent: [], redraws: 0, state: new Map() }
+  const seen: Seen = { writes: new Map(), sets: [], store: new Map(), opened: [], sent: [], redraws: 0, state: new Map(), statsReads: 0, blits: [], blitDeny: '' }
   on('session.start', (_: unknown, e: any) => ({ cwd: e.cwd }))
   on('command.register', (_: unknown, e: any) => ({ value: { command: e.name } }))
   on('tool.register', (_: unknown, e: any) => ({ value: { tool: `mcp__prompt-router__${e.name}` } }))
@@ -43,6 +43,10 @@ function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens:
     return { value: undefined }
   })
   on('ui.toast', () => ({ value: undefined }))
+  on('ui.blit', (_: unknown, e: any) => {
+    seen.blits.push(e)
+    return { value: seen.blitDeny ? { deny: seen.blitDeny } : {} }
+  })
   on('ui.open', (_: unknown, e: any) => {
     seen.opened.push(e)
     return { value: { isPlaced: true } }
@@ -60,6 +64,7 @@ function engine(on: any, opts: { reply?: string; now?: number; usage?: { tokens:
   on('fs.exists', () => ({ value: false }))
   on('fs.read', (_: unknown, e: any) => {
     const path = String(e.path)
+    if (path.endsWith('prompt-router-stats.jsonl')) seen.statsReads++
     if (seen.writes.has(path)) return { value: seen.writes.get(path) }
     return { value: path.endsWith('prompt-router-stats.jsonl') ? (opts.log ?? '') : path.endsWith('.claude/settings.json') ? (opts.settings ?? '') : '' }
   })
@@ -86,6 +91,18 @@ const HOUR = 3_600_000
 const TURN = (ts: number) => JSON.stringify({ kind: 'turn', ts, platform: 'claude-code', chat: 'c', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 100_000, output: 2_000, cacheRead: 0, cacheWrite: 0 } })
 
 const textsOf = async (ui: any) => (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('\n')
+// A Raster's cells back as its lines of text, trailing blanks cut.
+const rasterText = (cells: string, columns: number) => {
+  const bytes = Uint8Array.from(atob(cells), c => c.charCodeAt(0))
+  const words = new Uint32Array(bytes.buffer)
+  const lines: string[] = []
+  for (let at = 0; at < words.length; at += columns * 3) {
+    let line = ''
+    for (let c = 0; c < columns; c++) line += String.fromCodePoint(words[at + c * 3]!)
+    lines.push(line.trimEnd())
+  }
+  return lines.join('\n')
+}
 
 test('the pane draws on every surface: the context against the new-session share, the model and effort, the settings', async ($: any, on: any) => {
   engine(on)
@@ -306,7 +323,10 @@ test('What you got sits under You saved on both surfaces: cheaper picks and the 
     expect(texts).toMatch(surface === 'terminal' ? /What you got/ : /What you got\nFrom the log, same period as above/)
     expect(texts).toMatch(/Cheaper picks saved\n\$\d+\.\d\d\nat list price/)
     expect(texts).toMatch(/Cost, all in\n\d+ % (less|more)\n[+−]\$\d+\.\d\d than without the router/)
-    expect(texts.indexOf('You saved')).toBeLessThan(texts.indexOf('What you got'))
+    // The Cache card sits right under the overview, before What you got.
+    const cache = surface === 'terminal' ? texts.search(/\nCache\n/) : texts.indexOf('No cache yet')
+    expect(cache).toBeGreaterThan(texts.indexOf('You saved'))
+    expect(cache).toBeLessThan(texts.indexOf('What you got'))
     expect(texts.indexOf('What you got')).toBeLessThan(texts.indexOf('This chat'))
     await ui.unmount()
   }
@@ -461,8 +481,14 @@ test('drawings: tone, bars, sparklines and times', () => {
   // Hover: every day has its readout, shown on its column's :hover; the idle readout hides meanwhile.
   for (const k of ['a', 'b', 'c', 'd']) expect(spark).toMatch(new RegExp(`>${k} head</text>[^]*>${k} detail</text>`))
   expect(spark).toMatch(/>idle head</)
-  expect(spark).toMatch(/\.h:hover \.t\{opacity:1\}/)
-  expect(spark).toMatch(/\.c:hover~\.i\{opacity:0\}/)
+  expect(spark).toMatch(/\.h:hover \.g,\.h:hover \.a,\.h:hover \.d,\.h:hover \.t\{visibility:visible\}/)
+  expect(spark).toMatch(/\.c:hover~\.i,\.c:hover~\.e,\.c:hover~\.r\{visibility:hidden\}/)
+  // A clean hover: no <title> (the frame shows it as a grey tooltip box), and the day's column is an
+  // invisible hit area that never lights; the day shows as a soft guide and a dot on a halo.
+  expect(spark).not.toMatch(/<title>/)
+  expect(spark).toMatch(/\.z\{fill:#000;fill-opacity:0\}/)
+  expect(spark).not.toMatch(/\.z\{[^}]*opacity:\.|:hover \.z/)
+  expect(spark).toMatch(/<line class="g"[^>]*\/><circle class="a"[^>]*r="8"\/><circle class="d"[^>]*r="4"\/>/)
   expect(spark).not.toMatch(/animation|transition|<script|on\w+=/)
   expect(dayLabel('2026-11-05')).toBe('Thu 5 Nov')
   for (const s of [ring, left, spark]) expect(s.length).toBeLessThan(20_000)
@@ -637,20 +663,26 @@ test('the Cache card: none before a reply, then warm with what the next message 
   expect(d.texts).toMatch(/Continue here\nThe next message reads this chat's 94k tokens from the cache: \$0\.02 instead of \$0\.75\./)
   expect(d.texts).toMatch(/1-hour cache\n/)
   expect(d.svgs).toMatch(/Cache 53 min left/)
-  expect((await draw('terminal')).texts).toMatch(/Continue here · 53 min left\n▰+│▰+▱+\n/)
+  // The terminal draws the countdown as a Raster the ticker repaints in place: the name, the time
+  // left to the second, the bar.
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const clock = await ui.find({ type: 'Raster', key: 'cache-clock' })
+  expect(rasterText(clock.props.cells, clock.props.columns)).toMatch(/^Continue here · 53:58 left\n▰+│▰+▱+$/)
+  await ui.unmount()
+  expect(d.svgs).toMatch(/53:58/)
 })
 
-test('the ticker redraws the pane only when the cache card\'s minute or state changes, and never once it lapsed', async ($: any, on: any) => {
-  const MIN = 60_000
+test('the countdown ticks every second on its own: the desktop redraws on each new second without reading the stats again, never once it lapsed', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   const opts = { now }
   const seen = engine(on, opts)
   const ticks: (() => void)[] = []
-  on('clock.every', () => new Promise<any>(res => ticks.push(() => res({ value: undefined }))))
+  const every: number[] = []
+  on('clock.every', (_: unknown, e: any) => { every.push(e.ms ?? e.intervalMs ?? e.every ?? e); return new Promise<any>(res => ticks.push(() => res({ value: undefined }))) })
   on('turn.complete', () => ({ text: '', usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 4_000 } }))
   await start($)
   await $.turn.complete({ answer: '', durationMs: 5_000, isAborted: false, turnId: 't1', reason: 'answer' })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0)) }
   const tick = async () => {
     await settle()
@@ -660,20 +692,61 @@ test('the ticker redraws the pane only when the cache card\'s minute or state ch
     await settle()
     return seen.redraws - before
   }
+  expect(JSON.stringify(every)).toMatch(/1000/)
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/5:00/)
   const steps: number[] = []
   steps.push(await tick())
-  // Whole minutes, rounded down: 4:50 left reads 4 min.
-  opts.now = now + 10_000
-  steps.push(await tick())
-  opts.now = now + 20_000
-  steps.push(await tick())
-  opts.now = now + 2 * MIN
+  opts.now = now + 1_000
   steps.push(await tick())
   steps.push(await tick())
-  opts.now = now + 5 * MIN + 1
+  opts.now = now + 2_500
   steps.push(await tick())
-  opts.now = now + 40 * MIN
+  // The ticker's redraw reuses the savings it read: the stats log is not read again.
+  // (The test engine does not redraw on invalidate, so the redraw is a fresh mount.)
+  await ui.unmount()
+  const reads = seen.statsReads
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/4:58/)
+  expect(seen.statsReads).toBe(reads)
+  await ui.unmount()
+  // Any other redraw reads them fresh.
+  ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(seen.statsReads).toBe(reads + 1)
+  opts.now = now + 5 * 60_000 + 1
   steps.push(await tick())
-  expect(steps).toEqual([0, 1, 0, 1, 0, 1, 0])
+  opts.now = now + 40 * 60_000
+  steps.push(await tick())
+  expect(steps).toEqual([0, 1, 0, 1, 1, 0])
+  await ui.unmount()
+})
+
+test('in the terminal the ticker repaints only the countdown Raster, no pane redraw; refused, it redraws instead', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const opts = { now }
+  const seen = engine(on, opts)
+  const ticks: (() => void)[] = []
+  on('clock.every', () => new Promise<any>(res => ticks.push(() => res({ value: undefined }))))
+  on('turn.complete', () => ({ text: '', usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 4_000 } }))
+  await start($)
+  await $.turn.complete({ answer: '', durationMs: 5_000, isAborted: false, turnId: 't1', reason: 'answer' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0)) }
+  const tick = async () => {
+    await settle()
+    const before = seen.redraws
+    ticks.shift()!()
+    await settle()
+    return seen.redraws - before
+  }
+  opts.now = now + 7_000
+  expect(await tick()).toBe(0)
+  expect(seen.blits).toHaveLength(1)
+  const b = seen.blits[0]
+  expect(b).toMatchObject({ requestId: PANE.requestId, key: 'cache-clock' })
+  expect(rasterText(b.cells, b.columns)).toMatch(/^Continue here · 4:53 left\n/)
+  // A surface that refuses the blit gets a redraw for the new second.
+  seen.blitDeny = 'not mounted'
+  opts.now = now + 8_000
+  expect(await tick()).toBe(1)
   await ui.unmount()
 })

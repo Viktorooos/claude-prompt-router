@@ -72,11 +72,12 @@ ${STILL}
 export type SparkPoint = { value: number; head: string; detail: string }
 
 // The net saving per day across the whole width: a line with a soft area under it, the last day's
-// dot, and a readout over the plot. Drawn for the sandboxed frame (Svg isInteractive): hovering a
-// day lights its column, guide and dot and swaps the readout for that day's numbers, at once (no
-// animation or transition, like every drawing in the pane). The line is
-// stretched to the width (non-scaling stroke), the dots and columns sit at percent positions, so
-// nothing is distorted at any width. idle: the readout while no day is hovered.
+// dot, and a readout over the plot. Drawn for the sandboxed frame (Svg isInteractive): each day owns
+// an invisible column; hovering it shows a soft guide, the day's dot on a halo, and swaps the readout
+// for that day's numbers, at once (no animation or transition, like every drawing in the pane). No
+// <title>: the frame would show it as a grey tooltip over the chart, and the Svg's alt names it.
+// The line is stretched to the width (non-scaling stroke), the dots and columns sit at percent
+// positions, so nothing is distorted at any width. idle: the readout while no day is hovered.
 export function sparkSvg(points: readonly SparkPoint[], idle: { head: string; detail: string }, height = 108, color: string = ACCENT): string {
   const VB = 1000
   const top = 40
@@ -104,21 +105,27 @@ export function sparkSvg(points: readonly SparkPoint[], idle: { head: string; de
   const readout = (cls: string, head: string, detail: string) =>
     `<g class="${cls}"><text class="k" x="2" y="14" ${FONT} font-size="12" font-weight="600">${esc(head)}</text><text class="m" x="2" y="31" ${FONT} font-size="11.5">${esc(detail)}</text></g>`
   const cols = points
-    .map((p, i) => `<g class="h"><rect class="z" x="${n((i / count) * 100)}%" y="${top}" width="${n(100 / count)}%" height="${height - top}"/><line class="g" x1="${pct(i)}%" y1="${top + 2}" x2="${pct(i)}%" y2="${height - 2}"/><circle class="d" cx="${pct(i)}%" cy="${pts[i]![1]}" r="3.6"/>${readout('t', p.head, p.detail)}</g>`)
+    .map((p, i) => `<g class="h"><rect class="z" x="${n((i / count) * 100)}%" y="0" width="${n(100 / count)}%" height="${height}"/><line class="g" x1="${pct(i)}%" y1="${top}" x2="${pct(i)}%" y2="${height}"/><circle class="a" cx="${pct(i)}%" cy="${pts[i]![1]}" r="8"/><circle class="d" cx="${pct(i)}%" cy="${pts[i]![1]}" r="4"/>${readout('t', p.head, p.detail)}</g>`)
     .join('')
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><title>Net saving per day</title><style>
+  // The last day's dot comes after the columns, so a hovered day can hide it (.c:hover~).
+  const lastDot = last && !empty ? `<circle class="r" cx="${pct(points.length - 1)}%" cy="${last[1]}" r="6"/><circle class="e" cx="${pct(points.length - 1)}%" cy="${last[1]}" r="3.2"/>` : ''
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img" aria-label="${esc(idle.head)}"><style>
 ${INK}
 .l{fill:none;stroke:${empty ? '#8a8f98' : color};stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .f{fill:url(#f)}
 .o{stroke:#8a8f98;stroke-opacity:.35;stroke-width:1;stroke-dasharray:3 3}
 .e{fill:${color}}.r{fill:${color};opacity:.22}
-.z{fill:${color};opacity:0}.g{stroke:${color};stroke-width:1;stroke-dasharray:2 3;opacity:0}
-.d{fill:${color};stroke:#fff;stroke-width:1.5;opacity:0}
-.t,.i,.g,.d{pointer-events:none}.t{opacity:0}.h:hover .z{opacity:.08}.h:hover .g,.h:hover .d,.h:hover .t{opacity:1}
-.c:hover~.i{opacity:0}
-</style><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="${empty ? 0 : 0.3}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
+.z{fill:#000;fill-opacity:0}
+.g{stroke:url(#g);stroke-width:1.5;stroke-linecap:round}
+.a{fill:${color};opacity:.18}
+.d{fill:${color};stroke:#fff;stroke-width:2}
+@media (prefers-color-scheme: dark){.d{stroke:#1d1f23}.a{opacity:.28}}
+.g,.a,.d,.t,.e,.r,.i{pointer-events:none}
+.g,.a,.d,.t{visibility:hidden}.h:hover .g,.h:hover .a,.h:hover .d,.h:hover .t{visibility:visible}
+.c:hover~.i,.c:hover~.e,.c:hover~.r{visibility:hidden}
+</style><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="${empty ? 0 : 0.3}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="${top}" x2="0" y2="${height}"><stop offset="0" stop-color="${color}" stop-opacity="0"/><stop offset=".35" stop-color="${color}" stop-opacity=".45"/><stop offset="1" stop-color="${color}" stop-opacity=".12"/></linearGradient></defs>
 <svg width="100%" height="${height}" viewBox="0 0 ${VB} ${height}" preserveAspectRatio="none">${lo < 0 || empty ? `<line class="o" x1="0" y1="${zero}" x2="${VB}" y2="${zero}" vector-effect="non-scaling-stroke"/>` : ''}${area ? `<path class="f" d="${area}"/>` : ''}${line ? `<path class="l" d="${line}" vector-effect="non-scaling-stroke"/>` : ''}</svg>
-${last && !empty ? `<circle class="r" cx="${pct(points.length - 1)}%" cy="${last[1]}" r="6"/><circle class="e" cx="${pct(points.length - 1)}%" cy="${last[1]}" r="3.2"/>` : ''}<g class="c">${cols}</g>${readout('i', idle.head, idle.detail)}</svg>`
+<g class="c">${cols}</g>${lastDot}${readout('i', idle.head, idle.detail)}</svg>`
 }
 
 // A local day key (2026-11-05) as the chart's readout names it: Thu 5 Nov.
@@ -156,8 +163,8 @@ export function cacheView(mark: { at: number; ttl: CacheTtl | null; model: strin
   return { state, ttl, leftMs, agoMs, ttlMs, share: leftMs / ttlMs, moved }
 }
 
-// The time the card shows: whole minutes left, "under 1 min" in the last one; once it lapsed it
-// stops changing (the card names the time instead), so the pane redraws only while it counts down.
+// The time left in words, for alt text and titles: whole minutes, "under 1 min" in the last one; once
+// it lapsed it stops changing (the card names the time instead). The card counts with cacheClock.
 export function cacheTime(v: CacheView): string {
   if (v.state === 'none') return ''
   if (v.state === 'cold') return v.moved ? 'starts over' : 'expired'
@@ -174,10 +181,46 @@ export function clockTime(ms: number): string {
 // The cache's tone: green while warm, amber near the end, red once it lapsed, grey before the first reply.
 export const CACHE_TONE: Record<CacheState, Tone> = { none: 'idle', warm: 'calm', soon: 'near', cold: 'over' }
 
-// The time left as a bar in the cache's tone, a tick where "soon" starts. Still: the pane redraws
-// it as the minutes go; empty once it lapsed. The terminal draws barText(share × 100, 20).
+// The time left as a bar in the cache's tone, a tick where "soon" starts. Still: the ticker's redraw
+// moves it each second; empty once it lapsed. The terminal draws it in cacheCells.
 export function cacheBarSvg(v: CacheView, height = 10): string {
   return toneBarSvg(v.share * 100, CACHE_TONE[v.state], 20, `Cache ${cacheTime(v) || 'not started'}`, height)
+}
+
+// The time left to the second, as the card counts it down: 4:32, 53:58. Rounded up, so a fresh
+// cache reads 5:00 and the last second 0:01; empty once it lapsed or before the first reply.
+export function cacheClock(v: CacheView): string {
+  if (v.state !== 'warm' && v.state !== 'soon') return ''
+  const s = Math.ceil(v.leftMs / 1000)
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+// Terminal cells for a Raster: each line's text in its colour (0xRRGGBB) on the default background,
+// padded or cut to columns, as the base64 the Raster and $.ui.blit take. Only width-1 characters.
+export function cellsOf(lines: readonly { text: string; color: number }[], columns: number): string {
+  const DEFAULT = 0x01000000
+  const words = new Uint32Array(columns * lines.length * 3)
+  lines.forEach((l, r) => {
+    const chars = [...l.text]
+    for (let c = 0; c < columns; c++) {
+      const at = (r * columns + c) * 3
+      const ch = chars[c]
+      words[at] = ch ? ch.codePointAt(0)! : 0x20
+      words[at + 1] = ch ? l.color : DEFAULT
+      words[at + 2] = DEFAULT
+    }
+  })
+  const bytes = new Uint8Array(words.buffer)
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(bin)
+}
+
+// The terminal's countdown: the card's name and the time left, the bar under it, in the tone's colour.
+// One Raster, so the ticker repaints it every second with $.ui.blit and the pane does not redraw.
+export function cacheCells(v: CacheView, name: string, columns: number, cells = 20): string {
+  const color = Number.parseInt(TONES[CACHE_TONE[v.state]][0].slice(1), 16)
+  return cellsOf([{ text: `${name} · ${cacheClock(v)} left`, color }, { text: barText(v.share * 100, 20, cells), color }], columns)
 }
 
 // The terminal's ring: cells filled to the share, │ at the threshold.
@@ -241,7 +284,7 @@ export function bigNumberSvg(text: string, color: string, _width = 280, size = 3
   const h = Math.round(size * 1.25)
   const safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   // animate: rises in, drawn only on the one redraw after a turn ends; every other redraw is still.
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${h}"><style>text{letter-spacing:-.02em}${animate ? `text{animation:r .5s cubic-bezier(.2,.8,.2,1) both}@keyframes r{from{opacity:0;transform:translateY(8px)}}${STILL}` : ''}</style><text x="0" y="${Math.round(size)}" font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="${size}" font-weight="700" fill="${color}">${safe}</text></svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${h}"><style>text{letter-spacing:-.02em;font-variant-numeric:tabular-nums}${animate ? `text{animation:r .5s cubic-bezier(.2,.8,.2,1) both}@keyframes r{from{opacity:0;transform:translateY(8px)}}${STILL}` : ''}</style><text x="0" y="${Math.round(size)}" font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="${size}" font-weight="700" fill="${color}">${safe}</text></svg>`
 }
 
 // A hairline across the pane: what separates its sections and settings, as the preview's border-top.

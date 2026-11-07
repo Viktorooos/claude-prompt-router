@@ -7,7 +7,7 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { cacheCosts, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
-import { CACHE_TONE, TONES, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
 
@@ -31,12 +31,18 @@ const PANE_TITLE = 'Prompt Router'
 const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })
 // The chat's prompt cache for the Cache card; in $.state, so a reload (saving an option) keeps it.
 const CACHE = atom({ plugin: 'prompt-router', key: 'cache' } as const, null, { shape: 'cache-1' })
-// The session's folder and transcript (found on the first reply), the ticker that redraws while the
-// cache counts down, and the card's label as the pane last drew it.
+// The session's folder and transcript (found on the first reply), the ticker that counts the cache
+// down every second, the card's label as last shown, and the terminal's countdown Raster as drawn
+// (its card name and width; null: the pane draws no Raster to repaint).
 let sessionCwd = ''
 let transcriptFile = ''
 let cacheTicker: { cancel: () => void } | null = null
 let drawnCache = ''
+let drawnClock: { state: CacheView['state']; name: string; columns: number; cells: number } | null = null
+// A redraw the ticker asked for only to move the countdown: the pane reuses the savings it read last
+// (under a minute old, nothing new pending) instead of reading the whole stats log every second.
+let tickOnly = false
+let savingsMemo: { at: number; pending: number; value: unknown } | null = null
 
 // Claude Code's config folder (~/.claude or CLAUDE_CONFIG_DIR), known from session.start on.
 let configDir = ''
@@ -841,7 +847,11 @@ async function markCache($: EngineInterface, model: string, durationMs: number |
 
 // The card's state and time as one label: the ticker redraws only when it changes (once a minute
 // while the cache counts down, never once it lapsed).
-const cacheLabel = (v: CacheView) => `${v.state}|${cacheTime(v)}`
+// What the card shows of the cache, to the second: a change is what the ticker moves on.
+const cacheLabel = (v: CacheView) => `${v.state}|${cacheClock(v) || cacheTime(v)}`
+// The terminal countdown Raster's key, the address $.ui.blit repaints.
+const CLOCK_KEY = 'cache-clock'
+
 
 // What the pane draws, read fresh on every draw (the atom read subscribes it to the next decision).
 async function paneData($: EngineInterface) {
@@ -864,10 +874,17 @@ async function paneData($: EngineInterface) {
   const model = knownModel(seenModel || (await chatModel($)))
   const effort = await currentLevel($)
   let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances; perPct: number | null } | null = null
+  const quick = tickOnly
+  tickOnly = false
   if (cfg.stats === 'on') {
-    const records = [...parseLog(await readStats($)), ...pending.items]
-    const c = compareNow()
-    savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now), perPct: limitRate(records) }
+    const memo = savingsMemo
+    if (quick && memo && now - memo.at < 60_000 && memo.pending === pending.items.length) savings = memo.value as typeof savings
+    else {
+      const records = [...parseLog(await readStats($)), ...pending.items]
+      const c = compareNow()
+      savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now), perPct: limitRate(records) }
+      savingsMemo = { at: now, pending: pending.items.length, value: savings }
+    }
   }
   const mark = await read($, CACHE)
   const view = cacheView(mark, model, now)
@@ -922,19 +939,33 @@ export const register: Register = (on, options) => {
     sessionCwd = typeof e.cwd === 'string' ? e.cwd : ''
     transcriptFile = ''
     drawnCache = ''
+    drawnClock = null
     cacheTicker?.cancel()
     cacheTicker = null
-    // Until the pane has drawn the card there is nothing to move on.
+    // Every second, apart from anything else the pane does: the terminal repaints just the countdown
+    // Raster in place; elsewhere (no in-place swap for an Svg) the pane redraws, reusing the savings
+    // it read, only when the shown second or state changed. Once it lapsed nothing changes, so no
+    // redraw. Until the pane has drawn the card there is nothing to move on.
     const tick = async () => {
       if (!drawnCache) return
       // The same model paneData goes by, so the ticker's label matches the one drawn.
-      const label = cacheLabel(cacheView(await read($, CACHE), knownModel(seenModel || (await chatModel($))), await $.clock.now()))
+      const v = cacheView(await read($, CACHE), knownModel(seenModel || (await chatModel($))), await $.clock.now())
+      const label = cacheLabel(v)
       if (label === drawnCache) return
+      const r = drawnClock
+      if (r && r.state === v.state) {
+        const done = await $.ui.blit({ requestId: PANE, key: CLOCK_KEY, cells: cacheCells(v, r.name, r.columns, r.cells), columns: r.columns, rows: 2 }).catch(() => ({ deny: 'failed' }))
+        if (!done.deny) {
+          drawnCache = label
+          return
+        }
+      }
       drawnCache = label
+      tickOnly = true
       redraw($)
     }
     try {
-      cacheTicker = $.clock.every(15_000, () => tick().catch(() => {}))
+      cacheTicker = $.clock.every(1_000, () => tick().catch(() => {}))
     } catch {
       // No timers here: the card moves on with each reply.
     }
@@ -1265,7 +1296,7 @@ export const register: Register = (on, options) => {
     const d = await paneData($)
     const term = e.surface === 'terminal'
     const report = d.savings?.report[panePeriod] ?? null
-    const { Box, Text, Button, Svg, Select } = $.ui.resolve(e) as any
+    const { Box, Text, Button, Svg, Select, Raster } = $.ui.resolve(e) as any
     const cols = e.props.bodyColumns ?? 40
     const px = Math.max(220, Math.min(460, cols * 7))
     const cells = Math.max(8, Math.min(24, cols - 8))
@@ -1455,34 +1486,54 @@ export const register: Register = (on, options) => {
       }
     })()
     const cTime = cacheTime(cv)
+    const cClock = cacheClock(cv)
     const cKind = `${TTL_NAME[cv.ttl]} cache${d.cache.mark?.ttl ? '' : ' (assumed)'}`
+    // The terminal draws the live countdown as one Raster the ticker repaints every second in place;
+    // without Raster here it is Text, and the ticker redraws the pane instead.
+    const clockCols = Math.max(cells, Math.min(cols, 60))
+    const counting = cv.state === 'warm' || cv.state === 'soon'
+    drawnClock = term && counting && Raster ? { state: cv.state, name: cacheName, columns: clockCols, cells } : null
     const cacheCard = term ? section('cache',
       title('cache-title', 'Cache'),
       <Box key="cache-v" flexDirection="column">
-        <Text bold color={TONE_THEME[cTone]}>{live ? `${cacheName} · ${cTime}` : cacheName}</Text>
-        {live ? <Text color={TONE_THEME[cTone]}>{barText(cv.share * 100, 20, cells)}</Text> : null}
+        {drawnClock
+          ? <Raster key={CLOCK_KEY} cells={cacheCells(cv, cacheName, clockCols, cells)} columns={clockCols} rows={2} />
+          : (
+            <Box flexDirection="column">
+              <Text bold color={TONE_THEME[cTone]}>{counting ? `${cacheName} · ${cClock} left` : live ? `${cacheName} · ${cTime}` : cacheName}</Text>
+              {live ? <Text color={TONE_THEME[cTone]}>{barText(cv.share * 100, 20, cells)}</Text> : null}
+            </Box>
+          )}
         <Text dimColor wrap="wrap">{cacheSub}</Text>
         {live ? <Text dimColor>{`${cKind} · last reply ${lastAt}`}</Text> : null}
       </Box>,
     ) : !live ? card('cache', [head('cache-head', 'clock', cColor, cacheName, cacheSub)]) : card('cache', [
-      head('cache-head', 'clock', cColor, cacheName, cacheSub, { strong: true }),
-      <Box key="cache-v" flexDirection="column" gap={1}>
-        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
-          <Box flexGrow={1} flexShrink={1} minWidth={0}>
-            <Svg source={bigNumberSvg(`${cTime[0]!.toUpperCase()}${cTime.slice(1)}`, cColor, px, 30)} alt={`Cache ${cTime}`} height={38} />
+      // The countdown sits on the heading's right in tabular figures, so the seconds do not jostle the
+      // line; the bar under it empties towards the tick where "soon" starts.
+      head('cache-head', 'clock', cColor, cacheName, cacheSub, {
+        strong: true,
+        right: counting ? (
+          <Box flexDirection="column" alignItems="flex-end">
+            <Svg source={bigNumberSvg(cClock, cColor, 96, 30)} alt={`Cache ${cTime}`} width={cClock.length > 4 ? 92 : 76} height={38} />
+            <Text dimColor>left</Text>
           </Box>
-          <Box flexShrink={0}><Text dimColor>{cKind}</Text></Box>
+        ) : undefined,
+      }),
+      <Box key="cache-v" flexDirection="column" gap={0}>
+        {counting ? <Svg source={cacheBarSvg(cv, 8)} alt={`Cache ${cTime}`} height={14} /> : null}
+        <Box flexDirection="row" justifyContent="space-between" gap={2}>
+          <Text dimColor>{`Last reply ${lastAt}`}</Text>
+          <Text dimColor>{cKind}</Text>
         </Box>
-        <Svg source={cacheBarSvg(cv, 10)} alt={`Cache ${cTime}`} height={16} />
       </Box>,
       cc ? (
         <Box key="cache-cost" flexDirection="row" gap={3}>
-          {stat('cache-warm', 'Next message, cache warm', usd(cc.warm), cv.state === 'cold' ? undefined : cColor)}
-          {stat('cache-cold', 'Once it lapsed', usd(cc.cold), cv.state === 'cold' ? cColor : undefined)}
+          {stat('cache-warm', 'Next message, cache warm', usd(cc.warm), counting ? cColor : undefined)}
+          {stat('cache-cold', 'Once it lapsed', usd(cc.cold), counting ? undefined : cColor)}
         </Box>
       ) : null,
-      <Text key="cache-foot" dimColor wrap="wrap">{`Last reply ${lastAt} · every message starts the ${cv.ttl === '1h' ? 'hour' : '5 minutes'} again · list prices`}</Text>,
-    ], { borderColor: cColor, tint: `${cColor}12` })
+      <Text key="cache-foot" dimColor wrap="wrap">{`Every message starts the ${cv.ttl === '1h' ? 'hour' : '5 minutes'} again · list prices`}</Text>,
+    ], { borderColor: cColor, tint: `${cColor}0d` })
 
     // What you got: the context subagents kept out of the chat, the cheaper picks, the plan limit.
     const nums = s ? glance(s, d.window, d.savings?.perPct ?? null) : []
@@ -1723,10 +1774,10 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" gap={term ? 1 : narrow ? 1 : 2} padding={term ? 0 : 1}>
         {term ? <Text dimColor>{`Prompt Router · ${enabled ? 'on' : 'off'}`}</Text> : null}
         {saved ?? tabs}
+        {term && (saved || tabs) ? rule('rule-cache') : null}
+        {cacheCard}
         {term && numbers ? rule('rule-numbers') : null}
         {numbers}
-        {term && (saved || tabs || numbers) ? rule('rule-cache') : null}
-        {cacheCard}
         {term ? rule('rule-chat') : null}
         {chat}
         {d.savings ? null : <Text dimColor>Savings stats are off.</Text>}
