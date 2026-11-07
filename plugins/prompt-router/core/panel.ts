@@ -4,6 +4,8 @@
 // prefers-color-scheme, and every animation off under prefers-reduced-motion (the final state is the
 // element's own style, the animation only runs from the start to it).
 
+import { knownModel } from './router.ts'
+
 export const ACCENT = '#d97757'
 
 export const TONES = {
@@ -30,24 +32,28 @@ const STILL = '@media (prefers-reduced-motion: reduce){*{animation:none!importan
 const n = (v: number) => Number(v.toFixed(2))
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+// A flat bar in a tone's gradient: filled to pct (0…100) with round ends, a tick at tickPct (0: none),
+// percent lengths so it fills whatever width the pane gives it. css: extra rules (an animation).
+function toneBarSvg(pct: number, t: Tone, tickPct: number, title: string, height: number, css = ''): string {
+  const [a, b] = TONES[t]
+  const r = n(height / 2)
+  const w = n(Math.min(100, Math.max(0, pct)))
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height + 6}" role="img"><title>${esc(title)}</title><style>
+.t{fill:#1d1f23;opacity:.08}.k{stroke:#1d1f23;stroke-width:2;stroke-linecap:round;opacity:.45}
+@media (prefers-color-scheme: dark){.t{fill:#f2f3f5;opacity:.1}.k{stroke:#f2f3f5;opacity:.6}}
+${css}</style><defs><linearGradient id="s" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
+<rect class="t" y="3" width="100%" height="${height}" rx="${r}"/>${w ? `<rect class="f" y="3" width="${w}%" height="${height}" rx="${r}" fill="url(#s)"/>` : ''}${tickPct ? `<line class="k" x1="${tickPct}%" y1="1" x2="${tickPct}%" y2="${height + 5}"/>` : ''}</svg>`
+}
+
 // The chat's context as a flat bar: filled to its share in the tone's colour, a tick at the threshold.
 // Still (no animation), so a redraw does not replay anything.
 // from: where the fill starts growing (a share 0…100): 0 draws it in, the last shown share moves it on.
 export function contextBarSvg(share: number | null, at: number, _width = 280, height = 10, animate = false, from = 0): string {
-  // Percent lengths: the drawing fills whatever width the pane gives it, ends stay round.
-  const p = share == null ? 0 : Math.min(1, Math.max(0, share / 100))
-  const [a, b] = TONES[tone(share, at)]
-  const r = n(height / 2)
-  const w = n(p * 100)
   const label = share == null ? '–' : `${Math.round(share)}%`
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height + 6}" role="img"><title>Context ${label}${at ? `, new session at ${at}%` : ''}</title><style>
-.t{fill:#1d1f23;opacity:.08}.k{stroke:#1d1f23;stroke-width:2;stroke-linecap:round;opacity:.45}
-@media (prefers-color-scheme: dark){.t{fill:#f2f3f5;opacity:.1}.k{stroke:#f2f3f5;opacity:.6}}
-${animate ? `.f{animation:g .7s cubic-bezier(.2,.8,.2,1) both}@keyframes g{from{width:${n(Math.min(100, Math.max(0, from)))}%}}
+  const css = animate ? `.f{animation:g .7s cubic-bezier(.2,.8,.2,1) both}@keyframes g{from{width:${n(Math.min(100, Math.max(0, from)))}%}}
 ${from ? '' : '.k{animation:o .5s .35s ease-out both}@keyframes o{from{opacity:0}}'}
-${STILL}` : ''}
-</style><defs><linearGradient id="s" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
-<rect class="t" y="3" width="100%" height="${height}" rx="${r}"/>${w ? `<rect class="f" y="3" width="${w}%" height="${height}" rx="${r}" fill="url(#s)"/>` : ''}${at ? `<line class="k" x1="${at}%" y1="1" x2="${at}%" y2="${height + 5}"/>` : ''}</svg>`
+${STILL}` : ''
+  return toneBarSvg(share ?? 0, tone(share, at), at, `Context ${label}${at ? `, new session at ${at}%` : ''}`, height, css)
 }
 
 // A part of the balance as a bar from the middle: right for a saving, left for a cost, its length
@@ -62,19 +68,29 @@ ${STILL}
 </style><rect class="t" width="${width}" height="${height}" rx="${n(height / 2)}"/>${len >= 0.5 ? `<rect x="${x}" width="${len}" height="${height}" rx="2" fill="${color}"/>` : ''}<line class="m" x1="${mid}" y1="0" x2="${mid}" y2="${height}"/></svg>`
 }
 
-// The net saving per day: a line that draws itself in, a soft area under it, the last day's dot,
-// and a tooltip per day (labels, one per value).
-// animate false: drawn in its final state at once (the pane's still redraws).
-export function sparkSvg(values: readonly number[], labels: readonly string[], width = 280, height = 64, color: string = ACCENT, animate = true): string {
-  const px = 6
-  const py = 9
+// One day of the saving chart: its value and the two lines the readout shows while it is hovered.
+export type SparkPoint = { value: number; head: string; detail: string }
+
+// The net saving per day across the whole width: a line with a soft area under it, the last day's
+// dot, and a readout over the plot. Drawn for the sandboxed frame (Svg isInteractive): hovering a
+// day lights its column, guide and dot and swaps the readout for that day's numbers, at once (no
+// animation or transition, like every drawing in the pane). The line is
+// stretched to the width (non-scaling stroke), the dots and columns sit at percent positions, so
+// nothing is distorted at any width. idle: the readout while no day is hovered.
+export function sparkSvg(points: readonly SparkPoint[], idle: { head: string; detail: string }, height = 108, color: string = ACCENT): string {
+  const VB = 1000
+  const top = 40
+  const py = 7
+  const values = points.map(p => p.value)
   const lo = Math.min(0, ...values)
   const hi = Math.max(0, ...values)
   const span = hi - lo || 1
-  const x = (i: number) => n(px + (values.length > 1 ? (i / (values.length - 1)) * (width - 2 * px) : (width - 2 * px) / 2))
-  const y = (v: number) => n(py + ((hi - v) / span) * (height - 2 * py))
+  const count = Math.max(1, points.length)
+  // Each day owns an equal column; its point sits in the column's middle.
+  const pct = (i: number) => n(((i + 0.5) / count) * 100)
+  const y = (v: number) => n(top + py + ((hi - v) / span) * (height - top - 2 * py))
   const zero = y(0)
-  const pts = values.map((v, i) => [x(i), y(v)] as const)
+  const pts = values.map((v, i) => [n((pct(i) / 100) * VB), y(v)] as const)
   let line = pts.length ? `M${pts[0]![0]} ${pts[0]![1]}` : ''
   for (let i = 1; i < pts.length; i++) {
     const [x0, y0] = pts[i - 1]!
@@ -84,25 +100,84 @@ export function sparkSvg(values: readonly number[], labels: readonly string[], w
   }
   const last = pts[pts.length - 1]
   const area = last ? `${line} L${last[0]} ${zero} L${pts[0]![0]} ${zero}Z` : ''
-  const hits = pts
-    .map(([px1, py1], i) => `<g class="h"><circle class="d" cx="${px1}" cy="${py1}" r="2.6"/><circle class="z" cx="${px1}" cy="${py1}" r="${n(Math.max(6, (width - 2 * px) / Math.max(1, values.length - 1) / 2))}"><title>${esc(labels[i] ?? '')}</title></circle></g>`)
-    .join('')
   const empty = values.every(v => Math.abs(v) < 0.005)
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img"><title>Net saving per day</title><style>
-.l{fill:none;stroke:${empty ? '#8a8f98' : color};stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:0}
+  const readout = (cls: string, head: string, detail: string) =>
+    `<g class="${cls}"><text class="k" x="2" y="14" ${FONT} font-size="12" font-weight="600">${esc(head)}</text><text class="m" x="2" y="31" ${FONT} font-size="11.5">${esc(detail)}</text></g>`
+  const cols = points
+    .map((p, i) => `<g class="h"><rect class="z" x="${n((i / count) * 100)}%" y="${top}" width="${n(100 / count)}%" height="${height - top}"/><line class="g" x1="${pct(i)}%" y1="${top + 2}" x2="${pct(i)}%" y2="${height - 2}"/><circle class="d" cx="${pct(i)}%" cy="${pts[i]![1]}" r="3.6"/>${readout('t', p.head, p.detail)}</g>`)
+    .join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><title>Net saving per day</title><style>
+${INK}
+.l{fill:none;stroke:${empty ? '#8a8f98' : color};stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .f{fill:url(#f)}
 .o{stroke:#8a8f98;stroke-opacity:.35;stroke-width:1;stroke-dasharray:3 3}
-.e{fill:${color};transform-box:fill-box;transform-origin:center}
-.r{fill:${color};opacity:.22;transform-box:fill-box;transform-origin:center}
-.d{fill:${color};opacity:0;transition:opacity .15s}.z{fill:transparent}.h:hover .d{opacity:1}
-${animate ? `.l{animation:draw 1.5s cubic-bezier(.65,0,.35,1) both}.f{animation:fade 1s .7s ease-out both}
-.e{animation:pop .5s 1.35s cubic-bezier(.34,1.56,.64,1) both}.r{animation:pop .5s 1.4s cubic-bezier(.34,1.56,.64,1) both}
-@keyframes draw{from{stroke-dashoffset:1}}
-@keyframes fade{from{opacity:0}}
-@keyframes pop{from{transform:scale(0)}}
-${STILL}` : ''}
+.e{fill:${color}}.r{fill:${color};opacity:.22}
+.z{fill:${color};opacity:0}.g{stroke:${color};stroke-width:1;stroke-dasharray:2 3;opacity:0}
+.d{fill:${color};stroke:#fff;stroke-width:1.5;opacity:0}
+.t,.i,.g,.d{pointer-events:none}.t{opacity:0}.h:hover .z{opacity:.08}.h:hover .g,.h:hover .d,.h:hover .t{opacity:1}
+.c:hover~.i{opacity:0}
 </style><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="${empty ? 0 : 0.3}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
-${lo < 0 || empty ? `<line class="o" x1="${px}" y1="${zero}" x2="${width - px}" y2="${zero}"/>` : ''}${area ? `<path class="f" d="${area}"/>` : ''}${line ? `<path class="l" pathLength="1" d="${line}"/>` : ''}${last && !empty ? `<circle class="r" cx="${last[0]}" cy="${last[1]}" r="6"/><circle class="e" cx="${last[0]}" cy="${last[1]}" r="3.2"/>` : ''}${hits}</svg>`
+<svg width="100%" height="${height}" viewBox="0 0 ${VB} ${height}" preserveAspectRatio="none">${lo < 0 || empty ? `<line class="o" x1="0" y1="${zero}" x2="${VB}" y2="${zero}" vector-effect="non-scaling-stroke"/>` : ''}${area ? `<path class="f" d="${area}"/>` : ''}${line ? `<path class="l" d="${line}" vector-effect="non-scaling-stroke"/>` : ''}</svg>
+${last && !empty ? `<circle class="r" cx="${pct(points.length - 1)}%" cy="${last[1]}" r="6"/><circle class="e" cx="${pct(points.length - 1)}%" cy="${last[1]}" r="3.2"/>` : ''}<g class="c">${cols}</g>${readout('i', idle.head, idle.detail)}</svg>`
+}
+
+// A local day key (2026-11-05) as the chart's readout names it: Thu 5 Nov.
+export function dayLabel(key: string): string {
+  const [y, m, d] = key.split('-').map(Number)
+  if (!y || !m || !d) return key
+  const date = new Date(y, m - 1, d, 12)
+  return `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()]} ${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]}`
+}
+
+// The chat's prompt cache. Claude Code writes 5-minute or 1-hour entries; every request that reads
+// one starts its lifetime again, so the cache lives from the chat's last request.
+export type CacheTtl = '5m' | '1h'
+const TTL_MS: Record<CacheTtl, number> = { '5m': 5 * 60_000, '1h': 60 * 60_000 }
+export const TTL_NAME: Record<CacheTtl, string> = { '5m': '5-minute', '1h': '1-hour' }
+
+// none: no reply yet; warm: the next message reads it; soon: the last fifth of its life (the last
+// minute of five, the last 12 of 60); cold: it lapsed, or the chat moved to another model.
+export type CacheState = 'none' | 'warm' | 'soon' | 'cold'
+export type CacheView = { state: CacheState; ttl: CacheTtl; leftMs: number; agoMs: number; ttlMs: number; share: number; moved: boolean }
+
+// mark: when the chat's last request read or wrote the cache, its lifetime (null: not known, taken
+// as 5 minutes) and its model; null before the first reply. model: the model the chat runs on now;
+// a cache is per model, so another one starts it over.
+export function cacheView(mark: { at: number; ttl: CacheTtl | null; model: string } | null, model: string, now: number): CacheView {
+  const ttl = mark?.ttl ?? '5m'
+  const ttlMs = TTL_MS[ttl]
+  if (!mark) return { state: 'none', ttl, leftMs: 0, agoMs: 0, ttlMs, share: 0, moved: false }
+  const was = knownModel(mark.model)
+  const is = knownModel(model)
+  const moved = !!was && !!is && was !== is
+  const agoMs = Math.max(0, now - mark.at)
+  const leftMs = moved ? 0 : Math.max(0, ttlMs - agoMs)
+  const state: CacheState = leftMs <= 0 ? 'cold' : leftMs <= ttlMs / 5 ? 'soon' : 'warm'
+  return { state, ttl, leftMs, agoMs, ttlMs, share: leftMs / ttlMs, moved }
+}
+
+// The time the card shows: whole minutes left, "under 1 min" in the last one; once it lapsed it
+// stops changing (the card names the time instead), so the pane redraws only while it counts down.
+export function cacheTime(v: CacheView): string {
+  if (v.state === 'none') return ''
+  if (v.state === 'cold') return v.moved ? 'starts over' : 'expired'
+  const min = Math.floor(v.leftMs / 60_000)
+  return min < 1 ? 'under 1 min left' : `${min} min left`
+}
+
+// A time of day as the card says it: 9:05.
+export function clockTime(ms: number): string {
+  const d = new Date(ms)
+  return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+// The cache's tone: green while warm, amber near the end, red once it lapsed, grey before the first reply.
+export const CACHE_TONE: Record<CacheState, Tone> = { none: 'idle', warm: 'calm', soon: 'near', cold: 'over' }
+
+// The time left as a bar in the cache's tone, a tick where "soon" starts. Still: the pane redraws
+// it as the minutes go; empty once it lapsed. The terminal draws barText(share × 100, 20).
+export function cacheBarSvg(v: CacheView, height = 10): string {
+  return toneBarSvg(v.share * 100, CACHE_TONE[v.state], 20, `Cache ${cacheTime(v) || 'not started'}`, height)
 }
 
 // The terminal's ring: cells filled to the share, │ at the threshold.
@@ -181,6 +256,7 @@ const ICONS = {
   sliders: '<path d="M5 8h9M18 8h1M5 16h3M12 16h7"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
   chart: '<path d="M5 19V11M10 19V6M15 19v-5M20 19V9"/>',
   coin: '<circle cx="12" cy="12" r="8"/><path d="M14.5 9.2c-.5-.8-1.4-1.2-2.5-1.2-1.5 0-2.6.8-2.6 2s1.1 1.7 2.6 2 2.6.8 2.6 2-1.1 2-2.6 2c-1.1 0-2-.4-2.5-1.2M12 6.5V8M12 16v1.5"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
   gauge: '<path d="M4.5 16a8 8 0 1 1 15 0"/><path d="M12 13l3.5-4"/><circle cx="12" cy="13.5" r="1.2"/>',
   toggle: '<rect x="3" y="7" width="18" height="10" rx="5"/><circle cx="16" cy="12" r="2.6"/>',
   // The settings' and the details' own icons.

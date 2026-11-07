@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, contextBarSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -435,9 +435,20 @@ test('drawings: tone, bars, sparklines and times', () => {
   const left = splitBarSvg(-0.5, '#e0483f', 100, 8)
   expect(left).toMatch(/<rect x="25" width="25" [^>]*fill="#e0483f"/)
   expect(left).not.toMatch(/@keyframes|<script|on\w+=/)
-  const spark = sparkSvg([0, 0.1, -0.05, 0.3], ['a', 'b', 'c', 'd'])
-  expect(spark).toMatch(/pathLength="1"/)
-  expect(spark).toMatch(/<title>d<\/title>/)
+  const day = (value: number, k: string) => ({ value, head: `${k} head`, detail: `${k} detail` })
+  const spark = sparkSvg([day(0, 'a'), day(0.1, 'b'), day(-0.05, 'c'), day(0.3, 'd')], { head: 'idle head', detail: 'idle detail' })
+  // Full width: the line stretches (its stroke does not), the days sit at percent positions.
+  expect(spark).toMatch(/^<svg [^>]*width="100%"/)
+  expect(spark).toMatch(/preserveAspectRatio="none"/)
+  expect(spark).toMatch(/vector-effect="non-scaling-stroke"/)
+  expect(spark).toMatch(/cx="87.5%"/)
+  // Hover: every day has its readout, shown on its column's :hover; the idle readout hides meanwhile.
+  for (const k of ['a', 'b', 'c', 'd']) expect(spark).toMatch(new RegExp(`>${k} head</text>[^]*>${k} detail</text>`))
+  expect(spark).toMatch(/>idle head</)
+  expect(spark).toMatch(/\.h:hover \.t\{opacity:1\}/)
+  expect(spark).toMatch(/\.c:hover~\.i\{opacity:0\}/)
+  expect(spark).not.toMatch(/animation|transition|<script|on\w+=/)
+  expect(dayLabel('2026-11-05')).toBe('Thu 5 Nov')
   for (const s of [ring, left, spark]) expect(s.length).toBeLessThan(20_000)
 })
 
@@ -527,5 +538,126 @@ test('new session at offers exactly 10 … 100 %, and session suggestions offer 
   for (let n = 10; n <= 100; n += 10) expect(pct).toContain(`"value":"${n}%"`)
   const mode = JSON.stringify(await ui.find({ type: 'Select', key: 'pick-sessionSuggestions' }))
   for (const v of ['ask', 'auto', 'off']) expect(mode).toContain(`"value":"${v}"`)
+  await ui.unmount()
+})
+
+
+test('the cache: warm, then soon in its last fifth, then cold; another model starts it over', () => {
+  const MIN = 60_000
+  const mark = (ttl: '5m' | '1h' | null) => ({ at: 0, ttl, model: 'claude-opus-5-5' })
+  expect(cacheView(null, 'opus', 0).state).toBe('none')
+  expect([2, 4.5, 5, 30].map(m => cacheView(mark('5m'), 'opus', m * MIN).state)).toEqual(['warm', 'soon', 'cold', 'cold'])
+  expect([47, 49, 60].map(m => cacheView(mark('1h'), 'claude-opus-5-5', m * MIN).state)).toEqual(['warm', 'soon', 'cold'])
+  // A lifetime not known yet counts as 5 minutes.
+  expect(cacheView(mark(null), 'opus', 6 * MIN)).toMatchObject({ state: 'cold', ttl: '5m' })
+  // A cache is per model: another model starts it over; an unknown model changes nothing.
+  expect(cacheView(mark('1h'), 'claude-sonnet-5-5', MIN)).toMatchObject({ state: 'cold', moved: true, leftMs: 0 })
+  expect(cacheView(mark('1h'), '', MIN)).toMatchObject({ state: 'warm', moved: false })
+  expect([0, 4.5, 6].map(m => cacheTime(cacheView(mark('5m'), 'opus', m * MIN)))).toEqual(['5 min left', 'under 1 min left', 'expired'])
+  expect(cacheTime(cacheView(mark('1h'), 'opus', 20 * MIN))).toBe('40 min left')
+  expect(cacheTime(cacheView(mark('1h'), 'sonnet', MIN))).toBe('starts over')
+  const half = cacheView(mark('5m'), 'opus', 2.5 * MIN)
+  expect(barText(half.share * 100, 20, 10)).toBe('▰▰│▰▰▰▱▱▱▱▱')
+  const bar = cacheBarSvg(half)
+  expect(bar).toMatch(/width="50%"/)
+  expect(bar).toMatch(/#1fa37a/)
+  expect(bar).toMatch(/<title>Cache 2 min left<\/title>/)
+  expect(bar).not.toMatch(/animation|<script|on\w+=/)
+  expect(cacheBarSvg(cacheView(mark('5m'), 'opus', 6 * MIN))).not.toMatch(/fill="url\(#s\)"/)
+})
+
+test('the Cache card: none before a reply, then warm with what the next message costs, soon, expired; the transcript says 1 hour', async ($: any, on: any) => {
+  const MIN = 60_000
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const opts: { now: number; ttl: string } = { now, ttl: '' }
+  engine(on, opts)
+  const runs: string[][] = []
+  on('process.run', (_: unknown, e: any) => {
+    const argv = (e.argv ?? []) as string[]
+    runs.push(argv)
+    const out = argv.some(a => String(a).endsWith('cache-ttl.mjs')) ? JSON.stringify(opts.ttl ? { ttl: opts.ttl, ts: opts.now - 2_000 } : {}) : ''
+    return { value: { exitCode: 0, stdout: out, stderr: '', isStdoutTruncated: false } }
+  })
+  on('session.id', () => ({ value: 's1' }))
+  on('turn.complete', () => ({ text: '', usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 4_000 } }))
+  await start($)
+  const draw = async (surface: 'desktop' | 'terminal' = 'desktop') => {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    const r = { texts: await textsOf(ui), svgs: JSON.stringify(await ui.findAll({ type: 'Svg' })), card: await ui.find({ type: 'Box', key: 'cache' }) }
+    await ui.unmount()
+    return r
+  }
+  expect((await draw()).texts).toMatch(/No cache yet\nThe first reply caches this chat/)
+
+  // A reply: 94k tokens of context on Opus, no lifetime in the transcript yet (5 minutes, assumed).
+  await $.turn.complete({ answer: '', durationMs: 5_000, isAborted: false, turnId: 't1', reason: 'answer' })
+  let d = await draw()
+  expect(d.texts).toMatch(/Continue here\nThe next message reads this chat's 94k tokens from the cache: \$0\.02 instead of \$0\.47\./)
+  expect(d.texts).toMatch(/5-minute cache \(assumed\)/)
+  expect(d.texts).toMatch(/Next message, cache warm\n\$0\.02/)
+  expect(d.svgs).toMatch(/Cache 5 min left/)
+  expect(d.card?.props?.borderColor).toBe('#1fa37a')
+  expect(runs.some(a => a.some(x => String(x).endsWith('cache-ttl.mjs')))).toBe(true)
+
+  opts.now = now + 4.5 * MIN
+  d = await draw()
+  expect(d.texts).toMatch(/Reply soon to keep the cache\nIt lapses at \d+:\d\d\. After that the next message writes the 94k tokens again \(\$0\.47\)\./)
+  expect(d.card?.props?.borderColor).toBe('#d98a1c')
+
+  opts.now = now + 6 * MIN
+  d = await draw()
+  expect(d.texts).toMatch(/Cache expired\nIt lapsed at \d+:\d\d\. The next message writes the 94k tokens again \(\$0\.47\); for a new topic a new session starts smaller\./)
+  expect(d.card?.props?.borderColor).toBe('#e0483f')
+  const term = await draw('terminal')
+  expect(term.texts).toMatch(/Cache expired · expired/)
+  expect(term.texts).toMatch(/▱▱│▱{8,}/)
+
+  // The transcript says the chat writes 1-hour entries: 6 minutes later it is still warm, and a
+  // lapse costs 2 × input.
+  opts.ttl = '1h'
+  await $.turn.complete({ answer: '', durationMs: 5_000, isAborted: false, turnId: 't2', reason: 'answer' })
+  opts.now += 6 * MIN
+  d = await draw()
+  expect(d.texts).toMatch(/Continue here\nThe next message reads this chat's 94k tokens from the cache: \$0\.02 instead of \$0\.75\./)
+  expect(d.texts).toMatch(/1-hour cache\n/)
+  expect(d.svgs).toMatch(/Cache 53 min left/)
+  expect((await draw('terminal')).texts).toMatch(/Continue here · 53 min left\n▰+│▰+▱+\n/)
+})
+
+test('the ticker redraws the pane only when the cache card\'s minute or state changes, and never once it lapsed', async ($: any, on: any) => {
+  const MIN = 60_000
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const opts = { now }
+  const seen = engine(on, opts)
+  const ticks: (() => void)[] = []
+  on('clock.every', () => new Promise<any>(res => ticks.push(() => res({ value: undefined }))))
+  on('turn.complete', () => ({ text: '', usage: { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 4_000 } }))
+  await start($)
+  await $.turn.complete({ answer: '', durationMs: 5_000, isAborted: false, turnId: 't1', reason: 'answer' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0)) }
+  const tick = async () => {
+    await settle()
+    expect(ticks.length).toBeGreaterThan(0)
+    const before = seen.redraws
+    ticks.shift()!()
+    await settle()
+    return seen.redraws - before
+  }
+  const steps: number[] = []
+  steps.push(await tick())
+  // Whole minutes, rounded down: 4:50 left reads 4 min.
+  opts.now = now + 10_000
+  steps.push(await tick())
+  opts.now = now + 20_000
+  steps.push(await tick())
+  opts.now = now + 2 * MIN
+  steps.push(await tick())
+  steps.push(await tick())
+  opts.now = now + 5 * MIN + 1
+  steps.push(await tick())
+  opts.now = now + 40 * MIN
+  steps.push(await tick())
+  expect(steps).toEqual([0, 1, 0, 1, 0, 1, 0])
   await ui.unmount()
 })

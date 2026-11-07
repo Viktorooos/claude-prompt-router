@@ -2,7 +2,7 @@ import type { Level } from '../types'
 import { sha256 } from './hash.ts'
 
 // The router logic every platform shares: the classifier prompt, reading its answer, the options.
-// Platform code (Claude Code mod, Codex hook, OpenCode plugin) imports it and adds only its own I/O.
+// Platform code (Claude Code mod, OpenCode plugin) imports it and adds only its own I/O.
 
 export const LEVELS: readonly Level[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
@@ -102,7 +102,7 @@ export function knownModel(v: unknown): Model | '' {
   return ALL_MODELS.find(m => t.includes(m)) ?? ''
 }
 
-// The router's model a platform maps to this model id (the Codex and OpenCode `models` option), or ''.
+// The router's model a platform maps to this model id (the OpenCode `models` option), or ''.
 export function mappedModel(models: Partial<Record<Model, string>>, id: string): Model | '' {
   return (id && ALL_MODELS.find(m => models[m] === id)) || ''
 }
@@ -323,7 +323,7 @@ export function switchSource(k: Switch, o: Record<string, unknown>): Source {
   return old ? { ...old, from: 'old' } : { value: SWITCHES[k][0], from: 'default', key: k }
 }
 
-// defaults: a platform's own defaults (the Codex classifier is haiku).
+// defaults: a platform's own defaults.
 export function optionSources(o: Record<string, unknown>, defaults: Record<string, string> = {}): Record<Option, Source> {
   const d: Record<string, string> = { project: '', rules: '', language: 'auto', classifier: 'sonnet', ...defaults }
   const cfg = toConfig({ ...defaults, ...o })

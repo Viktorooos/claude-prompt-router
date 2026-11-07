@@ -4,11 +4,11 @@ import type { ConfigRow, EngineInterface, PromptSubmitInput, Register, SessionMe
 import type { LastDecision, Level } from '../types'
 import { ALL_MODELS, BASE_MODELS, claudeDir, quickReply, DECIDE_OTHER, DEFAULT_WINDOW, above, compactWindow, isRedo, promptKey, LEVELS, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, SWITCHES, CLASSIFIERS, OPTIONS, allowed, asLevel, compareTarget, preferSession, clip, describeOptions, knownModel, norm, optionsLine, parseFollows, parsePick, pickPrompt, TOLD_OTHER, toConfig, typed, userLang } from '../core/router.ts'
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
-import { usageOf } from '../core/prices.ts'
+import { cacheCosts, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
-import { TONES, TONE_THEME, WHERE_LABEL, ago, barText, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
-import type { CardIcon } from '../core/panel.ts'
+import { CACHE_TONE, TONES, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, UsageScan } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
@@ -29,6 +29,14 @@ const PANE = 'prompt-router'
 const PANE_TITLE = 'Prompt Router'
 // Change the tag when LastDecision's fields change: a value an older copy stored then reads as none.
 const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })
+// The chat's prompt cache for the Cache card; in $.state, so a reload (saving an option) keeps it.
+const CACHE = atom({ plugin: 'prompt-router', key: 'cache' } as const, null, { shape: 'cache-1' })
+// The session's folder and transcript (found on the first reply), the ticker that redraws while the
+// cache counts down, and the card's label as the pane last drew it.
+let sessionCwd = ''
+let transcriptFile = ''
+let cacheTicker: { cancel: () => void } | null = null
+let drawnCache = ''
 
 // Claude Code's config folder (~/.claude or CLAUDE_CONFIG_DIR), known from session.start on.
 let configDir = ''
@@ -808,6 +816,33 @@ async function loadOptions($: EngineInterface) {
   await log($, 'effective options', `${$.plugin.root} | ${optionsLine(opts)}`)
 }
 
+// The chat's last request read or wrote its prompt cache: when (the transcript's time of the last
+// reply when it falls in this turn, else now) and for how long (the transcript's newest cache write,
+// else the last one known). scripts/cache-ttl.mjs reads the transcript's tail.
+async function markCache($: EngineInterface, model: string, durationMs: number | undefined) {
+  const end = await $.clock.now()
+  let found: { ttl?: unknown; ts?: unknown; file?: unknown } = {}
+  if (configDir && sessionId) {
+    const script = `${$.plugin.root}/scripts/cache-ttl.mjs`
+    try {
+      const r = await $.process.run(transcriptFile ? ['node', script, transcriptFile] : ['node', script, `${configDir}/projects`, sessionId, sessionCwd], { timeoutMs: 5_000 })
+      found = JSON.parse(r.stdout || '{}') as typeof found
+      if (typeof found.file === 'string') transcriptFile = found.file
+    } catch (err) {
+      await log($, 'cache', err)
+    }
+  }
+  const from = end - (typeof durationMs === 'number' ? durationMs : 10 * 60_000) - 1_000
+  const at = typeof found.ts === 'number' && found.ts >= from && found.ts <= end ? found.ts : end
+  const prev = await read($, CACHE)
+  const ttl = found.ttl === '1h' || found.ttl === '5m' ? found.ttl : (prev?.ttl ?? null)
+  await update($, CACHE, () => ({ at, ttl, model }))
+}
+
+// The card's state and time as one label: the ticker redraws only when it changes (once a minute
+// while the cache counts down, never once it lapsed).
+const cacheLabel = (v: CacheView) => `${v.state}|${cacheTime(v)}`
+
 // What the pane draws, read fresh on every draw (the atom read subscribes it to the next decision).
 async function paneData($: EngineInterface) {
   const now = await $.clock.now()
@@ -834,7 +869,10 @@ async function paneData($: EngineInterface) {
     const c = compareNow()
     savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now) }
   }
-  return { now, last, tokens, window: win, share, at, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
+  const mark = await read($, CACHE)
+  const view = cacheView(mark, model, now)
+  const cache = { mark, view, costs: cacheCosts(tokens, model || mark?.model, view.ttl) }
+  return { now, last, tokens, window: win, share, at, cache, model, tone: tone(share, at), header: `${model ? MODEL_NAMES[model] : 'Model unknown'} · ${effort ? NAMES[effort] : 'effort unknown'}`, savings }
 }
 
 // openPane on: opens the pane unasked at the session's start (placed from 144 terminal columns,
@@ -880,6 +918,25 @@ export const register: Register = (on, options) => {
       sessionId = String((await $.session.id()) ?? '')
     } catch {
       sessionId = ''
+    }
+    sessionCwd = typeof e.cwd === 'string' ? e.cwd : ''
+    transcriptFile = ''
+    drawnCache = ''
+    cacheTicker?.cancel()
+    cacheTicker = null
+    // Until the pane has drawn the card there is nothing to move on.
+    const tick = async () => {
+      if (!drawnCache) return
+      // The same model paneData goes by, so the ticker's label matches the one drawn.
+      const label = cacheLabel(cacheView(await read($, CACHE), knownModel(seenModel || (await chatModel($))), await $.clock.now()))
+      if (label === drawnCache) return
+      drawnCache = label
+      redraw($)
+    }
+    try {
+      cacheTicker = $.clock.every(15_000, () => tick().catch(() => {}))
+    } catch {
+      // No timers here: the card moves on with each reply.
     }
     pending.items = []
     baseline = ''
@@ -1038,8 +1095,19 @@ export const register: Register = (on, options) => {
   // Each finished turn (main chat or subagent): its tokens and the model it would have run on.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (!e.agentId) redraw($)
-    if (!enabled || cfg.stats !== 'on') return r
+    // A main-chat turn that sent a request read or wrote the chat's cache. Noting it redraws the
+    // pane (the drawing reads it), alongside the stats below; any other main turn redraws here.
+    const marking = !e.agentId && r.usage
+      ? markCache($, r.usage.model ?? seenModel, e.durationMs).catch(async err => {
+        redraw($)
+        await log($, 'cache', err)
+      })
+      : null
+    if (!e.agentId && !marking) redraw($)
+    if (!enabled || cfg.stats !== 'on') {
+      await marking
+      return r
+    }
     try {
       const usage = usageOf(r.usage)
       const model = r.usage?.model ?? (e.agentId ? '' : seenModel)
@@ -1070,6 +1138,7 @@ export const register: Register = (on, options) => {
     } catch (err) {
       await log($, 'stats', err)
     }
+    await marking
     return r
   })
 
@@ -1282,6 +1351,19 @@ export const register: Register = (on, options) => {
     const savedPct = s && s.withoutUsd > 0 ? Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100) : 0
     const days = d.savings?.days.slice(panePeriod === 'week' ? -7 : -14) ?? []
     const trend = days.some(x => Math.abs(x.balanceUsd) >= 0.005) && panePeriod !== 'today'
+    // The chart's readout: each day's net and what it was made of, shown while the day is hovered.
+    const dayWord = (v: number) => (v < 0 ? 'cost' : 'saved')
+    const dayPoints = days.map(x => ({
+      value: x.balanceUsd,
+      head: `${dayLabel(x.day)}: ${dayWord(x.balanceUsd)} ${usd(Math.abs(x.balanceUsd))}`,
+      detail: x.prompts ? `${usd(x.actualUsd + x.classifierUsd)} with router · ${usd(x.withoutUsd)} without · ${x.prompts} prompt${x.prompts === 1 ? '' : 's'}` : 'No prompts that day',
+    }))
+    const daySum = days.reduce((a, x) => a + x.balanceUsd, 0)
+    const best = days.reduce<(typeof days)[number] | null>((a, x) => (!a || x.balanceUsd > a.balanceUsd ? x : a), null)
+    const dayIdle = {
+      head: `${days.length} days: ${dayWord(daySum)} ${usd(Math.abs(daySum))}`,
+      detail: best && best.balanceUsd >= 0.005 ? `Best ${dayLabel(best.day)}, ${usd(best.balanceUsd)} · point at a day for its numbers` : 'Point at a day for its numbers',
+    }
     const stat = (key: string, label: string, value: string, color?: string) => (
       <Box key={key} flexDirection="column" flexGrow={1}>
         <Text dimColor>{label}</Text>
@@ -1330,12 +1412,66 @@ export const register: Register = (on, options) => {
         </Box>
       ) : null,
       trend ? (
-        <Box key="saved-trend" flexDirection="column" gap={0}>
+        <Box key="saved-trend" flexDirection="column" gap={0} width="100%">
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
-          <Svg source={sparkSvg(days.map(x => x.balanceUsd), days.map(x => `${x.day}: ${usd(x.balanceUsd)}`), px, 48, savedColor, false)} alt="Saved per day" height={48} />
+          <Svg source={sparkSvg(dayPoints, dayIdle, 108, savedColor)} alt={`Saved per day: ${dayIdle.head}`} height={108} isInteractive />
         </Box>
       ) : null,
     ], { tint: `${savedColor}0d` })
+
+    // The prompt cache: whether the next message still reads this chat's context from it, so the
+    // person sees whether going on here is cheap. Green while warm, amber in its last fifth, red once
+    // it lapsed or the chat moved to another model, grey before the first reply.
+    const cv = d.cache.view
+    drawnCache = cacheLabel(cv)
+    const live = cv.state !== 'none'
+    const cTone = CACHE_TONE[cv.state]
+    const cColor = TONES[cTone][0]
+    const cc = d.cache.costs
+    const tok = d.tokens ? `${kTokens(d.tokens)} tokens` : 'context'
+    const lastAt = d.cache.mark ? clockTime(d.cache.mark.at) : ''
+    const lapse = d.cache.mark ? clockTime(d.cache.mark.at + cv.ttlMs) : ''
+    const rewrite = `the next message writes the ${tok} again${cc ? ` (${usd(cc.cold)})` : ''}`
+    const was = knownModel(d.cache.mark?.model)
+    const [cacheName, cacheSub] = (() => {
+      switch (cv.state) {
+        case 'none': return ['No cache yet', 'The first reply caches this chat; later messages read it for a fraction of the price.']
+        case 'warm': return ['Continue here', `The next message reads this chat's ${tok} from the cache${cc ? `: ${usd(cc.warm)} instead of ${usd(cc.cold)}` : ''}.`]
+        case 'soon': return ['Reply soon to keep the cache', `It lapses at ${lapse}. After that ${rewrite}.`]
+        default: return cv.moved
+          ? ['The cache starts over', `This chat now runs on ${d.model ? MODEL_NAMES[d.model] : 'another model'}, the cache was on ${was ? MODEL_NAMES[was] : 'another'}: ${rewrite}.`]
+          : ['Cache expired', `It lapsed at ${lapse}. ${rewrite[0]!.toUpperCase()}${rewrite.slice(1)}; for a new topic a new session starts smaller.`]
+      }
+    })()
+    const cTime = cacheTime(cv)
+    const cKind = `${TTL_NAME[cv.ttl]} cache${d.cache.mark?.ttl ? '' : ' (assumed)'}`
+    const cacheCard = term ? section('cache',
+      title('cache-title', 'Cache'),
+      <Box key="cache-v" flexDirection="column">
+        <Text bold color={TONE_THEME[cTone]}>{live ? `${cacheName} · ${cTime}` : cacheName}</Text>
+        {live ? <Text color={TONE_THEME[cTone]}>{barText(cv.share * 100, 20, cells)}</Text> : null}
+        <Text dimColor wrap="wrap">{cacheSub}</Text>
+        {live ? <Text dimColor>{`${cKind} · last reply ${lastAt}`}</Text> : null}
+      </Box>,
+    ) : !live ? card('cache', [head('cache-head', 'clock', cColor, cacheName, cacheSub)]) : card('cache', [
+      head('cache-head', 'clock', cColor, cacheName, cacheSub, { strong: true }),
+      <Box key="cache-v" flexDirection="column" gap={1}>
+        <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
+          <Box flexGrow={1} flexShrink={1} minWidth={0}>
+            <Svg source={bigNumberSvg(`${cTime[0]!.toUpperCase()}${cTime.slice(1)}`, cColor, px, 30)} alt={`Cache ${cTime}`} height={38} />
+          </Box>
+          <Box flexShrink={0}><Text dimColor>{cKind}</Text></Box>
+        </Box>
+        <Svg source={cacheBarSvg(cv, 10)} alt={`Cache ${cTime}`} height={16} />
+      </Box>,
+      cc ? (
+        <Box key="cache-cost" flexDirection="row" gap={3}>
+          {stat('cache-warm', 'Next message, cache warm', usd(cc.warm), cv.state === 'cold' ? undefined : cColor)}
+          {stat('cache-cold', 'Once it lapsed', usd(cc.cold), cv.state === 'cold' ? cColor : undefined)}
+        </Box>
+      ) : null,
+      <Text key="cache-foot" dimColor wrap="wrap">{`Last reply ${lastAt} · every message starts the ${cv.ttl === '1h' ? 'hour' : '5 minutes'} again · list prices`}</Text>,
+    ], { borderColor: cColor, tint: `${cColor}12` })
 
     // This chat: its context against the share where the router asks for a new session.
     const ctxRight = d.tokens ? `${kTokens(d.tokens)} of ${kTokens(d.window)} tokens` : 'context not known yet'
@@ -1553,7 +1689,9 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" gap={term ? 1 : narrow ? 1 : 2} padding={term ? 0 : 1}>
         {term ? <Text dimColor>{`Prompt Router · ${enabled ? 'on' : 'off'}`}</Text> : null}
         {saved ?? tabs}
-        {term && (saved || tabs) ? rule('rule-chat') : null}
+        {term && (saved || tabs) ? rule('rule-cache') : null}
+        {cacheCard}
+        {term ? rule('rule-chat') : null}
         {chat}
         {d.savings ? null : <Text dimColor>Savings stats are off.</Text>}
         {term ? rule('rule-settings') : null}

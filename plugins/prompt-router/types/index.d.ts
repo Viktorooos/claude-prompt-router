@@ -15,6 +15,14 @@ export type LastDecision = {
   window: number | null
 }
 
+/** The chat's prompt cache, for the pane's Cache card: when the last main-chat request read or wrote
+ *  it, how long an entry lives (null: not known yet), and the model it belongs to. */
+export type CacheMark = {
+  at: number
+  ttl: '5m' | '1h' | null
+  model: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'prompt-router': {
@@ -24,6 +32,8 @@ declare module 'claude-code' {
       model: 'haiku' | 'sonnet' | 'opus' | 'fable' | null
       /** The last routing decision, for the pane. */
       last: Shaped<LastDecision | null>
+      /** The chat's prompt cache, for the pane. */
+      cache: Shaped<CacheMark | null>
       /** The pane's open folds, kept across the reload that saving an option causes. */
       paneOpen: string[] | null
     }

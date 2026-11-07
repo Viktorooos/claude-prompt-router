@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { MODELS } from '../core/router.ts'
-import { MODEL_PRICES, PRICES, cost, priceOf, usageOf } from '../core/prices.ts'
+import { PRICES, cacheCosts, cost, priceOf, usageOf } from '../core/prices.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
 function close(a: number | null, b: number) {
@@ -23,18 +23,6 @@ test('priceOf knows short names and model ids, not other providers', () => {
   expect(priceOf(undefined)).toBe(null)
 })
 
-test('priceOf knows the GPT models Codex runs, by exact id or a dated id', () => {
-  expect(priceOf('gpt-6-luna')).toEqual({ input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0 })
-  expect(priceOf('gpt-6.1-terra')).toEqual({ input: 1, output: 5, cacheRead: 0.05, cacheWrite: 0 })
-  expect(priceOf('gpt-6.1-sol')).toEqual({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 })
-  expect(priceOf('GPT-6-Astra')).toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 0 })
-  // gpt-6-sol is an older model with its own price, not gpt-6.1-sol's.
-  expect(priceOf('gpt-6-sol')).toEqual({ input: 2, output: 10, cacheRead: 0.2, cacheWrite: 0 })
-  expect(priceOf('gpt-6.1-sol-2026-09-01')).toEqual(MODEL_PRICES['gpt-6.1-sol'])
-  expect(priceOf('gpt-6.1-solar')).toBe(null)
-  close(cost({ input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 }, 'gpt-6.1-sol'), 2 + 10 + 0.1)
-})
-
 test('cost adds the four kinds of tokens, each at its own price per 1M', () => {
   const p = PRICES.sonnet
   const usd = cost({ input: 2_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 }, 'sonnet')
@@ -48,4 +36,14 @@ test('usageOf reads the Claude Code turn usage', () => {
     .toEqual({ input: 5, output: 6, cacheRead: 7, cacheWrite: 8 })
   expect(usageOf(undefined)).toBe(null)
   expect(usageOf({ input_tokens: 1 })).toEqual({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0 })
+})
+
+test('cacheCosts: the context read from a warm cache, or written again (1-hour entries at 2 × input, 5-minute at 1.25 ×)', () => {
+  const five = cacheCosts(100_000, 'claude-opus-5-5', '5m')
+  close(five?.warm ?? null, 0.02)
+  close(five?.cold ?? null, 0.5)
+  close(cacheCosts(100_000, 'opus', '1h')?.cold ?? null, 0.8)
+  expect(cacheCosts(null, 'opus', '5m')).toBe(null)
+  expect(cacheCosts(0, 'opus', '5m')).toBe(null)
+  expect(cacheCosts(100_000, 'gpt-5', '5m')).toBe(null)
 })

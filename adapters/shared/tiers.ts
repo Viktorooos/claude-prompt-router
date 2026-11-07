@@ -1,4 +1,4 @@
-// Tier names the Codex and OpenCode options use: those agents run any provider's models, so the
+// Tier names the OpenCode options use: those agents run any provider's models, so the
 // options name a tier, not a Claude model. The router core keeps its own names (haiku…fable);
 // the old names still work in the options as aliases.
 import { knownModel } from '../../plugins/prompt-router/core/router.ts'
