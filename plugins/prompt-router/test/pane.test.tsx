@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, sparkDaySvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -471,23 +471,26 @@ test('drawings: tone, bars, sparklines and times', () => {
   const left = splitBarSvg(-0.5, '#e0483f', 100, 8)
   expect(left).toMatch(/<rect x="25" width="25" [^>]*fill="#e0483f"/)
   expect(left).not.toMatch(/@keyframes|<script|on\w+=/)
-  const spark = sparkSvg([0, 0.1, -0.05, 0.3])
-  // Full width: the line stretches (its stroke does not), the days sit at percent positions.
-  expect(spark).toMatch(/^<svg [^>]*width="100%"/)
-  expect(spark).toMatch(/preserveAspectRatio="none"/)
-  expect(spark).toMatch(/vector-effect="non-scaling-stroke"/)
-  expect(spark).toMatch(/cx="87.5%"/)
-  // A plain image: no hover of its own and no <title>; the pane lays the hover over it.
-  expect(spark).not.toMatch(/<title>|:hover/)
-  // A day's highlight: a soft guide down its column and its dot on a halo, at the plot's own point.
-  const hi = sparkDaySvg([0, 0.1, -0.05, 0.3], 1)
-  expect(hi).toMatch(/<line x1="37.5%"[^>]*stroke="url\(#g\)"[^>]*\/><circle class="a" cx="37.5%"[^>]*r="8"[^>]*\/><circle class="d" cx="37.5%"[^>]*r="4"/)
-  const cy = (svg: string, x: string) => svg.match(new RegExp(`cx="${x}" cy="([\\d.]+)"`))?.[1]
-  expect(cy(hi, '37.5%')).toBeDefined()
-  expect(cy(sparkDaySvg([0, 0.1, -0.05, 0.3], 3), '87.5%')).toBe(cy(spark, '87.5%'))
-  for (const svg of [spark, hi]) expect(svg).not.toMatch(/animation|transition|<script|on\w+=/)
+  const vals = [0, 0.1, -0.05, 0.3]
+  const slices = vals.map((_, i) => sparkSvg(vals, i))
+  // Each day is its column's slice of one line: the whole path, cropped by the viewBox to the column,
+  // stretched to the width (its stroke is not).
+  expect(slices[1]).toMatch(/^<svg [^>]*width="100%"/)
+  expect(slices[1]).toMatch(/viewBox="250 0 250 76" preserveAspectRatio="none"/)
+  expect(slices[1]).toMatch(/vector-effect="non-scaling-stroke"/)
+  expect(new Set(slices.map(x => x.match(/<path d="([^"]+)" fill="none"/)?.[1])).size).toBe(1)
+  // The last day's dot, in its own column only; a plain image: no hover of its own, no <title>.
+  expect(slices[3]).toMatch(/<circle cx="50%"[^>]*r="3.2"/)
+  expect(slices[2]).not.toMatch(/<circle/)
+  for (const x of slices) expect(x).not.toMatch(/<title>|:hover/)
+  // A day's highlight: a soft guide down its column and its dot on a halo, at the line's own point.
+  const hi = sparkSvg(vals, 3, 76, '#1fa37a', true)
+  expect(hi).toMatch(/<rect x="50%"[^>]*fill="url\(#g\)"\/><circle class="a" cx="50%"[^>]*r="8"[^>]*\/><circle class="d" cx="50%"[^>]*r="4"/)
+  const cy = (svg: string, r: string) => svg.match(new RegExp(`cy="([\\d.]+)" r="${r}"`))?.[1]
+  expect(cy(hi, '4')).toBe(cy(slices[3]!, '3.2'))
+  for (const x of [...slices, hi]) expect(x).not.toMatch(/animation|transition|<script|on\w+=/)
   expect(dayLabel('2026-11-05')).toBe('Thu 5 Nov')
-  for (const s of [ring, left, spark]) expect(s.length).toBeLessThan(20_000)
+  for (const s of [ring, left, ...slices]) expect(s.length).toBeLessThan(20_000)
 })
 
 
@@ -743,13 +746,16 @@ test('the day chart hovers without a sandboxed frame: with one, a click on a set
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   // No Svg anywhere in the pane is drawn as a frame.
   expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).not.toMatch(/isInteractive/)
-  // One invisible column per day lights its own hover group; the group shows that day's highlight and numbers.
-  const chart = JSON.stringify(await ui.find({ key: 'saved-spark' }))
+  const chart = JSON.stringify(await ui.find({ key: 'saved-trend' }))
+  // One column per day, in the flow (an absolute Box takes no pointer of its own), lights its own hover
+  // group: the day's highlight over its slice and the day's numbers in the readout.
   expect(chart.match(/"key":"spark-col-\d+"/g)).toHaveLength(7)
-  expect(chart).toMatch(/"key":"spark-col-6"[^}]*\},"hover":\{"scope":"spark-day-6"\}/)
-  expect(chart).toMatch(/"key":"spark-day-6","position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\},"children":\[\{"type":"Svg"[^]*?: saved \$\d+\.\d\d/)
-  // The idle readout clears while a day is hovered.
-  expect(chart).toMatch(/"hover":\{"color":"transparent"\}[^]*days: saved/)
+  expect(chart).toMatch(/"key":"spark-col-6","width":0,"flexGrow":1\},"hover":\{"scope":"spark-day-6"\},"children":\[\{"type":"Svg"[^]*?"position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\}/)
+  expect(chart).not.toMatch(/"key":"spark-cols","position"|"key":"spark-col-\d+","position"/)
+  expect(chart).toMatch(/"key":"spark-read-6","position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\},"children":\[\{"type":"Text"[^]*?: saved \$\d+\.\d\d/)
+  // The period's readout clears while any day is hovered.
+  expect(chart).toMatch(/"key":"spark-cols"[^}]*\},"hover":\{"scope":"spark-any"\}/)
+  expect(chart).toMatch(/"hover":\{"scope":"spark-any","color":"transparent"\},"children":\["7 days: saved/)
   await ui.unmount()
 })
 

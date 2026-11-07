@@ -7,7 +7,7 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
-import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkDaySvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
 
@@ -27,7 +27,7 @@ const BLUE = '#5b9cf6'
 const TEAL = '#36b3a8'
 const PANE = 'prompt-router'
 // The day chart's height in pixels on the desktop.
-const SPARK_PX = 108
+const SPARK_PX = 76
 const PANE_TITLE = 'Prompt Router'
 // Change the tag when LastDecision's fields change: a value an older copy stored then reads as none.
 const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })
@@ -1487,29 +1487,29 @@ export const register: Register = (on, options) => {
       trend ? (
         <Box key="saved-trend" flexDirection="column" gap={0} width="100%">
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
-          {/* The plot is a plain image. Over it, one invisible column per day lights its own hover
-              group, which shows that day's highlight and numbers; the idle readout turns transparent
-              while any column is hovered. The pane does the hover, so no sandboxed frame. */}
-          <Box key="saved-spark" width="100%">
-            <Svg source={sparkSvg(dayValues, SPARK_PX, savedColor)} alt={`Saved per day: ${dayIdle.head}`} height={SPARK_PX} />
+          {/* The readout: the period while no day is hovered, the day's numbers while one is. */}
+          <Box flexDirection="column">
+            <Text bold hover={{ scope: 'spark-any', color: 'transparent' }}>{dayIdle.head}</Text>
+            <Text dimColor hover={{ scope: 'spark-any', color: 'transparent' }}>{dayIdle.detail}</Text>
             {dayPoints.map((p, i) => (
-              <Box key={`spark-day-${i}`} position="absolute" top={0} left={0} width="100%" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
-                <Svg source={sparkDaySvg(dayValues, i, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
-                <Box position="absolute" top={0} left={0} flexDirection="column">
-                  <Text bold>{p.head}</Text>
-                  <Text dimColor>{p.detail}</Text>
+              <Box key={`spark-read-${i}`} position="absolute" top={0} left={0} flexDirection="column" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
+                <Text bold>{p.head}</Text>
+                <Text dimColor>{p.detail}</Text>
+              </Box>
+            ))}
+          </Box>
+          {/* One column per day in the flow, each its slice of the line as a plain image and a hover
+              area of its own: the pane does the hover, no sandboxed frame. An absolute Box takes no
+              pointer of its own (it counts as its parent's), so the columns cannot sit in one. */}
+          <Box key="spark-cols" flexDirection="row" width="100%" hover={{ scope: 'spark-any' }}>
+            {dayPoints.map((p, i) => (
+              <Box key={`spark-col-${i}`} width={0} flexGrow={1} hover={{ scope: `spark-day-${i}` }}>
+                <Svg source={sparkSvg(dayValues, i, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
+                <Box position="absolute" top={0} left={0} width="100%" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
+                  <Svg source={sparkSvg(dayValues, i, SPARK_PX, savedColor, true)} alt={p.head} height={SPARK_PX} />
                 </Box>
               </Box>
             ))}
-            <Box key="spark-hit" position="absolute" top={0} left={0} width="100%" height="100%" flexDirection="row">
-              <Box position="absolute" top={0} left={0} flexDirection="column">
-                <Text bold hover={{ color: 'transparent' }}>{dayIdle.head}</Text>
-                <Text dimColor hover={{ color: 'transparent' }}>{dayIdle.detail}</Text>
-              </Box>
-              {dayPoints.map((p, i) => (
-                <Box key={`spark-col-${i}`} width={0} flexGrow={1} height="100%" hover={{ scope: `spark-day-${i}` }} />
-              ))}
-            </Box>
           </Box>
         </Box>
       ) : null,
