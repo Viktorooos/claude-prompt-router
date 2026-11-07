@@ -1516,7 +1516,7 @@ export const register: Register = (on, options) => {
       trend ? (
         <Box key="saved-trend" flexDirection="column" gap={0} width="100%">
           <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
-          <Svg source={sparkSvg(dayPoints, dayIdle, 48, savedColor)} alt={`Saved per day: ${dayIdle.head}`} height={48} />
+          <Svg source={sparkSvg(dayPoints, dayIdle, 108, savedColor)} alt={`Saved per day: ${dayIdle.head}`} height={108} isInteractive />
         </Box>
       ) : null,
     ], { tint: `${savedColor}0d` })
