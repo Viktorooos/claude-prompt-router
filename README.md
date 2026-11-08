@@ -6,7 +6,7 @@
 
 **Routes every prompt to the right place, model and effort, and shows you what that saved.**
 
-![version](https://img.shields.io/badge/version-0.10.0-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-mod-d97757?style=flat-square)
 ![OpenCode](https://img.shields.io/badge/OpenCode-plugin-4b5563?style=flat-square)
@@ -637,7 +637,7 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models`. `t
 <a id="whats-new"></a>
 ## 🆕 What's new
 
-### Since 0.10.0 (in the repo, version still 0.10.0)
+### 1.0.0
 
 **The pane** (`/router panel`)
 - **You saved** first: the headline saving for Today / 7 days / Total, Without router vs. With router, a percent, and what it is compared with. A loss reads as one (minus sign, red) and says why; too little data says so.
@@ -664,6 +664,7 @@ Cases can override `project`, `rules`, `language`, `classifier` and `models`. `t
 
 | Version | Changes |
 | --- | --- |
+| **1.0.0** | The pane: You saved with a per-day line, the Cache card, This chat, What you got, Settings for every option and Details with the accuracy ring. `sessionSuggestions: auto`, `newSessionAt` 10–100 %, `openPane`. Removed: the band, the control group and measured saving; Codex paused. |
 | **0.10.0** | Savings are an estimate from list prices only. Declined offers and repeated prompts (redo) are logged; a redo counts as a correction in the balance per task. A task's cost includes its subagents and the classifier. Cut-off turns get their tokens from the chat's transcript. Effort is no longer re-priced by a guess. OpenCode logs the same task fields. A plain reply (`yes`, `ok`, `option 2`, a number or a letter, in five languages) keeps the prompt with no classifier call. The stats log keeps no prompt text, only a hash. Claude Code: parallel sessions no longer lose stats or log lines; the config folder comes from `CLAUDE_CONFIG_DIR`, `HOME` or `USERPROFILE`. |
 | **0.9.2** | Pane: folds stay open after a settings change; no effort button for `compareWith: history`. |
 | **0.9.1** | `compareWith: history` and the `compareWith` option (Opus medium by default, any model and effort, or `first`). `subagentSuggestions: auto` starts the suggested subagent with no question (Claude Code). |
