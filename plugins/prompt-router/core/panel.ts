@@ -71,8 +71,8 @@ ${STILL}
 
 // One day's column of the net-saving chart as a line: its slice of one smooth line over a soft area
 // (the whole path, cropped to the column by a viewBox, so the slices meet seamlessly), a small point
-// on the day, and the day's label under it; a clear dip below the zero line turns the
-// line and its area red; the line resting on zero stays green, so a cent's loss does not flicker. Every column keeps the same room for its label, so the
+// on the day, and the day's label under it; a day in the minus turns its stretch of the
+// line red, however small the loss, and the area below the zero line red too. Every column keeps the same room for its label, so the
 // line meets itself across them. The last day's point is the strongest. hover: drawn over the column,
 // only the day's point on a halo and the label as a chip. The pane lines the columns up, each a hover area of its own; no sandboxed frame
 // (Svg isInteractive), which on the desktop pulled the pane's scroll to its bottom after a click on a
@@ -113,11 +113,14 @@ export function dayLineSvg(values: readonly number[], i: number, label = '', hei
   const tail = last ? ` L${VB} ${last[1]}` : ''
   const path = first ? `${lead}${line.slice(line.indexOf(' C') >= 0 ? line.indexOf(' C') : line.length)}${tail}` : ''
   const area = first ? `${path} L${VB} ${zero} L0 ${zero}Z` : ''
+  // The line takes each day's color across most of its column, red on a day in the minus however
+  // small, and blends into its neighbour's near the edge between them.
+  const dayStops = values.map((x, k) => { const c = x < 0 ? RED : color; return `<stop offset="${n((k + 0.2) / count)}" stop-color="${c}"/><stop offset="${n((k + 0.8) / count)}" stop-color="${c}"/>` }).join('')
   const w = n(VB / count)
   const isLast = i === values.length - 1
   const point = isLast ? `<circle cx="50%" cy="${cy}" r="7" fill="${tone}" opacity=".18"/><circle class="d" cx="50%" cy="${cy}" r="3.6" fill="${tone}" stroke-width="1.5"/>` : `<circle cx="50%" cy="${cy}" r="2" fill="${tone}" opacity=".7"/>`
   const text = label ? `<text x="50%" y="${ty}" ${font} class="m">${esc(label)}</text>` : ''
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.m{fill:#8a8f98}.d{stroke:#fff}@media (prefers-color-scheme: dark){.d{stroke:#1d1f23}}</style><defs><linearGradient id="f" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${height}"><stop offset="${n(top / height)}" stop-color="${color}" stop-opacity=".3"/><stop offset="${n(zero / height)}" stop-color="${color}" stop-opacity="0"/><stop offset="${n((zero + 1.5) / height)}" stop-color="${RED}" stop-opacity="0"/><stop offset="${n(bottom / height)}" stop-color="${RED}" stop-opacity=".28"/></linearGradient><linearGradient id="s" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${height}"><stop offset="${n((zero + 1.5) / height)}" stop-color="${color}"/><stop offset="${n((zero + 4) / height)}" stop-color="${RED}"/></linearGradient></defs><svg width="100%" height="${height}" viewBox="${n(i * w)} 0 ${w} ${height}" preserveAspectRatio="none"><path d="${area}" fill="url(#f)"/><path d="${path}" fill="none" stroke="url(#s)" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg><line x1="0" y1="${zero}" x2="100%" y2="${zero}" stroke="#8a8f98" stroke-opacity=".28" stroke-width="1"/>${point}${text}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.m{fill:#8a8f98}.d{stroke:#fff}@media (prefers-color-scheme: dark){.d{stroke:#1d1f23}}</style><defs><linearGradient id="f" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${height}"><stop offset="${n(top / height)}" stop-color="${color}" stop-opacity=".3"/><stop offset="${n(zero / height)}" stop-color="${color}" stop-opacity="0"/><stop offset="${n((zero + 1.5) / height)}" stop-color="${RED}" stop-opacity="0"/><stop offset="${n(bottom / height)}" stop-color="${RED}" stop-opacity=".28"/></linearGradient><linearGradient id="s" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${VB}" y2="0">${dayStops}</linearGradient></defs><svg width="100%" height="${height}" viewBox="${n(i * w)} 0 ${w} ${height}" preserveAspectRatio="none"><path d="${area}" fill="url(#f)"/><path d="${path}" fill="none" stroke="url(#s)" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg><line x1="0" y1="${zero}" x2="100%" y2="${zero}" stroke="#8a8f98" stroke-opacity=".28" stroke-width="1"/>${point}${text}</svg>`
 }
 
 // A local day key (2026-11-05) as the chart's readout names it: Thu 5 Nov.

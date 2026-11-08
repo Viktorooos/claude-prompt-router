@@ -479,13 +479,10 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(slices[1]).toMatch(/viewBox="250 0 250 104" preserveAspectRatio="none"/)
   expect(slices[1]).toMatch(/vector-effect="non-scaling-stroke"/)
   expect(new Set(slices.map(x => x.match(/<path d="([^"]+)" fill="none"/)?.[1])).size).toBe(1)
-  // A clear dip below the zero line turns red; the line resting on zero stays green.
-  const z = Number(slices[1]!.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)![1])
-  const stops = [...slices[1]!.match(/<linearGradient id="s"[^]*?<\/linearGradient>/)![0].matchAll(/offset="([\d.]+)" stop-color="([^"]+)"/g)].map(m => [Number(m[1]) * 104, m[2]])
-  expect(stops.map(x => x[1])).toEqual(['#d97757', '#e0483f'])
-  expect(stops[0]![0]).toBeGreaterThan(z)
-  expect(stops[1]![0]).toBeGreaterThan(stops[0]![0] as number)
-  expect(stops[1]![0]).toBeLessThan(z + 6)
+  // A day in the minus turns its stretch of the line red, however small; the others keep the color.
+  const stops = [...slices[1]!.match(/<linearGradient id="s"[^]*?<\/linearGradient>/)![0].matchAll(/offset="([\d.]+)" stop-color="([^"]+)"/g)].map(m => [Number(m[1]), m[2]])
+  expect(stops).toEqual([[0.05, '#d97757'], [0.2, '#d97757'], [0.3, '#d97757'], [0.45, '#d97757'], [0.55, '#e0483f'], [0.7, '#e0483f'], [0.8, '#d97757'], [0.95, '#d97757']])
+  expect(dayLineSvg([1, -0.01, 1], 0)).toMatch(/offset="0.4" stop-color="#e0483f"/)
   expect(slices[1]).toMatch(/stroke="url\(#s\)"/)
   // One zero line at one height across the columns, labelled or not.
   const zeroY = (svg: string) => svg.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)?.[1]
