@@ -7,7 +7,7 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
-import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, dayBarSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
 
@@ -27,7 +27,7 @@ const BLUE = '#5b9cf6'
 const TEAL = '#36b3a8'
 const PANE = 'prompt-router'
 // The day chart's height in pixels on the desktop.
-const SPARK_PX = 76
+const SPARK_PX = 88
 const PANE_TITLE = 'Prompt Router'
 // Change the tag when LastDecision's fields change: a value an older copy stored then reads as none.
 const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })
@@ -1426,9 +1426,11 @@ export const register: Register = (on, options) => {
     // The chart's readout: each day's net and what it was made of, shown while the day is hovered.
     const dayWord = (v: number) => (v < 0 ? 'cost' : 'saved')
     const dayValues = days.map(x => x.balanceUsd)
-    const dayPoints = days.map(x => ({
+    const dayPoints = days.map((x, i) => ({
       value: x.balanceUsd,
       head: `${dayLabel(x.day)}: ${dayWord(x.balanceUsd)} ${usd(Math.abs(x.balanceUsd))}`,
+      // Under its bar: the weekday for a week or so, else every few days' date and the last day's.
+      label: days.length <= 10 ? dayLabel(x.day).split(' ')[0]! : i % Math.ceil(days.length / 7) === 0 || i === days.length - 1 ? dayLabel(x.day).split(' ')[1]! : '',
       detail: x.prompts ? `${usd(x.actualUsd + x.classifierUsd)} with router · ${usd(x.withoutUsd)} without · ${x.prompts} prompt${x.prompts === 1 ? '' : 's'}` : 'No prompts that day',
     }))
     const daySum = days.reduce((a, x) => a + x.balanceUsd, 0)
@@ -1499,7 +1501,7 @@ export const register: Register = (on, options) => {
               </Box>
             ))}
           </Box>
-          {/* One column per day in the flow, each its slice of the line as a plain image and a hover
+          {/* One column per day in the flow, each its bar as a plain image and a hover
               area of its own: the pane does the hover, no sandboxed frame. An absolute Box takes no
               pointer of its own (it counts as its parent's), so the columns cannot sit in one. A
               column's hover carries a transparent background besides its scope: with the scope
@@ -1507,9 +1509,9 @@ export const register: Register = (on, options) => {
           <Box key="spark-cols" flexDirection="row" width="100%">
             {dayPoints.map((p, i) => (
               <Box key={`spark-col-${i}`} width={0} flexGrow={1} hover={{ scope: `spark-day-${i}`, backgroundColor: '#00000000' }}>
-                <Svg source={sparkSvg(dayValues, i, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
+                <Svg source={dayBarSvg(dayValues, i, p.label, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
                 <Box position="absolute" top={0} left={0} width="100%" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
-                  <Svg source={sparkSvg(dayValues, i, SPARK_PX, savedColor, true)} alt={p.head} height={SPARK_PX} />
+                  <Svg source={dayBarSvg(dayValues, i, p.label, SPARK_PX, savedColor, true)} alt={p.head} height={SPARK_PX} />
                 </Box>
               </Box>
             ))}

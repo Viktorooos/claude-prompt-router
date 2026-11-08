@@ -69,45 +69,35 @@ ${STILL}
 }
 
 
-// The chart's geometry, shared by every day's slice so the slices join into one line. Each day owns
-// an equal column and its point sits in the column's middle.
-function sparkGeom(values: readonly number[], height: number) {
-  const VB = 1000
-  const py = 8
+// One day's column of the net-saving chart, drawn as a plain image: a rounded bar from the zero line
+// (red below it, a grey stub on an empty day), the zero line itself running seamlessly across the
+// columns, and the day's label under it. The pane lines the columns up across the width, each a hover
+// area of its own, so the bar is exactly what the pointer rests on; no sandboxed frame (Svg
+// isInteractive), which on the desktop pulled the pane's scroll to its bottom after a click on a
+// setting. The last day's bar is full strength, the others softer. hover: drawn over the column, a
+// soft backdrop down the whole column, the bar at full strength and the label in the bar's color.
+export function dayBarSvg(values: readonly number[], i: number, label = '', height = 88, color: string = ACCENT, hover = false): string {
+  const labelH = label ? 16 : 0
+  const top = 6
+  const bottom = height - labelH - 2
   const lo = Math.min(0, ...values)
   const hi = Math.max(0, ...values)
   const span = hi - lo || 1
-  const count = Math.max(1, values.length)
-  const y = (v: number) => n(py + ((hi - v) / span) * (height - 2 * py))
-  return { VB, count, lo, zero: y(0), pts: values.map((v, i) => [n(((i + 0.5) / count) * VB), y(v)] as const) }
-}
-
-// One day's column of the net-saving chart, drawn as a plain image: its slice of the whole line with
-// the soft area under it (the full path, cropped to the column by the viewBox, so the slices meet
-// seamlessly), and the last day's dot. The pane lines the columns up across the width, each a hover
-// area of its own; no sandboxed frame (Svg isInteractive), which on the desktop pulled the pane's
-// scroll to its bottom after a click on a setting. hover: that day's highlight instead, a soft guide
-// down the column and its dot on a halo, transparent elsewhere so the slice shows through.
-export function sparkSvg(values: readonly number[], i: number, height = 76, color: string = ACCENT, hover = false): string {
-  const { VB, count, lo, zero, pts } = sparkGeom(values, height)
-  const cy = pts[i]?.[1] ?? zero
+  const y = (v: number) => n(top + ((hi - v) / span) * (bottom - top))
+  const v = values[i] ?? 0
+  const zero = y(0)
+  const empty = Math.abs(v) < 0.005
+  const fill = empty ? '#8a8f98' : v < 0 ? '#e0483f' : color
+  const barY = empty ? n(zero - 1) : Math.min(y(v), zero)
+  const barH = empty ? 2 : Math.max(2, n(Math.abs(y(v) - zero)))
+  const last = i === values.length - 1
+  const font = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="10" text-anchor="middle"'
+  const text = (attrs: string) => (label ? `<text x="50%" y="${height - 3}" ${font} ${attrs}>${esc(label)}</text>` : '')
+  const bar = (attrs: string) => `<rect x="20%" y="${barY}" width="60%" height="${barH}" rx="3" fill="${fill}" ${attrs}/>`
   if (hover) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.d{stroke:#fff}@media (prefers-color-scheme: dark){.d{stroke:#1d1f23}.a{opacity:.28}}</style><defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="0"/><stop offset=".35" stop-color="${color}" stop-opacity=".45"/><stop offset="1" stop-color="${color}" stop-opacity=".12"/></linearGradient></defs><rect x="50%" y="0" width="1.5" height="${height}" transform="translate(-.75 0)" fill="url(#g)"/><circle class="a" cx="50%" cy="${cy}" r="8" fill="${color}" opacity=".18"/><circle class="d" cx="50%" cy="${cy}" r="4" fill="${color}" stroke-width="2"/></svg>`
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.b{opacity:.09}@media (prefers-color-scheme: dark){.b{opacity:.16}}</style><rect class="b" x="4%" y="0" width="92%" height="${height}" rx="6" fill="${fill}"/>${bar('')}${text(`font-weight="600" fill="${fill}"`)}</svg>`
   }
-  let line = pts.length ? `M${pts[0]![0]} ${pts[0]![1]}` : ''
-  for (let k = 1; k < pts.length; k++) {
-    const [x0, y0] = pts[k - 1]!
-    const [x1, y1] = pts[k]!
-    const m = n((x0 + x1) / 2)
-    line += ` C${m} ${y0} ${m} ${y1} ${x1} ${y1}`
-  }
-  const last = pts[pts.length - 1]
-  const area = last ? `${line} L${last[0]} ${zero} L${pts[0]![0]} ${zero}Z` : ''
-  const empty = values.every(v => Math.abs(v) < 0.005)
-  const w = n(VB / count)
-  const dot = i === values.length - 1 && !empty ? `<circle cx="50%" cy="${cy}" r="6" fill="${color}" opacity=".22"/><circle cx="50%" cy="${cy}" r="3.2" fill="${color}"/>` : ''
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="${empty ? 0 : 0.3}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
-<svg width="100%" height="${height}" viewBox="${n(i * w)} 0 ${w} ${height}" preserveAspectRatio="none">${lo < 0 || empty ? `<line x1="0" y1="${zero}" x2="${VB}" y2="${zero}" stroke="#8a8f98" stroke-opacity=".35" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>` : ''}${area ? `<path d="${area}" fill="url(#f)"/>` : ''}${line ? `<path d="${line}" fill="none" stroke="${empty ? '#8a8f98' : color}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` : ''}</svg>${dot}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.m{fill:#8a8f98}</style><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${fill}" stop-opacity="${empty ? 0.5 : last ? 1 : 0.62}"/><stop offset="1" stop-color="${fill}" stop-opacity="${empty ? 0.5 : last ? 0.78 : 0.36}"/></linearGradient></defs><line x1="0" y1="${zero}" x2="100%" y2="${zero}" stroke="#8a8f98" stroke-opacity=".3" stroke-width="1"/>${bar('style="fill:url(#f)"')}${text('class="m"')}</svg>`
 }
 
 // A local day key (2026-11-05) as the chart's readout names it: Thu 5 Nov.
