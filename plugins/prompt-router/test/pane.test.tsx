@@ -479,9 +479,13 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(slices[1]).toMatch(/viewBox="250 0 250 104" preserveAspectRatio="none"/)
   expect(slices[1]).toMatch(/vector-effect="non-scaling-stroke"/)
   expect(new Set(slices.map(x => x.match(/<path d="([^"]+)" fill="none"/)?.[1])).size).toBe(1)
-  // Below the zero line the line and its area turn red, the stroke parting exactly at zero.
-  const z = Number(slices[1]!.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)![1]) / 104
-  expect(slices[1]).toMatch(new RegExp(`<linearGradient id="s"[^>]*><stop offset="${Number(z.toFixed(2))}" stop-color="#d97757"/><stop offset="${Number(z.toFixed(2))}" stop-color="#e0483f"/>`))
+  // A clear dip below the zero line turns red; the line resting on zero stays green.
+  const z = Number(slices[1]!.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)![1])
+  const stops = [...slices[1]!.match(/<linearGradient id="s"[^]*?<\/linearGradient>/)![0].matchAll(/offset="([\d.]+)" stop-color="([^"]+)"/g)].map(m => [Number(m[1]) * 104, m[2]])
+  expect(stops.map(x => x[1])).toEqual(['#d97757', '#e0483f'])
+  expect(stops[0]![0]).toBeGreaterThan(z)
+  expect(stops[1]![0]).toBeGreaterThan(stops[0]![0] as number)
+  expect(stops[1]![0]).toBeLessThan(z + 6)
   expect(slices[1]).toMatch(/stroke="url\(#s\)"/)
   // One zero line at one height across the columns, labelled or not.
   const zeroY = (svg: string) => svg.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)?.[1]
