@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, dayLineSvg, dayReadSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, dayLineSvg, ringSvg, dayReadSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -510,6 +510,11 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(cy(hi, '4.2')).toBe(cy(rest, '3.6'))
   expect(hi).toMatch(/<rect x="50%" [^>]*rx="7"[^>]*fill="#1fa37a"\/><text [^>]*font-weight="600" fill="#fff">D3</)
   for (const x of [...slices, hi]) expect(x).not.toMatch(/animation|transition|<script|on\w+=/)
+  // The ring's 95 % range is a lighter stretch of its own track, under the share, with no arc outside it.
+  const acc = ringSvg(92, 85, 96, '#8b7cf6')
+  const radii = [...acc.matchAll(/A([\d.]+) /g)].map(m => m[1])
+  expect(new Set(radii)).toEqual(new Set(['31.68']))
+  expect(acc.indexOf('class="ci"')).toBeLessThan(acc.indexOf('stroke="#8b7cf6" stroke-width'))
   expect(dayLabel('2026-11-05')).toBe('Thu 5 Nov')
   for (const s of [ring, left, ...slices]) expect(s.length).toBeLessThan(20_000)
 })

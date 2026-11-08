@@ -360,13 +360,13 @@ const INK = '.k{fill:#1d1f23}.m{fill:#1d1f23;opacity:.55}@media (prefers-color-s
 const FONT = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif"'
 
 // How often the router was right (0…100) as a ring: a soft track, the share filled in the colour from
-// the top, and outside it a thin arc over the 95 % range, so the figure carries its own uncertainty.
+// the top, and the 95 % range a lighter stretch of the same track, so the figure carries its own
+// uncertainty without a line of its own.
 // null: the track only and a dash. Always still: Details redraws on every press.
 export function ringSvg(pct: number | null, low: number | null, high: number | null, color: string, size = 88): string {
   const c = size / 2
   const r = size * 0.36
   const w = size * 0.09
-  const ro = size * 0.465
   const arc = (rad: number, a: number, b: number) => {
     const at = (p: number) => {
       const t = (Math.max(0, Math.min(100, p)) / 100) * 2 * Math.PI - Math.PI / 2
@@ -378,10 +378,10 @@ export function ringSvg(pct: number | null, low: number | null, high: number | n
   const label = pct == null ? '–' : `${Math.round(pct)}%`
   const title = pct == null ? 'Not enough tasks yet' : `${Math.round(pct)} % right${low != null && high != null ? `, 95 %: ${Math.round(low)}–${Math.round(high)} %` : ''}`
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img"><title>${esc(title)}</title><style>
-.t{stroke:${color};opacity:.16}.ci{stroke:${color};opacity:.5}@media (prefers-color-scheme: dark){.t{opacity:.24}.ci{opacity:.6}}${INK}
+.t{stroke:${color};opacity:.16}.ci{stroke:${color};opacity:.32}@media (prefers-color-scheme: dark){.t{opacity:.24}.ci{opacity:.4}}${INK}
 </style><g fill="none" stroke-linecap="round"><circle class="t" cx="${n(c)}" cy="${n(c)}" r="${n(r)}" stroke-width="${n(w)}"/>
-${pct != null && pct > 0 ? `<path d="${arc(r, 0, pct)}" stroke="${color}" stroke-width="${n(w)}"/>` : ''}
-${low != null && high != null && high > low ? `<path class="ci" d="${arc(ro, low, high)}" stroke-width="${n(size * 0.03)}"/>` : ''}</g>
+${low != null && high != null && high > low ? `<path class="ci" d="${arc(r, low, high)}" stroke-width="${n(w)}"/>` : ''}
+${pct != null && pct > 0 ? `<path d="${arc(r, 0, pct)}" stroke="${color}" stroke-width="${n(w)}"/>` : ''}</g>
 <text class="k" x="${n(c)}" y="${n(c + size * 0.035)}" text-anchor="middle" ${FONT} font-size="${n(size * 0.22)}" font-weight="700" letter-spacing="-.02em">${esc(label)}</text>
 <text class="m" x="${n(c)}" y="${n(c + size * 0.19)}" text-anchor="middle" ${FONT} font-size="${n(size * 0.115)}" font-weight="500">right</text></svg>`
 }
