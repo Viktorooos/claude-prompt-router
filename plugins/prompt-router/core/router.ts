@@ -134,7 +134,7 @@ const QUICK_WORDS = new Set(
   (
     'yes yeah yep yup ya no nope nah ok okay okey k kk sure fine good great perfect cool nice right correct exactly agreed lgtm ' +
     'thanks thank you thx ty please pls go on ahead continue proceed do it sounds looks option ' +
-    'ano jo jj ne nee dobre jasne jasny diky dekuju dekuji pokracuj pokracujte delej udelej to klidne souhlas super parada presne moznost varianta ' +
+    'ano jo jj ne nee dobre jasne jasny diky dekuju dekuji pokracuj pokracujte delej udelej to klidne souhlas super parada presne moznost varianta tak takze funguje fajn skvele bezva vyborne ' +
     'si vale dale hazlo gracias claro adelante sigue continua perfecto bien de acuerdo opcion ' +
     'ja nein danke weiter mach es genau gut bitte variante oui non merci vas'
   ).split(' '),

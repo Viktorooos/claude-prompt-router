@@ -1471,10 +1471,12 @@ test('quickReply: plain approvals, thanks and picks from the agent\'s options, i
   // The eval's yes / option2 / thanks / cz_yes / es_yes cases.
   for (const t of ['yes, go on', 'option 2', 'thanks!', 'ano, pokračuj', 'sí, hazlo']) expect(quickReply(t)).toBe(true)
   for (const t of ['yes', 'ok', 'OK.', 'd', 'B)', '3', '2.', 'Možnost 2', 'jo', 'ne', 'díky', 'do it', 'sounds good', 'ja, weiter', 'merci', '👍']) expect(quickReply(t)).toBe(true)
+  // Czech "it works" acknowledgements.
+  for (const t of ['tak nice takže to funguje', 'funguje', 'jo, funguje', 'fajn', 'skvěle, díky', 'bezva', 'výborně']) expect(quickReply(t)).toBe(true)
 })
 
 test('quickReply: anything with a word of its own, a re-work sign or a slash command goes to the classifier', () => {
-  for (const t of ['yes but use postgres', 'no, fix the tests first', 'continue with the refactor', 'why', 'what?', 'ano, ale v Kotlinu', 'nefunguje', 'still wrong', 'try again', '/router', '', 'ok '.repeat(6)]) expect(quickReply(t)).toBe(false)
+  for (const t of ['yes but use postgres', 'no, fix the tests first', 'continue with the refactor', 'why', 'what?', 'ano, ale v Kotlinu', 'nefunguje', 'tak to nefunguje', 'funguje, ale ne na iOS', 'still wrong', 'try again', '/router', '', 'ok '.repeat(6)]) expect(quickReply(t)).toBe(false)
   expect(quickReply('yes '.repeat(12))).toBe(false)
 })
 
