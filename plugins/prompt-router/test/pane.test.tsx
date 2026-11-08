@@ -498,14 +498,10 @@ test('drawings: tone, bars, sparklines and times', () => {
   const read = dayReadSvg('Tue 3 Nov: saved $10.35', '$1 with <router>', '#1fa37a')
   expect(read).toMatch(/font-size="12"[^>]*fill="#1fa37a">Tue 3 Nov: saved \$10\.35</)
   expect(read).toContain('font-size="11">$1 with &lt;router&gt;<')
-  // A hovered day: a soft pill down the column, a column from the zero line up to its point, the point
-  // on a halo at the line's own height, the label as a chip.
+  // A hovered day: only its point on a halo at the line's own height, and the label as a chip.
   const hi = dayLineSvg(vals, 3, 'D3', 104, '#1fa37a', true)
   const rest = dayLineSvg(vals, 3, 'D3', 104, '#1fa37a')
-  expect(hi).toMatch(/<rect class="b" x="8%" y="2" width="84%" height="86" rx="8" fill="#1fa37a"\/>/)
-  const col = hi.match(/<rect x="22%" y="([\d.]+)" width="56%" height="([\d.]+)" rx="4" fill="url\(#c\)"\/>/)
-  expect(col?.[1]).toBe(cy(hi, '4.2'))
-  expect(Math.abs(Number(col![1]) + Number(col![2]) - Number(zeroY(rest)))).toBeLessThan(0.05)
+  expect(hi).not.toMatch(/class="b"|url\(#c\)|width="84%"|width="56%"/)
   expect(cy(hi, '4.2')).toBe(cy(rest, '3.6'))
   expect(hi).toMatch(/<rect x="50%" [^>]*rx="7"[^>]*fill="#1fa37a"\/><text [^>]*font-weight="600" fill="#fff">D3</)
   for (const x of [...slices, hi]) expect(x).not.toMatch(/animation|transition|<script|on\w+=/)

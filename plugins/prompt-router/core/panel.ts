@@ -72,8 +72,7 @@ ${STILL}
 // (the whole path, cropped to the column by a viewBox, so the slices meet seamlessly), a small point
 // on the day, and the day's label under it. Every column keeps the same room for its label, so the
 // line meets itself across them. The last day's point is the strongest. hover: drawn over the column,
-// a soft pill down it, a column from the zero line up to the day's point, the point on a halo and the
-// label as a chip. The pane lines the columns up, each a hover area of its own; no sandboxed frame
+// only the day's point on a halo and the label as a chip. The pane lines the columns up, each a hover area of its own; no sandboxed frame
 // (Svg isInteractive), which on the desktop pulled the pane's scroll to its bottom after a click on a
 // setting.
 export function dayLineSvg(values: readonly number[], i: number, label = '', height = 104, color: string = ACCENT, hover = false): string {
@@ -96,7 +95,7 @@ export function dayLineSvg(values: readonly number[], i: number, label = '', hei
   if (hover) {
     const chipW = Math.max(18, label.length * 6 + 10)
     const chip = label ? `<rect x="50%" y="${ty - 10}" width="${chipW}" height="14" rx="7" transform="translate(${-chipW / 2} 0)" fill="${tone}"/><text x="50%" y="${ty}" ${font} font-weight="600" fill="#fff">${esc(label)}</text>` : ''
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.b{opacity:.08}.d{stroke:#fff}@media (prefers-color-scheme: dark){.b{opacity:.16}.d{stroke:#1d1f23}}</style><defs><linearGradient id="c" gradientUnits="userSpaceOnUse" x1="0" y1="${cy}" x2="0" y2="${zero}"><stop offset="0" stop-color="${tone}" stop-opacity=".45"/><stop offset="1" stop-color="${tone}" stop-opacity=".12"/></linearGradient></defs><rect class="b" x="8%" y="2" width="84%" height="${height - labelH}" rx="8" fill="${tone}"/><rect x="22%" y="${Math.min(cy, zero)}" width="56%" height="${Math.max(2, n(Math.abs(zero - cy)))}" rx="4" fill="url(#c)"/><circle cx="50%" cy="${cy}" r="8" fill="${tone}" opacity=".2"/><circle class="d" cx="50%" cy="${cy}" r="4.2" fill="${tone}" stroke-width="2"/>${chip}</svg>`
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.d{stroke:#fff}@media (prefers-color-scheme: dark){.d{stroke:#1d1f23}}</style><circle cx="50%" cy="${cy}" r="8" fill="${tone}" opacity=".2"/><circle class="d" cx="50%" cy="${cy}" r="4.2" fill="${tone}" stroke-width="2"/>${chip}</svg>`
   }
   let line = pts.length ? `M${pts[0]![0]} ${pts[0]![1]}` : ''
   for (let k = 1; k < pts.length; k++) {
