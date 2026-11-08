@@ -69,17 +69,19 @@ ${STILL}
 }
 
 
-// One day's column of the net-saving chart, drawn as a plain image: a rounded bar from the zero line
-// (red below it, a grey stub on an empty day), the zero line itself running seamlessly across the
-// columns, and the day's label under it. The pane lines the columns up across the width, each a hover
-// area of its own, so the bar is exactly what the pointer rests on; no sandboxed frame (Svg
-// isInteractive), which on the desktop pulled the pane's scroll to its bottom after a click on a
-// setting. The last day's bar is full strength, the others softer. hover: drawn over the column, a
-// soft backdrop down the whole column, the bar at full strength and the label in the bar's color.
+// One day's column of the net-saving chart, drawn as a plain image: a slim rounded bar from the zero
+// line (red below it, nothing on an empty day), the zero line itself running seamlessly across the
+// columns, and the day's label under it. Every column keeps the same room for its label, labelled or
+// not, so the zero line sits at one height across them. The pane lines the columns up across the
+// width, each a hover area of its own, so the bar is what the pointer rests on; no sandboxed frame
+// (Svg isInteractive), which on the desktop pulled the pane's scroll to its bottom after a click on a
+// setting. The bars are as slim as the day count allows, centred, the last day the strongest.
+// hover: drawn over the column, a soft pill behind the bar, the bar at full strength (a dot on an
+// empty day) and the label in the bar's color; the day's numbers show in the readout above.
 export function dayBarSvg(values: readonly number[], i: number, label = '', height = 88, color: string = ACCENT, hover = false): string {
-  const labelH = label ? 16 : 0
-  const top = 6
-  const bottom = height - labelH - 2
+  const labelH = 16
+  const top = 8
+  const bottom = height - labelH - 4
   const lo = Math.min(0, ...values)
   const hi = Math.max(0, ...values)
   const span = hi - lo || 1
@@ -87,17 +89,19 @@ export function dayBarSvg(values: readonly number[], i: number, label = '', heig
   const v = values[i] ?? 0
   const zero = y(0)
   const empty = Math.abs(v) < 0.005
-  const fill = empty ? '#8a8f98' : v < 0 ? '#e0483f' : color
-  const barY = empty ? n(zero - 1) : Math.min(y(v), zero)
-  const barH = empty ? 2 : Math.max(2, n(Math.abs(y(v) - zero)))
+  const fill = v < 0 ? '#e0483f' : color
+  const bw = values.length <= 10 ? 18 : values.length <= 20 ? 12 : 6
+  const barY = Math.min(y(v), zero)
+  const barH = Math.max(3, n(Math.abs(y(v) - zero)))
   const last = i === values.length - 1
   const font = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="10" text-anchor="middle"'
   const text = (attrs: string) => (label ? `<text x="50%" y="${height - 3}" ${font} ${attrs}>${esc(label)}</text>` : '')
-  const bar = (attrs: string) => `<rect x="20%" y="${barY}" width="60%" height="${barH}" rx="3" fill="${fill}" ${attrs}/>`
+  const bar = (attrs: string) => (empty ? '' : `<rect x="50%" y="${barY}" width="${bw}" height="${barH}" rx="${Math.min(4, bw / 2)}" transform="translate(${-bw / 2} 0)" fill="${fill}" ${attrs}/>`)
   if (hover) {
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.b{opacity:.09}@media (prefers-color-scheme: dark){.b{opacity:.16}}</style><rect class="b" x="4%" y="0" width="92%" height="${height}" rx="6" fill="${fill}"/>${bar('')}${text(`font-weight="600" fill="${fill}"`)}</svg>`
+    const pw = bw + 14
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.b{opacity:.1}@media (prefers-color-scheme: dark){.b{opacity:.18}}</style><rect class="b" x="50%" y="2" width="${pw}" height="${height - 4}" rx="${Math.min(10, pw / 2)}" transform="translate(${-pw / 2} 0)" fill="${fill}"/>${empty ? `<circle cx="50%" cy="${zero}" r="2.5" fill="${fill}"/>` : bar('')}${text(`font-weight="600" fill="${fill}"`)}</svg>`
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.m{fill:#8a8f98}</style><defs><linearGradient id="f" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${fill}" stop-opacity="${empty ? 0.5 : last ? 1 : 0.62}"/><stop offset="1" stop-color="${fill}" stop-opacity="${empty ? 0.5 : last ? 0.78 : 0.36}"/></linearGradient></defs><line x1="0" y1="${zero}" x2="100%" y2="${zero}" stroke="#8a8f98" stroke-opacity=".3" stroke-width="1"/>${bar('style="fill:url(#f)"')}${text('class="m"')}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.m{fill:#8a8f98}</style><line x1="0" y1="${zero}" x2="100%" y2="${zero}" stroke="#8a8f98" stroke-opacity=".25" stroke-width="1"/>${bar(`opacity="${last ? 0.9 : 0.5}"`)}${text('class="m"')}</svg>`
 }
 
 // A local day key (2026-11-05) as the chart's readout names it: Thu 5 Nov.
