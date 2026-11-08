@@ -1849,10 +1849,10 @@ export const register: Register = (on, options) => {
         {saved ?? tabs}
         {term && (saved || tabs) ? rule('rule-cache') : null}
         {cacheCard}
-        {term && numbers ? rule('rule-numbers') : null}
-        {numbers}
         {term ? rule('rule-chat') : null}
         {chat}
+        {term && numbers ? rule('rule-numbers') : null}
+        {numbers}
         {d.savings ? null : <Text dimColor>Savings stats are off.</Text>}
         {term ? rule('rule-settings') : null}
         {settings}

@@ -313,7 +313,7 @@ test('Details, always open: the strict balance, how often it was right, where th
   }
 })
 
-test('What you got sits under You saved on both surfaces: cheaper picks and the plan limit', async ($: any, on: any) => {
+test('the pane runs overview, Cache, This chat, then What you got, on both surfaces: cheaper picks and the plan limit', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   engine(on, { now, log: taskLog(now) })
   await start($)
@@ -323,11 +323,11 @@ test('What you got sits under You saved on both surfaces: cheaper picks and the 
     expect(texts).toMatch(surface === 'terminal' ? /What you got/ : /What you got\nFrom the log, same period as above/)
     expect(texts).toMatch(/Cheaper picks saved\n\$\d+\.\d\d\nat list price/)
     expect(texts).toMatch(/Cost, all in\n\d+ % (less|more)\n[+−]\$\d+\.\d\d than without the router/)
-    // The Cache card sits right under the overview, before What you got.
+    // The overview first, then the Cache card with its countdown, This chat, and What you got.
     const cache = surface === 'terminal' ? texts.search(/\nCache\n/) : texts.indexOf('No cache yet')
     expect(cache).toBeGreaterThan(texts.indexOf('You saved'))
-    expect(cache).toBeLessThan(texts.indexOf('What you got'))
-    expect(texts.indexOf('What you got')).toBeLessThan(texts.indexOf('This chat'))
+    expect(cache).toBeLessThan(texts.indexOf('This chat'))
+    expect(texts.indexOf('This chat')).toBeLessThan(texts.indexOf('What you got'))
     await ui.unmount()
   }
 })
