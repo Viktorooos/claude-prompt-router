@@ -1418,25 +1418,27 @@ export const register: Register = (on, options) => {
     const why = !down || !s ? null : s.actualUsd > s.withoutUsd
       ? 'Stronger models cost more than the cheaper ones saved. Raising the bar for a stronger model in Model & effort lowers it.'
       : 'The classifier cost more than routing saved. It pays off over longer tasks.'
-    const savedText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : usd(Math.abs(s.balanceUsd))) : ''
+    const savedText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : `${money(s.balanceUsd) === 'down' ? '−' : ''}${usd(Math.abs(s.balanceUsd))}`) : ''
     const savedColor = money(s?.balanceUsd ?? 0) === 'up' ? GREEN : MONEY_COLOR[money(s?.balanceUsd ?? 0)] ?? TONES.idle[0]
     const savedPct = s && s.withoutUsd > 0 ? Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100) : 0
     const days = d.savings?.days.slice(panePeriod === 'week' ? -7 : -14) ?? []
     const trend = days.some(x => Math.abs(x.balanceUsd) >= 0.005) && panePeriod !== 'today'
     // The chart's readout: each day's net and what it was made of, shown while the day is hovered.
-    const dayWord = (v: number) => (v < 0 ? 'cost' : 'saved')
+    // A day or period in the minus shows a minus sign and red, so it never reads as a saving.
+    const dayNet = (v: number) => (v < 0 ? `−${usd(-v)}, the router cost more` : `saved ${usd(v)}`)
+    const dayTone = (v: number) => (v < 0 ? TONES.over[0] : GREEN)
     const dayValues = days.map(x => x.balanceUsd)
     const dayPoints = days.map((x, i) => ({
       value: x.balanceUsd,
-      head: `${dayLabel(x.day)}: ${dayWord(x.balanceUsd)} ${usd(Math.abs(x.balanceUsd))}`,
-      // Under its bar: the weekday for a week or so, else every few days' date and the last day's.
+      head: `${dayLabel(x.day)}: ${dayNet(x.balanceUsd)}`,
+      // Under its point: the weekday for a week or so, else every few days' date and the last day's.
       label: days.length <= 10 ? dayLabel(x.day).split(' ')[0]! : i % Math.ceil(days.length / 7) === 0 || i === days.length - 1 ? dayLabel(x.day).split(' ')[1]! : '',
       detail: x.prompts ? `${usd(x.actualUsd + x.classifierUsd)} with router · ${usd(x.withoutUsd)} without · ${x.prompts} prompt${x.prompts === 1 ? '' : 's'}` : 'No prompts that day',
     }))
     const daySum = days.reduce((a, x) => a + x.balanceUsd, 0)
     const best = days.reduce<(typeof days)[number] | null>((a, x) => (!a || x.balanceUsd > a.balanceUsd ? x : a), null)
     const dayIdle = {
-      head: `${days.length} days: ${dayWord(daySum)} ${usd(Math.abs(daySum))}`,
+      head: `${days.length} days: ${dayNet(daySum)}`,
       detail: best && best.balanceUsd >= 0.005 ? `Best ${dayLabel(best.day)}, ${usd(best.balanceUsd)} · point at a day for its numbers` : 'Point at a day for its numbers',
     }
     const stat = (key: string, label: string, value: string, color?: string) => (
@@ -1492,12 +1494,12 @@ export const register: Register = (on, options) => {
           {/* The period's readout stays; a hovered day's numbers show in the two rows kept for them
               below it. A hover can reveal or recolor but not hide (a transparent color does not
               apply), so the day's numbers cannot take the period's place. */}
-          <Text bold>{dayIdle.head}</Text>
+          <Text bold color={daySum < 0 ? TONES.over[0] : undefined}>{dayIdle.head}</Text>
           <Text dimColor>{dayIdle.detail}</Text>
           <Box key="spark-read" height={2} flexDirection="column">
             {dayPoints.map((p, i) => (
               <Box key={`spark-read-${i}`} position="absolute" top={0} left={0} flexDirection="column" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
-                <Svg source={dayReadSvg(p.head, p.detail, savedColor)} alt={`${p.head}. ${p.detail}`} height={32} />
+                <Svg source={dayReadSvg(p.head, p.detail, dayTone(p.value))} alt={`${p.head}. ${p.detail}`} height={32} />
               </Box>
             ))}
           </Box>
@@ -1509,9 +1511,9 @@ export const register: Register = (on, options) => {
           <Box key="spark-cols" flexDirection="row" width="100%">
             {dayPoints.map((p, i) => (
               <Box key={`spark-col-${i}`} width={0} flexGrow={1} hover={{ scope: `spark-day-${i}`, backgroundColor: '#00000000' }}>
-                <Svg source={dayLineSvg(dayValues, i, p.label, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
+                <Svg source={dayLineSvg(dayValues, i, p.label, SPARK_PX, GREEN)} alt={p.head} height={SPARK_PX} />
                 <Box position="absolute" top={0} left={0} width="100%" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
-                  <Svg source={dayLineSvg(dayValues, i, p.label, SPARK_PX, savedColor, true)} alt={p.head} height={SPARK_PX} />
+                  <Svg source={dayLineSvg(dayValues, i, p.label, SPARK_PX, GREEN, true)} alt={p.head} height={SPARK_PX} />
                 </Box>
               </Box>
             ))}

@@ -479,6 +479,10 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(slices[1]).toMatch(/viewBox="250 0 250 104" preserveAspectRatio="none"/)
   expect(slices[1]).toMatch(/vector-effect="non-scaling-stroke"/)
   expect(new Set(slices.map(x => x.match(/<path d="([^"]+)" fill="none"/)?.[1])).size).toBe(1)
+  // Below the zero line the line and its area turn red, the stroke parting exactly at zero.
+  const z = Number(slices[1]!.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)![1]) / 104
+  expect(slices[1]).toMatch(new RegExp(`<linearGradient id="s"[^>]*><stop offset="${Number(z.toFixed(2))}" stop-color="#d97757"/><stop offset="${Number(z.toFixed(2))}" stop-color="#e0483f"/>`))
+  expect(slices[1]).toMatch(/stroke="url\(#s\)"/)
   // One zero line at one height across the columns, labelled or not.
   const zeroY = (svg: string) => svg.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)?.[1]
   expect(new Set([...slices, dayLineSvg(vals, 1)].map(zeroY)).size).toBe(1)
@@ -583,6 +587,8 @@ test('a negative balance says the router cost more, never You saved', async ($: 
     expect(texts).toMatch(/Stronger models cost more than the cheaper ones saved/)
     // The always-open settings quote "You saved" in a label, so only the saving card is checked.
     expect(JSON.stringify(await ui.find({ key: 'saved' }))).not.toMatch(/You saved/)
+    // The figure carries a minus sign, so it never reads as a saving.
+    expect(JSON.stringify(await ui.find({ key: 'saved' }))).toMatch(/−\$\d/)
     await ui.unmount()
   }
 })
