@@ -115,8 +115,8 @@ All of them are in the pane, each with one line on what it does and which value 
 
 | Agent | Install | Then |
 | --- | --- | --- |
-| 🟠 **Claude Code** | `/plugin marketplace add Viktorooos/prompt-router`<br>`/plugin install prompt-router@prompt-router` | Open a new chat |
-| 🔵 **OpenCode** | `git clone https://github.com/Viktorooos/prompt-router.git`<br>`node prompt-router/adapters/opencode/install.ts` | Restart OpenCode |
+| 🟠 **Claude Code** | `/plugin marketplace add Viktorooos/claude-prompt-router`<br>`/plugin install prompt-router@prompt-router` | Open a new chat |
+| 🔵 **OpenCode** | `git clone https://github.com/Viktorooos/claude-prompt-router.git`<br>`node claude-prompt-router/adapters/opencode/install.ts` | Restart OpenCode |
 
 Details and uninstall: [Claude Code](#claude-code), [OpenCode](#opencode).
 
@@ -385,7 +385,7 @@ The decisions are the same everywhere. What each platform lets a plugin do diffe
 **Install:**
 
 ```
-/plugin marketplace add Viktorooos/prompt-router
+/plugin marketplace add Viktorooos/claude-prompt-router
 /plugin install prompt-router@prompt-router
 ```
 
@@ -444,8 +444,8 @@ For the OpenCode CLI / TUI and desktop.
 **Install:**
 
 ```bash
-git clone https://github.com/Viktorooos/prompt-router.git
-node prompt-router/adapters/opencode/install.ts
+git clone https://github.com/Viktorooos/claude-prompt-router.git
+node claude-prompt-router/adapters/opencode/install.ts
 ```
 
 Restart OpenCode. The installer writes a shim, `~/.config/opencode/plugins/prompt-router.ts` (a file it would overwrite is kept as `prompt-router.ts.bak-<time>`), and `~/.config/opencode/prompt-router.json` with the defaults, when there is none.
@@ -508,7 +508,7 @@ Other providers, or a mix, work the same way. Effort names differ per provider, 
 - **New sessions** start through the `router_session` tool (open them with `/sessions`). If it fails, you get an `opencode --model … --prompt …` command.
 - **`top`** is offered only when a provider lists its model or the chat runs on it.
 
-**Uninstall:** `node prompt-router/adapters/opencode/install.ts --uninstall` removes the shim (only if it is the router's) and puts back the newest file it replaced. Your options file stays.
+**Uninstall:** `node claude-prompt-router/adapters/opencode/install.ts --uninstall` removes the shim (only if it is the router's) and puts back the newest file it replaced. Your options file stays.
 
 <a id="faq"></a>
 ## ❓ FAQ
