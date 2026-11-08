@@ -269,6 +269,14 @@ export function bigNumberSvg(text: string, color: string, _width = 280, size = 3
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${h}"><style>text{letter-spacing:-.02em;font-variant-numeric:tabular-nums}${animate ? `text{animation:r .5s cubic-bezier(.2,.8,.2,1) both}@keyframes r{from{opacity:0;transform:translateY(8px)}}${STILL}` : ''}</style><text x="0" y="${Math.round(size)}" font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="${size}" font-weight="700" fill="${color}">${safe}</text></svg>`
 }
 
+// A hovered day's numbers under the chart's readout, smaller than it so they never outweigh it: a dot
+// and the day's saving in the line's color, the detail in grey below. An image, since the pane's Text
+// takes no size.
+export function dayReadSvg(head: string, detail: string, color: string = ACCENT): string {
+  const font = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif"'
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="32" role="img"><style>.m{fill:#6b7280}@media (prefers-color-scheme: dark){.m{fill:#9aa0a6}}text{font-variant-numeric:tabular-nums}</style><circle cx="4" cy="9" r="3.5" fill="${color}"/><text x="13" y="13" ${font} font-size="12" font-weight="600" fill="${color}">${esc(head)}</text><text class="m" x="13" y="28" ${font} font-size="11">${esc(detail)}</text></svg>`
+}
+
 // A hairline across the pane: what separates its sections and settings, as the preview's border-top.
 export function ruleSvg(_width = 280, strong = true): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="1" role="presentation"><style>

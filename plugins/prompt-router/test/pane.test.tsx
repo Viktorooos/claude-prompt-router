@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, dayReadSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -484,6 +484,10 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(slices[2]).not.toMatch(/<circle/)
   for (const x of slices) expect(x).not.toMatch(/<title>|:hover/)
   // A day's highlight: a soft guide down its column and its dot on a halo, at the line's own point.
+  // A hovered day's numbers draw smaller than the period's readout, the detail escaped.
+  const read = dayReadSvg('Tue 3 Nov: saved $10.35', '$1 with <router>', '#1fa37a')
+  expect(read).toMatch(/font-size="12"[^>]*fill="#1fa37a">Tue 3 Nov: saved \$10\.35</)
+  expect(read).toContain('font-size="11">$1 with &lt;router&gt;<')
   const hi = sparkSvg(vals, 3, 76, '#1fa37a', true)
   expect(hi).toMatch(/<rect x="50%"[^>]*fill="url\(#g\)"\/><circle class="a" cx="50%"[^>]*r="8"[^>]*\/><circle class="d" cx="50%"[^>]*r="4"/)
   const cy = (svg: string, r: string) => svg.match(new RegExp(`cy="([\\d.]+)" r="${r}"`))?.[1]
@@ -752,7 +756,7 @@ test('the day chart hovers without a sandboxed frame: with one, a click on a set
   expect(chart.match(/"key":"spark-col-\d+"/g)).toHaveLength(7)
   expect(chart).toMatch(/"key":"spark-col-6","width":0,"flexGrow":1\},"hover":\{"scope":"spark-day-6","backgroundColor":"#00000000"\},"children":\[\{"type":"Svg"[^]*?"position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\}/)
   expect(chart).not.toMatch(/"key":"spark-cols","position"|"key":"spark-col-\d+","position"/)
-  expect(chart).toMatch(/"key":"spark-read-6","position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\},"children":\[\{"type":"Text"[^]*?: saved \$\d+\.\d\d/)
+  expect(chart).toMatch(/"key":"spark-read-6","position":"absolute"[^}]*"display":"none"\},"hover":\{"scope":"spark-day-6","display":"flex"\},"children":\[\{"type":"Svg"[^]*?: saved \$\d+\.\d\d/)
   // A scope alone never lit the group in the desktop app: the column's hover carries a style too.
   expect(chart).not.toMatch(/"hover":\{"scope":"spark-day-\d+"\}/)
   // The period's readout stays (a hover cannot hide it); the day's numbers show in two rows kept below it.

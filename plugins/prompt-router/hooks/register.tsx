@@ -7,7 +7,7 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
-import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, sparkSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
 
@@ -1495,8 +1495,7 @@ export const register: Register = (on, options) => {
           <Box key="spark-read" height={2} flexDirection="column">
             {dayPoints.map((p, i) => (
               <Box key={`spark-read-${i}`} position="absolute" top={0} left={0} flexDirection="column" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
-                <Text bold>{p.head}</Text>
-                <Text dimColor>{p.detail}</Text>
+                <Svg source={dayReadSvg(p.head, p.detail, savedColor)} alt={`${p.head}. ${p.detail}`} height={32} />
               </Box>
             ))}
           </Box>
