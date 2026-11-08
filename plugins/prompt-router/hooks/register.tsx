@@ -14,6 +14,7 @@ import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
 const MODEL_HOLD = { plugin: 'prompt-router', key: 'model' } as const
+const CHAT = { plugin: 'prompt-router', key: 'chat' } as const
 const TEST_TOOL = `mcp__${NAME}__test`
 const SWITCH_TOOL = `mcp__${NAME}__switch`
 const SHORT: Record<Level, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'XHigh', max: 'Max' }
@@ -146,6 +147,29 @@ function isEffortRow(r: ConfigRow) {
   return /effort/i.test(`${r.key} ${r.label}`) && r.kind === 'choice' && (r.options ?? []).some(o => norm(o) === 'high')
 }
 
+// This chat in $.state, which outlives a mod reload; written only when something in it changed.
+async function keptChat($: EngineInterface) {
+  try {
+    return (await $.state.get(CHAT)).value
+  } catch {
+    return null
+  }
+}
+
+let keptLine = ''
+async function keepChat($: EngineInterface) {
+  if (!sessionId) return
+  const value = { session: sessionId, id: chatId, effort: seen, model: seenModel, base: effortBase, routedLevel, baseline, routed }
+  const line = JSON.stringify(value)
+  if (line === keptLine) return
+  keptLine = line
+  try {
+    await $.state.set(CHAT, value)
+  } catch {
+    // Without $.state a reload starts a new chat, as before.
+  }
+}
+
 async function currentLevel($: EngineInterface): Promise<Level | ''> {
   if (seen) return seen
   try {
@@ -172,6 +196,7 @@ async function applyLevel($: EngineInterface, level: Level) {
   if (!routedLevel) effortBase = lastEffort || effortBase
   routedLevel = level
   turnLevel = level
+  await keepChat($)
   try {
     const row = (await $.config.list()).find(isEffortRow)
     const option = row?.options?.find(o => norm(o) === level)
@@ -210,6 +235,7 @@ async function applyModel($: EngineInterface, model: Model) {
         modelHold = null
         await $.state.set(MODEL_HOLD, null)
         seenModel = MODELS[model]
+        await keepChat($)
         return
       }
       await log($, 'set model', r.deny)
@@ -219,6 +245,7 @@ async function applyModel($: EngineInterface, model: Model) {
   }
   modelHold = { model, base: '' }
   seenModel = MODELS[model]
+  await keepChat($)
   await $.state.set(MODEL_HOLD, model)
   redraw($)
 }
@@ -949,11 +976,22 @@ export const register: Register = (on, options) => {
   cfg = toConfig(given)
   on('session.start', async ($, e, next) => {
     configDir = await findConfigDir($)
-    chatId = `${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
     try {
       sessionId = String((await $.session.id()) ?? '')
     } catch {
       sessionId = ''
+    }
+    // A mod reload (a settings change, say) runs this again in the same session with the module
+    // variables gone: the chat goes on with its id and the effort and model it last ran on.
+    const same = sessionId ? await keptChat($) : null
+    if (same?.session === sessionId) {
+      chatId = same.id
+      seen = asLevel(same.effort)
+      seenModel = same.model
+    } else {
+      chatId = `${await $.clock.now()}-${Math.random().toString(36).slice(2, 8)}`
+      seen = ''
+      seenModel = ''
     }
     sessionCwd = typeof e.cwd === 'string' ? e.cwd : ''
     transcriptFile = ''
@@ -989,10 +1027,12 @@ export const register: Register = (on, options) => {
       // No timers here: the card moves on with each reply.
     }
     pending.items = []
-    baseline = ''
-    routed = ''
-    effortBase = ''
-    routedLevel = ''
+    const goesOn = same?.session === sessionId
+    baseline = goesOn ? same.baseline ?? '' : ''
+    routed = goesOn ? same.routed ?? '' : ''
+    effortBase = goesOn ? same.base ?? '' : ''
+    routedLevel = goesOn ? same.routedLevel ?? '' : ''
+    await keepChat($)
     stepEffort = null
     lastAsked = null
     lastClassifier = null
@@ -1114,6 +1154,7 @@ export const register: Register = (on, options) => {
     }
     const held = enabled && hold ? hold.level : null
     seen = held ?? (asLevel(e.effort) || seen)
+    await keepChat($)
     const want = turnLevel ?? held
     stepEffort = { effort: asLevel(want ?? e.effort), base: asLevel(effortBase) }
     const step = heldModel && heldModel !== e.model ? { ...e, model: heldModel } : e
