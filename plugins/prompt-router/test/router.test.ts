@@ -1525,3 +1525,48 @@ test('sessionSuggestions auto: a session pick of the classifier in a short chat 
   await submit($, 'unrelated: add a shopping list')
   expect(seen.sent[0] ?? '').toMatch(/AskUserQuestion/)
 })
+
+// The app reloads mods (a settings change, say) and session.start runs again in the same session:
+// module variables are gone then, $.state is not. The chat is the same one.
+test('stats: a reload in the same session keeps the chat id and the effort it last saw', async ($: any, on: any) => {
+  let sid = 's1'
+  const seen = engine(on, PICK.keep, { noEffortRow: true })
+  on('session.id', () => ({ value: sid }))
+  on('turn.step', async function* (_: unknown, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  on('turn.complete', () => ({ text: '' }))
+  await start($)
+  for await (const _ of $.turn.step({ turnId: 't0', index: 0, model: 'claude-opus-5-5', effort: 'low', messageCount: 1 }));
+  await submit($, 'look at this')
+  await $.turn.complete(TURN_DONE)
+  await start($)
+  await submit($, 'and that one')
+  await $.turn.complete(TURN_DONE)
+  sid = 's2'
+  await start($)
+  await submit($, 'a new chat')
+  await $.turn.complete(TURN_DONE)
+  const ds = statsLines(seen).filter((l: any) => l.kind === 'decision')
+  expect(ds[1].chat).toBe(ds[0].chat)
+  expect(ds[1].from.effort).toBe('low')
+  expect(ds[2].chat).not.toBe(ds[0].chat)
+  expect(ds[2].from.effort).toBe('')
+})
+
+test("stats: after a reload, an effort the router set still counts as the router's, not the person's", { options: { effortDetection: 'auto' } } as any, async ($: any, on: any) => {
+  const seen = engine(on, '{"where": "here", "model": "opus", "effort": "low", "why": "quick"}')
+  on('session.id', () => ({ value: 's1' }))
+  on('turn.step', async function* (_: unknown, e: any) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-opus-5-5' } }))
+  await start($)
+  for await (const _ of $.turn.step({ turnId: 't0', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 }));
+  await submit($, 'what does this regex match')
+  await start($)
+  for await (const _ of $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'low', messageCount: 1 }));
+  await $.turn.complete(TURN_DONE)
+  const t = statsLines(seen).filter((x: any) => x.kind === 'turn').at(-1)
+  expect(t).toMatchObject({ effort: 'low', baseEffort: 'high' })
+})
