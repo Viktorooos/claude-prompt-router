@@ -27,7 +27,7 @@ const BLUE = '#5b9cf6'
 const TEAL = '#36b3a8'
 const PANE = 'prompt-router'
 // The day chart's height in pixels on the desktop.
-const SPARK_PX = 88
+const SPARK_PX = 104
 const PANE_TITLE = 'Prompt Router'
 // Change the tag when LastDecision's fields change: a value an older copy stored then reads as none.
 const LAST = atom({ plugin: 'prompt-router', key: 'last' } as const, null, { shape: 'last-1' })

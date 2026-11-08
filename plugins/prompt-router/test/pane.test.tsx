@@ -478,23 +478,23 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(slices[1]).toMatch(/^<svg [^>]*width="100%" height="88"/)
   const zeroY = (svg: string) => svg.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)?.[1]
   expect(new Set([...slices, dayBarSvg(vals, 1)].map(zeroY)).size).toBe(1)
-  // The bar: its path about the column's centre, rounded at the far end, flat on the zero line.
-  const bar = (svg: string) => svg.match(/<svg x="50%" overflow="visible"><path d="M(-[\d.]+) ([\d.]+)V[\d.]+Q[^"]* ([\d.]+)H[^"]*Z" fill="url\(#f\)"/)
+  // The bar: a wide share of its column, rounded, squared off on the zero line by a strip.
+  const bar = (svg: string) => svg.match(/<g fill="url\(#f\)"[^>]*><rect x="(\d+)%" y="([\d.]+)" width="(\d+)%" height="([\d.]+)" rx="[\d.]+"\/>(<rect [^>]*\/>)?<\/g>/)
   const fill = (svg: string) => svg.match(/<stop offset="0" stop-color="([^"]+)"/)?.[1]
-  // Slim, as the day count allows; up from the zero line in the line's color, down in red, a faint dot on an empty day.
-  expect(bar(slices[1]!)?.[1]).toBe('-8')
-  expect(bar(dayBarSvg(Array(14).fill(1), 1))?.[1]).toBe('-5')
+  // Wide, so neighbours sit close; up from the zero line in the line's color, down in red, a faint dot on an empty day.
+  expect(bar(slices[1]!)?.slice(1, 4)).toEqual(['14', expect.anything(), '72'])
+  expect(bar(dayBarSvg(Array(14).fill(1), 1))?.[3]).toBe('68')
   expect(fill(slices[1]!)).toBe('#d97757')
-  expect(bar(slices[1]!)?.[2]).toBe(zeroY(slices[1]!))
-  expect(Number(bar(slices[1]!)![3])).toBeLessThan(Number(zeroY(slices[1]!)))
-  expect(Number(bar(slices[2]!)![3])).toBeGreaterThan(Number(zeroY(slices[2]!)))
+  expect(Math.abs(Number(bar(slices[1]!)![2]) + Number(bar(slices[1]!)![4]) - Number(zeroY(slices[1]!)))).toBeLessThan(0.05)
+  expect(bar(slices[1]!)?.[5]).toMatch(/height="4"/)
+  expect(bar(slices[2]!)?.[2]).toBe(zeroY(slices[2]!))
   expect(fill(slices[2]!)).toBe('#e0483f')
   expect(bar(slices[0]!)).toBeNull()
   expect(slices[0]).toMatch(/<circle cx="50%" cy="[\d.]+" r="1.6"/)
   // The tallest day reaches highest; the last day is full strength, the others softer.
-  expect(Number(bar(slices[3]!)![3])).toBeLessThan(Number(bar(slices[1]!)![3]))
+  expect(Number(bar(slices[3]!)![4])).toBeGreaterThan(Number(bar(slices[1]!)![4]))
   expect(slices[3]).not.toMatch(/class="s"/)
-  expect(slices[1]).toMatch(/<path [^>]*class="s"/)
+  expect(slices[1]).toMatch(/<g [^>]*class="s"/)
   // Its label under it, escaped.
   expect(slices[1]).toMatch(/<text x="50%"[^>]*class="m">D1<\/text>/)
   expect(dayBarSvg(vals, 1, 'a<b')).toContain('>a&lt;b<')
@@ -508,7 +508,7 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(read).toMatch(/font-size="12"[^>]*fill="#1fa37a">Tue 3 Nov: saved \$10\.35</)
   expect(read).toContain('font-size="11">$1 with &lt;router&gt;<')
   const hi = dayBarSvg(vals, 3, 'D3', 88, '#1fa37a', true)
-  expect(hi).toMatch(/<rect class="b" x="50%" y="2" width="28" height="70" rx="8" transform="translate\(-14 0\)" fill="#1fa37a"\/>/)
+  expect(hi).toMatch(/<rect class="b" x="6%" y="2" width="88%" height="70" rx="8" fill="#1fa37a"\/>/)
   expect(bar(hi)?.slice(1)).toEqual(bar(dayBarSvg(vals, 3, 'D3', 88, '#1fa37a'))?.slice(1))
   expect(hi).not.toMatch(/class="s"/)
   expect(hi).toMatch(/<rect x="50%" [^>]*rx="7"[^>]*fill="#1fa37a"\/><text [^>]*font-weight="600" fill="#fff">D3</)

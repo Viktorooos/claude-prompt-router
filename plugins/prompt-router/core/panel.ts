@@ -69,13 +69,13 @@ ${STILL}
 }
 
 
-// One day's column of the net-saving chart, drawn as a plain image: a slim bar rounded at its far
+// One day's column of the net-saving chart, drawn as a plain image: a wide bar rounded at its far
 // end and flat on the zero line (red below it, a faint dot on an empty day), the zero line itself
 // running seamlessly across the columns, and the day's label under it. Every column keeps the same
 // room for its label, labelled or not, so the zero line sits at one height across them. The pane
 // lines the columns up across the width, each a hover area of its own, so the bar is what the pointer
 // rests on; no sandboxed frame (Svg isInteractive), which on the desktop pulled the pane's scroll to
-// its bottom after a click on a setting. The bars are as slim as the day count allows, centred, the
+// its bottom after a click on a setting. The bars take most of their column, so they sit close; the
 // last day full strength and the others softer. hover: drawn over the column, a soft pill behind the
 // bar, the bar at full strength (a dot on an empty day) and the label as a chip in the bar's color;
 // the day's numbers show in the readout above.
@@ -91,24 +91,22 @@ export function dayBarSvg(values: readonly number[], i: number, label = '', heig
   const zero = y(0)
   const empty = Math.abs(v) < 0.005
   const fill = v < 0 ? '#e0483f' : color
-  const bw = values.length <= 10 ? 16 : values.length <= 20 ? 10 : 6
-  const h = bw / 2
+  // Wide bars, a share of the column, so neighbours sit close at any pane width.
+  const bx = values.length <= 10 ? 14 : values.length <= 20 ? 16 : 20
   const len = Math.max(3, n(Math.abs(y(v) - zero)))
-  const r = Math.min(bw / 2, 5, len)
-  // Rounded at its far end, flat on the zero line; drawn about the column's centre.
+  const r = Math.min(4, len)
   const end = v < 0 ? n(zero + len) : n(zero - len)
-  const d = v < 0 ? n(end - r) : n(end + r)
-  const shape = `M${-h} ${zero}V${d}Q${-h} ${end} ${n(-h + r)} ${end}H${n(h - r)}Q${h} ${end} ${h} ${d}V${zero}Z`
-  const grad = `<linearGradient id="f" x1="0" y1="${v < 0 ? 1 : 0}" x2="0" y2="${v < 0 ? 0 : 1}"><stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="${fill}" stop-opacity=".72"/></linearGradient>`
-  const bar = (soft: boolean) => `<svg x="50%" overflow="visible"><path d="${shape}" fill="url(#f)"${soft ? ' class="s"' : ''}/></svg>`
+  // Rounded all round, then squared off on the zero line by a strip as tall as the rounding.
+  const flat = len > r ? `<rect x="${bx}%" y="${v < 0 ? zero : n(zero - r)}" width="${100 - 2 * bx}%" height="${r}"/>` : ''
+  const grad = `<linearGradient id="f" gradientUnits="userSpaceOnUse" x1="0" y1="${end}" x2="0" y2="${zero}"><stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="${fill}" stop-opacity=".72"/></linearGradient>`
+  const bar = (soft: boolean) => `<g fill="url(#f)"${soft ? ' class="s"' : ''}><rect x="${bx}%" y="${Math.min(end, zero)}" width="${100 - 2 * bx}%" height="${len}" rx="${r}"/>${flat}</g>`
   const font = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="10" text-anchor="middle"'
   const ty = height - 5
   const line = `<line x1="0" y1="${zero}" x2="100%" y2="${zero}" stroke="#8a8f98" stroke-opacity=".28" stroke-width="1"/>`
   if (hover) {
-    const pw = bw + 12
     const chipW = Math.max(18, label.length * 6 + 10)
     const chip = label ? `<rect x="50%" y="${ty - 10}" width="${chipW}" height="14" rx="7" transform="translate(${-chipW / 2} 0)" fill="${fill}"/><text x="50%" y="${ty}" ${font} font-weight="600" fill="#fff">${esc(label)}</text>` : ''
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.b{opacity:.1}@media (prefers-color-scheme: dark){.b{opacity:.2}}</style><defs>${grad}</defs><rect class="b" x="50%" y="2" width="${pw}" height="${height - labelH}" rx="${Math.min(8, pw / 2)}" transform="translate(${-pw / 2} 0)" fill="${fill}"/>${empty ? `<circle cx="50%" cy="${zero}" r="3" fill="${fill}"/>` : bar(false)}${chip}</svg>`
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.b{opacity:.1}@media (prefers-color-scheme: dark){.b{opacity:.2}}</style><defs>${grad}</defs><rect class="b" x="${bx - 8}%" y="2" width="${100 - 2 * (bx - 8)}%" height="${height - labelH}" rx="8" fill="${fill}"/>${empty ? `<circle cx="50%" cy="${zero}" r="3" fill="${fill}"/>` : bar(false)}${chip}</svg>`
   }
   const text = label ? `<text x="50%" y="${ty}" ${font} class="m">${esc(label)}</text>` : ''
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.m{fill:#8a8f98}.s{opacity:.5}@media (prefers-color-scheme: dark){.s{opacity:.62}}</style><defs>${grad}</defs>${line}${empty ? `<circle cx="50%" cy="${zero}" r="1.6" fill="#8a8f98" opacity=".55"/>` : bar(i < values.length - 1)}${text}</svg>`
