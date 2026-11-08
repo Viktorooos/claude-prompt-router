@@ -223,7 +223,7 @@ function hero() {
   o += rect(0, 0, W, H, 28, 'url(#hero)', '#26302b', 1.5)
   o += `<circle cx="1010" cy="120" r="170" fill="${C.green}" fill-opacity=".10" filter="url(#glow)"/><circle cx="170" cy="400" r="150" fill="${C.purple}" fill-opacity=".09" filter="url(#glow)"/>`
   o += `<g transform="translate(60 56)"><rect width="64" height="64" rx="18" fill="${C.green}" fill-opacity=".16" stroke="${C.green}" stroke-opacity=".5"/><g transform="translate(14 14) scale(1.5)">${ICON.route(C.green)}</g></g>`
-  o += t(144, 100, 'Prompt Router', { size: 46, w: 800 })
+  o += t(144, 100, 'Claude Prompt Router', { size: 46, w: 800 })
   o += t(60, 168, 'The right place, the right model and the right effort', { size: 24, fill: '#d6ddd9', w: 500 })
   o += t(60, 200, 'for every prompt, decided before the agent starts working.', { size: 24, fill: '#d6ddd9', w: 500 })
   o += t(60, 244, 'And a pane that shows what it saved you.', { size: 18, fill: C.green, w: 600 })

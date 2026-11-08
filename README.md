@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/images/hero.svg" alt="Prompt Router: the right place, the right model and the right effort for every prompt" width="100%">
+<img src="docs/images/hero.svg" alt="Claude Prompt Router: the right place, the right model and the right effort for every prompt" width="100%">
 
-<h1>🧭 Prompt Router</h1>
+<h1>🧭 Claude Prompt Router</h1>
 
 **Routes every prompt to the right place, model and effort, and shows you what that saved.**
 
@@ -35,7 +35,7 @@
 
 > Every reply in a long chat re-reads the whole context. Opus on a rename burns money. Haiku on a race condition burns time.
 
-Prompt Router makes **one small classifier call per prompt** (none for a plain `yes` or `option 2`). Before any work starts, it tells the agent where the prompt belongs and which model and effort it needs. You stay in control: every change is offered first, unless you tell it to just do it.
+Claude Prompt Router makes **one small classifier call per prompt** (none for a plain `yes` or `option 2`). Before any work starts, it tells the agent where the prompt belongs and which model and effort it needs. You stay in control: every change is offered first, unless you tell it to just do it.
 
 <table>
 <tr>
