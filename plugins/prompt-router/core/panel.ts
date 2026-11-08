@@ -68,48 +68,55 @@ ${STILL}
 </style><rect class="t" width="${width}" height="${height}" rx="${n(height / 2)}"/>${len >= 0.5 ? `<rect x="${x}" width="${len}" height="${height}" rx="2" fill="${color}"/>` : ''}<line class="m" x1="${mid}" y1="0" x2="${mid}" y2="${height}"/></svg>`
 }
 
-
-// One day's column of the net-saving chart, drawn as a plain image: a wide bar rounded at its far
-// end and flat on the zero line (red below it, a faint dot on an empty day), the zero line itself
-// running seamlessly across the columns, and the day's label under it. Every column keeps the same
-// room for its label, labelled or not, so the zero line sits at one height across them. The pane
-// lines the columns up across the width, each a hover area of its own, so the bar is what the pointer
-// rests on; no sandboxed frame (Svg isInteractive), which on the desktop pulled the pane's scroll to
-// its bottom after a click on a setting. The bars take most of their column, so they sit close; the
-// last day full strength and the others softer. hover: drawn over the column, a soft pill behind the
-// bar, the bar at full strength (a dot on an empty day) and the label as a chip in the bar's color;
-// the day's numbers show in the readout above.
-export function dayBarSvg(values: readonly number[], i: number, label = '', height = 88, color: string = ACCENT, hover = false): string {
+// One day's column of the net-saving chart as a line: its slice of one smooth line over a soft area
+// (the whole path, cropped to the column by a viewBox, so the slices meet seamlessly), a small point
+// on the day, and the day's label under it. Every column keeps the same room for its label, so the
+// line meets itself across them. The last day's point is the strongest. hover: drawn over the column,
+// a soft pill down it, a column from the zero line up to the day's point, the point on a halo and the
+// label as a chip. The pane lines the columns up, each a hover area of its own; no sandboxed frame
+// (Svg isInteractive), which on the desktop pulled the pane's scroll to its bottom after a click on a
+// setting.
+export function dayLineSvg(values: readonly number[], i: number, label = '', height = 104, color: string = ACCENT, hover = false): string {
+  const VB = 1000
   const labelH = 18
-  const top = 8
-  const bottom = height - labelH - 4
+  const top = 10
+  const bottom = height - labelH - 6
   const lo = Math.min(0, ...values)
   const hi = Math.max(0, ...values)
   const span = hi - lo || 1
+  const count = Math.max(1, values.length)
   const y = (v: number) => n(top + ((hi - v) / span) * (bottom - top))
-  const v = values[i] ?? 0
+  const pts = values.map((v, k) => [n(((k + 0.5) / count) * VB), y(v)] as const)
   const zero = y(0)
-  const empty = Math.abs(v) < 0.005
-  const fill = v < 0 ? '#e0483f' : color
-  // Wide bars, a share of the column, so neighbours sit close at any pane width.
-  const bx = values.length <= 10 ? 14 : values.length <= 20 ? 16 : 20
-  const len = Math.max(3, n(Math.abs(y(v) - zero)))
-  const r = Math.min(4, len)
-  const end = v < 0 ? n(zero + len) : n(zero - len)
-  // Rounded all round, then squared off on the zero line by a strip as tall as the rounding.
-  const flat = len > r ? `<rect x="${bx}%" y="${v < 0 ? zero : n(zero - r)}" width="${100 - 2 * bx}%" height="${r}"/>` : ''
-  const grad = `<linearGradient id="f" gradientUnits="userSpaceOnUse" x1="0" y1="${end}" x2="0" y2="${zero}"><stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="${fill}" stop-opacity=".72"/></linearGradient>`
-  const bar = (soft: boolean) => `<g fill="url(#f)"${soft ? ' class="s"' : ''}><rect x="${bx}%" y="${Math.min(end, zero)}" width="${100 - 2 * bx}%" height="${len}" rx="${r}"/>${flat}</g>`
+  const cy = pts[i]?.[1] ?? zero
+  const v = values[i] ?? 0
+  const tone = v < 0 ? '#e0483f' : color
   const font = 'font-family="-apple-system,BlinkMacSystemFont,system-ui,sans-serif" font-size="10" text-anchor="middle"'
   const ty = height - 5
-  const line = `<line x1="0" y1="${zero}" x2="100%" y2="${zero}" stroke="#8a8f98" stroke-opacity=".28" stroke-width="1"/>`
   if (hover) {
     const chipW = Math.max(18, label.length * 6 + 10)
-    const chip = label ? `<rect x="50%" y="${ty - 10}" width="${chipW}" height="14" rx="7" transform="translate(${-chipW / 2} 0)" fill="${fill}"/><text x="50%" y="${ty}" ${font} font-weight="600" fill="#fff">${esc(label)}</text>` : ''
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.b{opacity:.1}@media (prefers-color-scheme: dark){.b{opacity:.2}}</style><defs>${grad}</defs><rect class="b" x="${bx - 8}%" y="2" width="${100 - 2 * (bx - 8)}%" height="${height - labelH}" rx="8" fill="${fill}"/>${empty ? `<circle cx="50%" cy="${zero}" r="3" fill="${fill}"/>` : bar(false)}${chip}</svg>`
+    const chip = label ? `<rect x="50%" y="${ty - 10}" width="${chipW}" height="14" rx="7" transform="translate(${-chipW / 2} 0)" fill="${tone}"/><text x="50%" y="${ty}" ${font} font-weight="600" fill="#fff">${esc(label)}</text>` : ''
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.b{opacity:.08}.d{stroke:#fff}@media (prefers-color-scheme: dark){.b{opacity:.16}.d{stroke:#1d1f23}}</style><defs><linearGradient id="c" gradientUnits="userSpaceOnUse" x1="0" y1="${cy}" x2="0" y2="${zero}"><stop offset="0" stop-color="${tone}" stop-opacity=".45"/><stop offset="1" stop-color="${tone}" stop-opacity=".12"/></linearGradient></defs><rect class="b" x="8%" y="2" width="84%" height="${height - labelH}" rx="8" fill="${tone}"/><rect x="22%" y="${Math.min(cy, zero)}" width="56%" height="${Math.max(2, n(Math.abs(zero - cy)))}" rx="4" fill="url(#c)"/><circle cx="50%" cy="${cy}" r="8" fill="${tone}" opacity=".2"/><circle class="d" cx="50%" cy="${cy}" r="4.2" fill="${tone}" stroke-width="2"/>${chip}</svg>`
   }
+  let line = pts.length ? `M${pts[0]![0]} ${pts[0]![1]}` : ''
+  for (let k = 1; k < pts.length; k++) {
+    const [x0, y0] = pts[k - 1]!
+    const [x1, y1] = pts[k]!
+    const m = n((x0 + x1) / 2)
+    line += ` C${m} ${y0} ${m} ${y1} ${x1} ${y1}`
+  }
+  const first = pts[0]
+  const last = pts[pts.length - 1]
+  // The line runs from the first column's left edge to the last's right edge, flat at each end.
+  const lead = first ? `M0 ${first[1]} L${first[0]} ${first[1]}` : ''
+  const tail = last ? ` L${VB} ${last[1]}` : ''
+  const path = first ? `${lead}${line.slice(line.indexOf(' C') >= 0 ? line.indexOf(' C') : line.length)}${tail}` : ''
+  const area = first ? `${path} L${VB} ${zero} L0 ${zero}Z` : ''
+  const w = n(VB / count)
+  const isLast = i === values.length - 1
+  const point = isLast ? `<circle cx="50%" cy="${cy}" r="7" fill="${tone}" opacity=".18"/><circle class="d" cx="50%" cy="${cy}" r="3.6" fill="${tone}" stroke-width="1.5"/>` : `<circle cx="50%" cy="${cy}" r="2" fill="${tone}" opacity=".7"/>`
   const text = label ? `<text x="50%" y="${ty}" ${font} class="m">${esc(label)}</text>` : ''
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.m{fill:#8a8f98}.s{opacity:.5}@media (prefers-color-scheme: dark){.s{opacity:.62}}</style><defs>${grad}</defs>${line}${empty ? `<circle cx="50%" cy="${zero}" r="1.6" fill="#8a8f98" opacity=".55"/>` : bar(i < values.length - 1)}${text}</svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}" role="img"><style>.m{fill:#8a8f98}.d{stroke:#fff}@media (prefers-color-scheme: dark){.d{stroke:#1d1f23}}</style><defs><linearGradient id="f" gradientUnits="userSpaceOnUse" x1="0" y1="${top}" x2="0" y2="${zero}"><stop offset="0" stop-color="${color}" stop-opacity=".3"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs><svg width="100%" height="${height}" viewBox="${n(i * w)} 0 ${w} ${height}" preserveAspectRatio="none"><path d="${area}" fill="url(#f)"/><path d="${path}" fill="none" stroke="${color}" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg><line x1="0" y1="${zero}" x2="100%" y2="${zero}" stroke="#8a8f98" stroke-opacity=".28" stroke-width="1"/>${point}${text}</svg>`
 }
 
 // A local day key (2026-11-05) as the chart's readout names it: Thu 5 Nov.

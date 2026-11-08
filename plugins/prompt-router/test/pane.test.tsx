@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayBarSvg, dayLabel, dayReadSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, dayLineSvg, dayReadSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -472,47 +472,42 @@ test('drawings: tone, bars, sparklines and times', () => {
   expect(left).toMatch(/<rect x="25" width="25" [^>]*fill="#e0483f"/)
   expect(left).not.toMatch(/@keyframes|<script|on\w+=/)
   const vals = [0, 0.1, -0.05, 0.3]
-  const slices = vals.map((_, i) => dayBarSvg(vals, i, `D${i}`))
-  // Each day is its column's bar, from one shared zero line; a column without a label keeps the
-  // same room for one, so the line sits at one height across all of them.
-  expect(slices[1]).toMatch(/^<svg [^>]*width="100%" height="88"/)
+  const slices = vals.map((_, i) => dayLineSvg(vals, i, `D${i}`))
+  // Each day is its column's slice of one line: the whole path, cropped by the viewBox to the column,
+  // stretched to the width (its stroke is not).
+  expect(slices[1]).toMatch(/^<svg [^>]*width="100%" height="104"/)
+  expect(slices[1]).toMatch(/viewBox="250 0 250 104" preserveAspectRatio="none"/)
+  expect(slices[1]).toMatch(/vector-effect="non-scaling-stroke"/)
+  expect(new Set(slices.map(x => x.match(/<path d="([^"]+)" fill="none"/)?.[1])).size).toBe(1)
+  // One zero line at one height across the columns, labelled or not.
   const zeroY = (svg: string) => svg.match(/<line x1="0" y1="([\d.]+)" x2="100%"/)?.[1]
-  expect(new Set([...slices, dayBarSvg(vals, 1)].map(zeroY)).size).toBe(1)
-  // The bar: a wide share of its column, rounded, squared off on the zero line by a strip.
-  const bar = (svg: string) => svg.match(/<g fill="url\(#f\)"[^>]*><rect x="(\d+)%" y="([\d.]+)" width="(\d+)%" height="([\d.]+)" rx="[\d.]+"\/>(<rect [^>]*\/>)?<\/g>/)
-  const fill = (svg: string) => svg.match(/<stop offset="0" stop-color="([^"]+)"/)?.[1]
-  // Wide, so neighbours sit close; up from the zero line in the line's color, down in red, a faint dot on an empty day.
-  expect(bar(slices[1]!)?.slice(1, 4)).toEqual(['14', expect.anything(), '72'])
-  expect(bar(dayBarSvg(Array(14).fill(1), 1))?.[3]).toBe('68')
-  expect(fill(slices[1]!)).toBe('#d97757')
-  expect(Math.abs(Number(bar(slices[1]!)![2]) + Number(bar(slices[1]!)![4]) - Number(zeroY(slices[1]!)))).toBeLessThan(0.05)
-  expect(bar(slices[1]!)?.[5]).toMatch(/height="4"/)
-  expect(bar(slices[2]!)?.[2]).toBe(zeroY(slices[2]!))
-  expect(fill(slices[2]!)).toBe('#e0483f')
-  expect(bar(slices[0]!)).toBeNull()
-  expect(slices[0]).toMatch(/<circle cx="50%" cy="[\d.]+" r="1.6"/)
-  // The tallest day reaches highest; the last day is full strength, the others softer.
-  expect(Number(bar(slices[3]!)![4])).toBeGreaterThan(Number(bar(slices[1]!)![4]))
-  expect(slices[3]).not.toMatch(/class="s"/)
-  expect(slices[1]).toMatch(/<g [^>]*class="s"/)
+  expect(new Set([...slices, dayLineSvg(vals, 1)].map(zeroY)).size).toBe(1)
+  // A small point on each day, red below zero; the last day's on a halo.
+  const cy = (svg: string, r: string) => svg.match(new RegExp(`cy="([\\d.]+)" r="${r}"`))?.[1]
+  expect(slices[1]).toMatch(/<circle cx="50%" cy="[\d.]+" r="2" fill="#d97757"/)
+  expect(slices[2]).toMatch(/<circle cx="50%" cy="[\d.]+" r="2" fill="#e0483f"/)
+  expect(Number(cy(slices[2]!, '2'))).toBeGreaterThan(Number(zeroY(slices[2]!)))
+  expect(slices[3]).toMatch(/r="7"[^>]*opacity=".18"\/><circle class="d" cx="50%"[^>]*r="3.6"/)
   // Its label under it, escaped.
   expect(slices[1]).toMatch(/<text x="50%"[^>]*class="m">D1<\/text>/)
-  expect(dayBarSvg(vals, 1, 'a<b')).toContain('>a&lt;b<')
-  expect(dayBarSvg(vals, 1)).not.toMatch(/<text/)
+  expect(dayLineSvg(vals, 1, 'a<b')).toContain('>a&lt;b<')
+  expect(dayLineSvg(vals, 1)).not.toMatch(/<text/)
   // A plain image: no hover of its own, no <title>.
   for (const x of slices) expect(x).not.toMatch(/<title>|:hover/)
-  // A hovered day: a soft pill behind the bar, the same bar at full strength (a dot on an empty
-  // day), the label in its color.
   // A hovered day's numbers draw smaller than the period's readout, the detail escaped.
   const read = dayReadSvg('Tue 3 Nov: saved $10.35', '$1 with <router>', '#1fa37a')
   expect(read).toMatch(/font-size="12"[^>]*fill="#1fa37a">Tue 3 Nov: saved \$10\.35</)
   expect(read).toContain('font-size="11">$1 with &lt;router&gt;<')
-  const hi = dayBarSvg(vals, 3, 'D3', 88, '#1fa37a', true)
-  expect(hi).toMatch(/<rect class="b" x="6%" y="2" width="88%" height="70" rx="8" fill="#1fa37a"\/>/)
-  expect(bar(hi)?.slice(1)).toEqual(bar(dayBarSvg(vals, 3, 'D3', 88, '#1fa37a'))?.slice(1))
-  expect(hi).not.toMatch(/class="s"/)
+  // A hovered day: a soft pill down the column, a column from the zero line up to its point, the point
+  // on a halo at the line's own height, the label as a chip.
+  const hi = dayLineSvg(vals, 3, 'D3', 104, '#1fa37a', true)
+  const rest = dayLineSvg(vals, 3, 'D3', 104, '#1fa37a')
+  expect(hi).toMatch(/<rect class="b" x="8%" y="2" width="84%" height="86" rx="8" fill="#1fa37a"\/>/)
+  const col = hi.match(/<rect x="22%" y="([\d.]+)" width="56%" height="([\d.]+)" rx="4" fill="url\(#c\)"\/>/)
+  expect(col?.[1]).toBe(cy(hi, '4.2'))
+  expect(Math.abs(Number(col![1]) + Number(col![2]) - Number(zeroY(rest)))).toBeLessThan(0.05)
+  expect(cy(hi, '4.2')).toBe(cy(rest, '3.6'))
   expect(hi).toMatch(/<rect x="50%" [^>]*rx="7"[^>]*fill="#1fa37a"\/><text [^>]*font-weight="600" fill="#fff">D3</)
-  expect(dayBarSvg(vals, 0, 'D0', 88, '#1fa37a', true)).toMatch(/<circle cx="50%" cy="[\d.]+" r="3"/)
   for (const x of [...slices, hi]) expect(x).not.toMatch(/animation|transition|<script|on\w+=/)
   expect(dayLabel('2026-11-05')).toBe('Thu 5 Nov')
   for (const s of [ring, left, ...slices]) expect(s.length).toBeLessThan(20_000)

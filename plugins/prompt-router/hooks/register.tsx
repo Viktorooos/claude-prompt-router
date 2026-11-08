@@ -7,7 +7,7 @@ import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
 import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
-import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, dayBarSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, dayLineSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
 
@@ -1501,7 +1501,7 @@ export const register: Register = (on, options) => {
               </Box>
             ))}
           </Box>
-          {/* One column per day in the flow, each its bar as a plain image and a hover
+          {/* One column per day in the flow, each its slice of the line as a plain image and a hover
               area of its own: the pane does the hover, no sandboxed frame. An absolute Box takes no
               pointer of its own (it counts as its parent's), so the columns cannot sit in one. A
               column's hover carries a transparent background besides its scope: with the scope
@@ -1509,9 +1509,9 @@ export const register: Register = (on, options) => {
           <Box key="spark-cols" flexDirection="row" width="100%">
             {dayPoints.map((p, i) => (
               <Box key={`spark-col-${i}`} width={0} flexGrow={1} hover={{ scope: `spark-day-${i}`, backgroundColor: '#00000000' }}>
-                <Svg source={dayBarSvg(dayValues, i, p.label, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
+                <Svg source={dayLineSvg(dayValues, i, p.label, SPARK_PX, savedColor)} alt={p.head} height={SPARK_PX} />
                 <Box position="absolute" top={0} left={0} width="100%" display="none" hover={{ scope: `spark-day-${i}`, display: 'flex' }}>
-                  <Svg source={dayBarSvg(dayValues, i, p.label, SPARK_PX, savedColor, true)} alt={p.head} height={SPARK_PX} />
+                  <Svg source={dayLineSvg(dayValues, i, p.label, SPARK_PX, savedColor, true)} alt={p.head} height={SPARK_PX} />
                 </Box>
               </Box>
             ))}
