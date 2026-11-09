@@ -493,6 +493,8 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     const clsUsd = e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
     out.parts.classifier -= clsUsd
     if (!changed(d)) continue
+    // A started session's own routed first prompt: its turns all count in the parent's task already.
+    if (e.turns.length && e.turns.every(t => t.task)) continue
     out.routed++
     const failed = failureOf(e)
     const f = failed.weight

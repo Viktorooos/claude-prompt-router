@@ -880,7 +880,7 @@ test('balance: re-work comes off the balance (those follow-ups would not have ru
   close(b.parts.cheaper + b.parts.escalation + b.parts.rework + b.parts.classifier, b.usd)
   const t = balanceText(b)
   expect(t).toContain(`Without re-work ${signed(b.usdNoRework)} (upper bound)`)
-  expect(statsHtml(summarize(task('a', down, [{ usd: 1 }]), NOW), [], null, b)).toContain('Without re-work')
+  expect(statsHtml(summarize(task('a', down, [{ usd: 1 }]), NOW), [], null, b)).toContain(`without re-work ${signed(b.usdNoRework)} (upper bound)`)
 })
 
 test('balance: sessions the router started with no linked turns (older records) are counted, so the pane can say they are priced on their own model', () => {
@@ -895,4 +895,16 @@ test('balance: sessions the router started with no linked turns (older records) 
   expect(b.unlinkedSessions).toBe(1)
   expect(balanceText(b)).toContain('1 session the router started is priced on its own first model (logged before sessions were linked)')
   expect(balance(task('a', { to: cheap }, [{ usd: 1 }])).unlinkedSessions).toBe(0)
+})
+
+test('balance: a started session whose own first prompt was routed too is not a second task', () => {
+  const t0 = NOW - DAY
+  const records: Entry[] = [
+    decision({ chat: 'p', ts: t0, key: 'export', follows: 'new', where: 'session', to: { model: 'haiku', effort: 'low' } }),
+    decision({ chat: 'k', ts: t0 + 5, key: 'brief', follows: 'new', to: { model: 'haiku', effort: 'low' } }),
+    turn('haiku', 'opus', { chat: 'k', ts: t0 + 10, usd: 1, task: { chat: 'p', decision: t0 } }),
+  ]
+  const b = balance(records)
+  expect(b.routed).toBe(1)
+  close(b.byModel[0]!.usdPerTask, 1)
 })

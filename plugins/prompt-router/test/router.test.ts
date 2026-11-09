@@ -1601,3 +1601,77 @@ test('stats: a session the router started takes the parent chat\'s baseline and 
   expect(u.baseline).toBe('claude-sonnet-5-5')
   expect(u.task).toBeUndefined()
 })
+
+// Handoff: the parent chat starts a session through start_session; the next session takes it only on the
+// model the router picked and within HANDOFF_TTL. One engine stands for both: each start() is a new session.
+function handoffEngine(on: any, opts: { model?: string; now?: number }) {
+  const seen = engine(on, PICK.session, opts)
+  on('store.delete', (_: unknown, e: any) => {
+    seen.store.delete(e.key)
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: { content: [{ type: 'text', text: 'Started session "Export" (session_id: local_abc, name: export).' }] } }))
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-sonnet-5-5' } }))
+  return seen
+}
+async function parentStarts($: any, seen: Seen, opts: { model?: string }) {
+  opts.model = 'claude-opus-5-5'
+  await start($)
+  await submit($, 'build the CSV export feature')
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 'Export', prompt: 'build it' })
+  await $.turn.complete(TURN_DONE)
+  return statsLines(seen).filter((r: any) => r.kind === 'decision').at(-1)
+}
+async function childTurn($: any, seen: Seen, opts: { model?: string }, model: string) {
+  opts.model = model
+  await start($)
+  await $.turn.complete(TURN_DONE)
+  return statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1)
+}
+
+test('handoff: past HANDOFF_TTL the new session is on its own', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  await parentStarts($, seen, opts)
+  opts.now = 11 * 60_000
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeUndefined()
+})
+
+test('handoff: a session on another model, or on a model not known, does not take it', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  await parentStarts($, seen, opts)
+  expect((await childTurn($, seen, opts, 'claude-haiku-5-5')).task).toBeUndefined()
+  expect((await childTurn($, seen, opts, 'some-other-model')).task).toBeUndefined()
+  // The router's own session after them still finds it.
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeTruthy()
+})
+
+test('handoff: the person\'s own session on the parent\'s model within the TTL does not take it', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  const d = await parentStarts($, seen, opts)
+  expect((await childTurn($, seen, opts, 'claude-opus-5-5')).task).toBeUndefined()
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toEqual({ chat: d.chat, decision: d.ts })
+})
+
+test('handoff: two parents at once each hand over their own session, oldest first', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  const a = await parentStarts($, seen, opts)
+  opts.now = 60_000
+  const b = await parentStarts($, seen, opts)
+  expect(a.chat).not.toBe(b.chat)
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toEqual({ chat: a.chat, decision: a.ts })
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toEqual({ chat: b.chat, decision: b.ts })
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeUndefined()
+})
+
+test('handoff: only the started session\'s first answer belongs to the parent task, prompt noted or not', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  await parentStarts($, seen, opts)
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeTruthy()
+  await $.turn.complete(TURN_DONE)
+  expect(statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1).task).toBeUndefined()
+})

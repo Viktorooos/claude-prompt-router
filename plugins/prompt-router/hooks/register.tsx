@@ -89,13 +89,13 @@ let baseline = ''
 let routed = ''
 // The same for effort: the person's own level, the level the router set, and the last main-chat request's.
 let effortBase = ''
-// A session the router started: the task in the parent chat its turns belong to (Turn.task), and
-// how many main-chat turns this session has logged since. Its own work after the first answer is not.
+// A session the router started: the task in the parent chat its turns belong to (Turn.task), until
+// its first main-chat turn is logged. Its own work after the first answer is not the parent's.
 let taskLink: { chat: string; decision: number } | null = null
-let linkedTurns = 0
-// The parent chat's side of a session the router starts, in $.store until the new session takes it:
-// the session's id in the app is not the one the new session sees, so the newest handoff on the
-// model it starts on, at most HANDOFF_TTL old, is taken once.
+// The parent chats' side of the sessions the router starts, a list in $.store until a new session
+// takes one: the session's id in the app is not the one the new session sees, so a new session takes
+// the oldest handoff on the model it starts on (known, and the same), at most HANDOFF_TTL old, once.
+// Expired ones go at every read and write.
 const HANDOFF = 'handoff'
 const HANDOFF_TTL = 10 * 60_000
 type Handoff = { at: number; chat: string; decision: number; model: string; baseline: string }
@@ -578,11 +578,6 @@ let routerAsked = false
 // decide() passes here once, so the pane's last decision is written here too.
 async function noteDecision($: EngineInterface, where: Decision['where'], to: Decision['to'], outcome: Decision['outcome'], now: Level | '', p?: Pick) {
   const ts = await $.clock.now()
-  // A prompt after the started session's first answer is the person's own work there.
-  if (taskLink && linkedTurns > 0) {
-    taskLink = null
-    await keepChat($)
-  }
   if (cfg.stats === 'on') {
     pending.push({ kind: 'decision', ts, platform: 'claude-code', chat: chatId, where, from: { model: pickedFrom, effort: now }, to, ...(lastFollows ? { follows: lastFollows } : {}), outcome, ...(lastPromptKey ? { key: lastPromptKey } : {}), ...(lastClassifier ? { classifier: lastClassifier } : {}), ...(sessionId ? { session: sessionId } : {}), ...(lastRedo ? { redo: true as const } : {}) })
   }
@@ -645,12 +640,21 @@ function failed(r: unknown) {
   return 'deny' in o || !!o.isError || !!(o.result && typeof o.result === 'object' && o.result.isError)
 }
 
+// The handoffs not yet taken and not expired, oldest first (an older single record counts as none).
+async function handoffs($: EngineInterface, now: number): Promise<Handoff[]> {
+  const v = await $.store.get(HANDOFF)
+  return (Array.isArray(v) ? (v as Handoff[]) : [])
+    .filter(h => h && typeof h.at === 'number' && !!h.baseline && now - h.at <= HANDOFF_TTL)
+    .sort((a, b) => a.at - b.at)
+}
+
 // The router started a session: its turns are priced against this chat's baseline, in this task.
 async function giveHandoff($: EngineInterface, asked: { ts: number; model: string }) {
   if (cfg.stats !== 'on') return
-  const h: Handoff = { at: await $.clock.now(), chat: chatId, decision: asked.ts, model: asked.model, baseline: baseline || seenModel || (await chatModel($)) }
   try {
-    await $.store.set(HANDOFF, h)
+    const now = await $.clock.now()
+    const h: Handoff = { at: now, chat: chatId, decision: asked.ts, model: asked.model, baseline: baseline || seenModel || (await chatModel($)) }
+    await $.store.set(HANDOFF, [...(await handoffs($, now)), h])
   } catch (err) {
     await log($, 'stats', err)
   }
@@ -660,12 +664,17 @@ async function giveHandoff($: EngineInterface, asked: { ts: number; model: strin
 // set (so the first request does not count as the person's own pick), and the task.
 async function takeHandoff($: EngineInterface) {
   try {
-    const h = (await $.store.get(HANDOFF)) as Handoff | undefined
-    if (!h || typeof h.at !== 'number' || !h.baseline) return
     const now = await $.clock.now()
+    const stored = await $.store.get(HANDOFF)
+    const list = await handoffs($, now)
     const model = knownModel(await chatModel($))
-    if (now - h.at > HANDOFF_TTL || (model && knownModel(h.model) && model !== knownModel(h.model))) return
-    await $.store.delete(HANDOFF)
+    const h = model ? list.find(x => knownModel(x.model) === model) : undefined
+    const rest = list.filter(x => x !== h)
+    if (h || !Array.isArray(stored) || rest.length !== stored.length) {
+      if (rest.length) await $.store.set(HANDOFF, rest)
+      else if (stored !== undefined) await $.store.delete(HANDOFF)
+    }
+    if (!h) return
     baseline = h.baseline
     routed = h.model
     taskLink = { chat: h.chat, decision: h.decision }
@@ -1081,7 +1090,6 @@ export const register: Register = (on, options) => {
     effortBase = goesOn ? same.base ?? '' : ''
     routedLevel = goesOn ? same.routedLevel ?? '' : ''
     taskLink = goesOn ? same.task ?? null : null
-    linkedTurns = 0
     if (!goesOn) await takeHandoff($)
     await keepChat($)
     stepEffort = null
@@ -1278,7 +1286,6 @@ export const register: Register = (on, options) => {
       }
       if (!e.agentId) routerAsked = false
       const manual = !e.agentId && manualUp
-      if (!e.agentId && taskLink) linkedTurns++
       if (!e.agentId) manualUp = false
       // The weekly limit's fill after a main-chat turn: what the person's plan really spent (limitRate).
       let week: Turn['week']
@@ -1301,6 +1308,11 @@ export const register: Register = (on, options) => {
         ...(week ? { week } : {}),
         ...(!e.agentId && stepEffort?.effort && stepEffort.base ? { effort: stepEffort.effort, baseEffort: stepEffort.base } : {}),
       })
+      // The started session's first answer is logged: what follows is the person's own work there.
+      if (!e.agentId && taskLink) {
+        taskLink = null
+        await keepChat($)
+      }
       await flush($)
     } catch (err) {
       await log($, 'stats', err)
