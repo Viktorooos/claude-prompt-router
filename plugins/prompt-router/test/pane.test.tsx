@@ -298,7 +298,7 @@ test('Details, always open: the strict balance, how often it was right, where th
       const hero = await ui.find({ key: 'details-hero' })
       expect(hero.props.backgroundColor).toBe('#8b7cf60f')
       expect(hero.props.borderColor).toBe('#8b7cf638')
-      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nDecisions right · 95 %: 21–100 %\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
+      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nUp to \+\$2\.93 if no follow-up was re-work\nDecisions right · 95 %: 21–100 %\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
       const balance = JSON.stringify(await ui.find({ key: 'balance' }))
       expect(balance).toMatch(/Router balance \(rough\) \+\$2\.93/)
       expect(balance).toMatch(/fill=\\"#1fa37a\\"[^<]*>\+\$2\.93</)

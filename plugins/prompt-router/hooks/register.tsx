@@ -674,6 +674,10 @@ async function takeHandoff($: EngineInterface) {
   }
 }
 
+// The balance's upper bound beside it: re-work counts as lost in the balance, here as work that
+// would have run anyway, so the two numbers are the range of the estimate.
+const noReworkLine = (b: Balance) => `Up to ${signed(b.usdNoRework)} if no follow-up was re-work`
+
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
 async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!enabled || e.command || e.isMeta) return e
@@ -1895,6 +1899,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column">
             {row('balance', balanceName, signed(b.usd), { bold: true, color: MONEY_COLOR[money(b.usd)] })}
             <Text dimColor>{balanceWhat}</Text>
+            <Text dimColor>{noReworkLine(b)}</Text>
           </Box>
           {row('accuracy', 'Decisions right', accuracyText(b))}
           {t.length > 1 ? row('tasks', 'Tasks', tasksText) : null}
@@ -1909,6 +1914,7 @@ export const register: Register = (on, options) => {
                 <Text dimColor>{balanceName}</Text>
                 <Svg source={bigNumberSvg(signed(b.usd), MONEY_COLOR[money(b.usd)] ?? TONES.idle[0], px, 30)} alt={`${balanceName} ${signed(b.usd)}`} height={38} />
                 <Text dimColor>vs. your own picks, classifier included</Text>
+                <Text dimColor>{noReworkLine(b)}</Text>
               </Box>
               <Box key="accuracy" flexShrink={0}>
                 <Svg source={ringSvg(b.accuracy?.pct ?? null, b.accuracy?.low ?? null, b.accuracy?.high ?? null, VIOLET)} alt={b.accuracy ? `Decisions right: ${Math.round(b.accuracy.pct)} %` : 'Decisions right: not enough tasks yet'} width={88} height={88} />

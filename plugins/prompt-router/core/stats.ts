@@ -452,8 +452,12 @@ export type ModelRow = { model: string; tasks: number; usdPerTask: number; rewor
 export type Balance = {
   /** Tasks the router changed (model, effort, subagent, session). */
   routed: number
-  /** Money the router saved (+) or cost (−) against no router, classifier included. An estimate. */
+  /** Money the router saved (+) or cost (−) against no router, classifier included. An estimate.
+   *  A failed task's re-done turns would not have run without the router: their share by the failure
+   *  weight comes off the price without the router. */
   usd: number
+  /** usd as if no follow-up were re-work (each would have run without the router too): the upper bound. */
+  usdNoRework: number
   /** usd split: cheaper picks, higher picks (escalation), re-work after a failed answer, classifier. */
   parts: { cheaper: number; escalation: number; rework: number; classifier: number }
   /** Share of routed tasks that did the job (weighted failures), with its Wilson interval. */
@@ -463,12 +467,13 @@ export type Balance = {
 
 // The router's balance per task: each routed task's turns priced on the model they would have run on
 // without the router (the token re-pricing above), minus what they cost and the classifier. A task's
-// later prompts after a failure count as re-work, by the failure's weight.
+// re-done turns after a failure (reworkTurns) count as lost, by the failure's weight: a good answer
+// would have spared them, so their price without the router comes off too. usdNoRework leaves them in.
 // `since`: only tasks that started then or later count.
 export function balance(records: readonly Entry[], since = -Infinity): Balance {
   const taken = takenSet(records)
   const changed = (d: Decision) => routedDecision(d) || (d.outcome === 'asked' && taken.has(takenKey(d.chat, d.ts)))
-  const out: Balance = { routed: 0, usd: 0, parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [] }
+  const out: Balance = { routed: 0, usd: 0, usdNoRework: 0, parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [] }
   const rows = new Map<string, { tasks: number; usd: number; rework: number; ms: number; timed: number }>()
   const row = (m: string) => rows.get(m) ?? (rows.set(m, { tasks: 0, usd: 0, rework: 0, ms: 0, timed: 0 }), rows.get(m)!)
   let fails = 0
@@ -494,10 +499,15 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     const own = e.turns.filter(t => !t.task && !neutralAgent(t))
     const turns = [...own, ...e.decisions.flatMap(x => spawned.get(takenKey(x.chat, x.ts)) ?? []).filter(t => !neutralAgent(t))]
     const actual = turnsUsd(turns)
-    const rework = f * turnsUsd(reworkTurns(e, failed, own))
+    const redone = reworkTurns(e, failed, own)
+    const rework = f * turnsUsd(redone)
     const s = empty()
     for (const t of turns) addTurn(s, t, null)
-    const gain = s.withoutUsd - (actual - rework)
+    const spared = empty()
+    for (const t of redone) addTurn(spared, t, null)
+    out.usdNoRework += s.withoutUsd - actual
+    // The pick's gain on the work that had to be done; the re-done turns' cost is re-work below.
+    const gain = s.withoutUsd - f * spared.withoutUsd - (actual - rework)
     // A subagent or session on a stronger model is an escalation, not a cheaper pick.
     if (movesDown(d.where, d.from, d.to)) out.parts.cheaper += gain
     else out.parts.escalation += gain
@@ -513,6 +523,7 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
   }
   const p = out.parts
   out.usd = p.cheaper + p.escalation + p.rework + p.classifier
+  out.usdNoRework += p.classifier
   if (out.routed) {
     const w = wilson(out.routed - fails, out.routed)
     out.accuracy = { pct: (1 - fails / out.routed) * 100, low: w.low * 100, high: w.high * 100 }
@@ -915,13 +926,14 @@ export function modelTable(b: Balance): string[][] {
 }
 
 const BALANCE_NOTE =
-  'Per task: a routed task (its prompt, the prompts that fixed or went on with it, its subagents, the classifier), its turns priced on the model they would have run on without the router, as in the table above. Re-work: the later prompts of a task whose answer failed, by the failure weight. Accuracy: the share of routed tasks with no sign of failure.'
+  'Per task: a routed task (its prompt, the prompts that fixed or went on with it, its subagents, the classifier), its turns priced on the model they would have run on without the router, as in the table above. Re-work: the re-done prompts of a task whose answer failed, by the failure weight; they come off the money, as a good answer would have spared them. Without re-work: the money if every follow-up would have run anyway, the upper bound. Accuracy: the share of routed tasks with no sign of failure.'
 
 // /router stats: the balance per task, under the token table.
 export function balanceText(b: Balance): string {
   const lines = [
     'Per task (total, estimated)',
     `Money      ${signed(b.usd)}`,
+    `Without re-work ${signed(b.usdNoRework)} (upper bound)`,
     ...balanceParts(b).map(([, label, v]) => `  ${label.padEnd(15)}${signed(v)}`),
     `Accuracy   ${accuracyText(b)}`,
     sampleNote(b),
@@ -940,7 +952,7 @@ function balanceHtml(b: Balance): string {
   const parts = balanceParts(b).map(([, label, v]) => `<tr><th>${label}</th><td>${signed(v)}</td></tr>`).join('')
   return `<h2>Per task</h2>
 <div class="big">${isRough(b) ? '~' : ''}${signed(b.usd)} <span style="font-size:15px;font-weight:400;color:var(--muted)">total, estimated</span></div>
-<p>${sampleNote(b)}</p>
+<p>${sampleNote(b)} · without re-work ${signed(b.usdNoRework)} (upper bound)</p>
 <div class="wrap"><table><tbody>${parts}<tr><th>Accuracy</th><td>${accuracyText(b)}</td></tr></tbody></table></div>
 ${table}
 <p>${BALANCE_NOTE}</p>`

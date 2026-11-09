@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import { promptKey } from '../core/router.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, usd, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, signed, statsHtml, statsRows, statsText, summarize, usd, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -536,11 +536,15 @@ test('balance: routed tasks priced by the token re-pricing, with parts and accur
   // in the person's words (0.7 × 0.5 = 0.35) is re-work. c: sonnet − opus, an escalation. Four prompts' classifier: 0.04.
   const gap = cost(U, 'opus')! - cost(U, 'haiku')!
   const esc = cost(U, 'sonnet')! - cost(U, 'opus')!
-  close(b.parts.cheaper, 3 * gap + 0.35)
+  // The corrected follow-up would not have run without the router: its Opus price (0.5 + gap) comes
+  // off by the weight; the balance without re-work keeps it.
+  const spared = 0.7 * (0.5 + gap)
+  close(b.parts.cheaper, 3 * gap + 0.35 - spared)
   close(b.parts.rework, -0.35)
   close(b.parts.escalation, esc)
   close(b.parts.classifier, -0.04)
-  close(b.usd, 3 * gap + esc - 0.04)
+  close(b.usd, 3 * gap + esc - 0.04 - spared)
+  close(b.usdNoRework, 3 * gap + esc - 0.04)
   close(b.accuracy!.pct, (1 - 0.7 / 3) * 100)
   const w = wilson(3 - 0.7, 3)
   close(b.accuracy!.low, w.low * 100)
@@ -861,4 +865,20 @@ test('balance: a session the router started counts in the task that started it, 
   const gap = cost(U, 'opus')! - cost(U, 'haiku')!
   close(b.parts.cheaper, gap)
   close(b.byModel[0]!.usdPerTask, 0.1 + 1 + 0.01)
+})
+
+test('balance: re-work comes off the balance (those follow-ups would not have run without the router); the balance without it is the upper bound', () => {
+  const down = { to: { model: 'haiku', effort: 'low' as const } }
+  const b = balance(task('a', down, [{ usd: 1 }], [{ d: { redo: true, follows: 'continues' }, turns: [{ usd: 0.5 }] }]))
+  const gap = cost(U, 'opus')! - cost(U, 'haiku')!
+  const f = FAILURE_WEIGHTS.corrected
+  // Without the router: both turns on Opus (1 + gap, 0.5 + gap), less the share of the follow-up a
+  // good answer would have spared. With it: 1.5. Two prompts' classifier: 0.02.
+  close(b.usdNoRework, 2 * gap - 0.02)
+  close(b.usd, 2 * gap - f * (0.5 + gap) - 0.02)
+  close(b.parts.rework, -f * 0.5)
+  close(b.parts.cheaper + b.parts.escalation + b.parts.rework + b.parts.classifier, b.usd)
+  const t = balanceText(b)
+  expect(t).toContain(`Without re-work ${signed(b.usdNoRework)} (upper bound)`)
+  expect(statsHtml(summarize(task('a', down, [{ usd: 1 }]), NOW), [], null, b)).toContain('Without re-work')
 })

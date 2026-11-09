@@ -347,7 +347,7 @@ The token estimate assumes the work would have taken the same tokens without the
 
 - **Task** = a routed prompt plus the prompts that continue or fix it (the classifier says which; the same words again go on with it), ending at a new topic or after 30 min of quiet. Its turns include its subagents.
 - **Balance of a routed task** = its turns priced on the model they would have run on without the router − what they cost. A negative number (red, with a minus) means the router cost you more.
-- **Re-work**: when the task failed (you switched to a stronger model, repeated the prompt, corrected it or broke it off), its follow-up turns count as lost, weighted 1 / 1 / 0.7 / 0.4.
+- **Re-work**: when the task failed (you switched to a stronger model, repeated the prompt, said the answer was wrong or broke it off), its follow-up turns count as lost, weighted 1 / 1 / 0.7 / 0.4; a fix only the classifier read (not in your words) weighs 0.2 and loses just the answer to that prompt. Lost turns come off the balance, because a good answer would have spared them; *without re-work* beside it is the upper bound, as if every follow-up would have run anyway. Subagents the router did not start stay out of the task, and a session the router started counts in the task that started it, against the parent chat's model.
 - **Parts**: cheaper picks, higher picks, re-work and the classifier, which comes off every task.
 - **`~`** marks a rough number: fewer than 12 routed tasks.
 - **Accuracy** (*Decisions right*) = the share of routed tasks without a failure, with a 95 % (Wilson) interval. A repeated prompt counts as a correction. Declined offers are logged and shown as *Asked / declined*.
