@@ -882,3 +882,17 @@ test('balance: re-work comes off the balance (those follow-ups would not have ru
   expect(t).toContain(`Without re-work ${signed(b.usdNoRework)} (upper bound)`)
   expect(statsHtml(summarize(task('a', down, [{ usd: 1 }]), NOW), [], null, b)).toContain('Without re-work')
 })
+
+test('balance: sessions the router started with no linked turns (older records) are counted, so the pane can say they are priced on their own model', () => {
+  const t0 = NOW - DAY
+  const session = (chat: string) => decision({ chat, ts: t0, key: chat, follows: 'new', where: 'session', to: { model: 'haiku', effort: 'low' } })
+  const records: Entry[] = [
+    session('old'),
+    session('new'),
+    turn('haiku', 'opus', { chat: 'k', ts: t0 + 10, task: { chat: 'new', decision: t0 } }),
+  ]
+  const b = balance(records)
+  expect(b.unlinkedSessions).toBe(1)
+  expect(balanceText(b)).toContain('1 session the router started is priced on its own first model (logged before sessions were linked)')
+  expect(balance(task('a', { to: cheap }, [{ usd: 1 }])).unlinkedSessions).toBe(0)
+})

@@ -456,6 +456,9 @@ export type Balance = {
    *  A failed task's re-done turns would not have run without the router: their share by the failure
    *  weight comes off the price without the router. */
   usd: number
+  /** Routed tasks that started a session with no turns linked to them (logged before sessions were
+   *  linked, Turn.task): that session's turns are priced on its own first model, outside the task. */
+  unlinkedSessions: number
   /** usd as if no follow-up were re-work (each would have run without the router too): the upper bound. */
   usdNoRework: number
   /** usd split: cheaper picks, higher picks (escalation), re-work after a failed answer, classifier. */
@@ -473,7 +476,7 @@ export type Balance = {
 export function balance(records: readonly Entry[], since = -Infinity): Balance {
   const taken = takenSet(records)
   const changed = (d: Decision) => routedDecision(d) || (d.outcome === 'asked' && taken.has(takenKey(d.chat, d.ts)))
-  const out: Balance = { routed: 0, usd: 0, usdNoRework: 0, parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [] }
+  const out: Balance = { routed: 0, usd: 0, usdNoRework: 0, unlinkedSessions: 0, parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [] }
   const rows = new Map<string, { tasks: number; usd: number; rework: number; ms: number; timed: number }>()
   const row = (m: string) => rows.get(m) ?? (rows.set(m, { tasks: 0, usd: 0, rework: 0, ms: 0, timed: 0 }), rows.get(m)!)
   let fails = 0
@@ -497,7 +500,9 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     // The task's own turns (a session's turns counted in the task that started it), and the turns of
     // the session it started; subagents the router did not start left out.
     const own = e.turns.filter(t => !t.task && !neutralAgent(t))
-    const turns = [...own, ...e.decisions.flatMap(x => spawned.get(takenKey(x.chat, x.ts)) ?? []).filter(t => !neutralAgent(t))]
+    const linked = e.decisions.flatMap(x => spawned.get(takenKey(x.chat, x.ts)) ?? [])
+    if (d.where === 'session' && !linked.length) out.unlinkedSessions++
+    const turns = [...own, ...linked.filter(t => !neutralAgent(t))]
     const actual = turnsUsd(turns)
     const redone = reworkTurns(e, failed, own)
     const rework = f * turnsUsd(redone)
@@ -915,6 +920,10 @@ export const balanceParts = (b: Balance) => [
   ['classifier', 'Classifier', b.parts.classifier],
 ] as const
 
+// Older sessions the router started are not in their tasks: says how many, or '' when none.
+export const unlinkedNote = (b: Balance) =>
+  b.unlinkedSessions ? `${b.unlinkedSessions} ${b.unlinkedSessions === 1 ? 'session the router started is' : 'sessions the router started are'} priced on ${b.unlinkedSessions === 1 ? 'its' : 'their'} own first model (logged before sessions were linked)` : ''
+
 export const accuracyText = (b: Balance) => (b.accuracy ? `${Math.round(b.accuracy.pct)} % (95 %: ${Math.round(b.accuracy.low)}–${Math.round(b.accuracy.high)} %)` : '–')
 
 // The per-model table as rows of cells, header first.
@@ -937,6 +946,7 @@ export function balanceText(b: Balance): string {
     ...balanceParts(b).map(([, label, v]) => `  ${label.padEnd(15)}${signed(v)}`),
     `Accuracy   ${accuracyText(b)}`,
     sampleNote(b),
+    ...(unlinkedNote(b) ? [unlinkedNote(b)] : []),
   ]
   const t = modelTable(b)
   if (t.length > 1) {
@@ -952,7 +962,7 @@ function balanceHtml(b: Balance): string {
   const parts = balanceParts(b).map(([, label, v]) => `<tr><th>${label}</th><td>${signed(v)}</td></tr>`).join('')
   return `<h2>Per task</h2>
 <div class="big">${isRough(b) ? '~' : ''}${signed(b.usd)} <span style="font-size:15px;font-weight:400;color:var(--muted)">total, estimated</span></div>
-<p>${sampleNote(b)} · without re-work ${signed(b.usdNoRework)} (upper bound)</p>
+<p>${sampleNote(b)} · without re-work ${signed(b.usdNoRework)} (upper bound)${unlinkedNote(b) ? ` · ${unlinkedNote(b)}` : ''}</p>
 <div class="wrap"><table><tbody>${parts}<tr><th>Accuracy</th><td>${accuracyText(b)}</td></tr></tbody></table></div>
 ${table}
 <p>${BALANCE_NOTE}</p>`

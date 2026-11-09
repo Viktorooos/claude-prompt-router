@@ -6,7 +6,7 @@ import { ALL_MODELS, BASE_MODELS, claudeDir, quickReply, DECIDE_OTHER, DEFAULT_W
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
+import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, unlinkedNote, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
 import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, dayLineSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
@@ -676,7 +676,7 @@ async function takeHandoff($: EngineInterface) {
 
 // The balance's upper bound beside it: re-work counts as lost in the balance, here as work that
 // would have run anyway, so the two numbers are the range of the estimate.
-const noReworkLine = (b: Balance) => `Up to ${signed(b.usdNoRework)} if no follow-up was re-work`
+const noReworkLine = (b: Balance) => `Up to ${signed(b.usdNoRework)} if no follow-up was re-work${b.unlinkedSessions ? `. ${unlinkedNote(b)}` : ''}`
 
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
 async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptSubmitInput> {
