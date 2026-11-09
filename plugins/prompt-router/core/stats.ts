@@ -50,6 +50,12 @@ export type Turn = {
    *  the router each of those requests would have read that context from the main chat's cache. */
   mainContext?: number
   requests?: number
+  /** A subagent the router started (older records: only `mainContext` says so). Any other subagent
+   *  on its own model is the person's choice and stays out of the router's tasks (neutralAgent). */
+  routedAgent?: true
+  /** A turn of a session the router started: the task it belongs to (the parent chat and the `ts`
+   *  of the decision that started it), priced against the parent chat's baseline. */
+  task?: { chat: string; decision: number }
   /** The router switched the chat's model since the last turn: without it, what this turn wrote to
    *  the cache would have been read from it. */
   switched?: true
@@ -291,8 +297,12 @@ const routedDecision = (d: Decision) => d.outcome === 'applied' && d.where !== '
 
 // How surely each sign says a cheaper answer did not do the job (1 = surely). Guesses, to tune:
 // switched = the person moved the picker up and went on, repeated = the same text again, corrected =
-// the classifier read the next prompt as a fix of the answer, interrupted = the answer was cut off.
-export const FAILURE_WEIGHTS = { switched: 1, repeated: 1, corrected: 0.7, interrupted: 0.4 } as const
+// the next prompt's own words say the answer failed (isRedo), interrupted = the answer was cut off,
+// classifierFix = only the classifier read the next prompt as a fix (follows: 'corrects'), with
+// nothing in the person's words. That reading is a weak sign: on the log of Oct 31 – Nov 9 2026 it
+// stood alone in 16 of 146 routed tasks and made $16 of the $20 re-work, the person never switching
+// up by hand. So it weighs little, and its re-work is the one answer to that prompt (reworkTurns).
+export const FAILURE_WEIGHTS = { switched: 1, repeated: 1, corrected: 0.7, interrupted: 0.4, classifierFix: 0.2 } as const
 
 export type FailureReason = keyof typeof FAILURE_WEIGHTS
 export type Failure = { weight: number; reasons: FailureReason[] }
@@ -303,6 +313,10 @@ function failure(reasons: FailureReason[]): Failure {
 }
 
 const main = (t: Turn) => !t.agentId
+// A subagent the router did not start: on its own model (the turn's baseline is its model) and not
+// one the router offered. Neutral for the router: its cost is the person's pick either way, so it
+// stays out of the task's cost and re-work.
+const neutralAgent = (t: Turn) => !!t.agentId && !t.routedAgent && !t.mainContext && t.model === t.baseline
 // A turn that did not finish: no tokens in the log, or only those its transcript had.
 const cutOff = (t: Turn) => !t.usage || !!t.transcript
 
@@ -331,7 +345,8 @@ function reworkedSet(records: readonly Entry[]) {
       const answer = turns.find(t => t.ts >= d.ts && t.ts < until(0))
       const reasons: FailureReason[] = []
       if (d.key && next.some(n => n.key === d.key)) reasons.push('repeated')
-      if (next[0]?.follows === 'corrects' || next[0]?.redo) reasons.push('corrected')
+      if (next[0]?.redo) reasons.push('corrected')
+      else if (next[0]?.follows === 'corrects') reasons.push('classifierFix')
       if (next[0] && turns.some(t => t.manual && t.ts >= next[0]!.ts && t.ts < until(1))) reasons.push('switched')
       if (answer && cutOff(answer)) reasons.push('interrupted')
       if (reasons.length) out.set(takenKey(d.chat, d.ts), failure(reasons))
@@ -389,7 +404,9 @@ export function failureOf(e: Episode): Failure {
   const reasons: FailureReason[] = []
   if (!e.decisions.length) return failure(reasons)
   if (e.decisions.some((d, i) => d.key && e.decisions.slice(0, i).some(x => x.key === d.key))) reasons.push('repeated')
-  if (e.decisions.slice(1).some(d => d.follows === 'corrects' || d.redo)) reasons.push('corrected')
+  const later = e.decisions.slice(1)
+  if (later.some(d => d.redo)) reasons.push('corrected')
+  if (later.some(d => d.follows === 'corrects' && !d.redo)) reasons.push('classifierFix')
   const answers = e.turns.filter(main)
   if (answers.slice(1).some(t => t.manual)) reasons.push('switched')
   if (answers.some(cutOff)) reasons.push('interrupted')
@@ -407,6 +424,17 @@ const turnsMs = (ts: readonly Turn[]) => ts.filter(main).reduce((n, t) => n + (t
 const classifierMs = (ds: readonly Decision[]) => ds.reduce((n, d) => n + (d.classifier?.ms ?? 0), 0)
 // Whether the task's main turns carry their times (older records and some platforms do not).
 const timed = (ts: readonly Turn[]) => ts.some(t => main(t) && t.durationMs !== undefined)
+
+// The turns a failed task re-did. A classifier-only correction (the strongest sign there) re-did
+// just the answer to the first prompt read as a fix; any surer sign, everything after the first prompt.
+function reworkTurns(e: Episode, f: Failure, turns: readonly Turn[]): Turn[] {
+  if (!f.weight || !e.decisions[1]) return []
+  const onlyFix = f.reasons.every(r => r === 'classifierFix' || FAILURE_WEIGHTS[r] < FAILURE_WEIGHTS.classifierFix)
+  if (!onlyFix) return turns.filter(t => t.ts >= e.decisions[1]!.ts)
+  const k = e.decisions.findIndex((d, i) => i > 0 && d.follows === 'corrects' && !d.redo)
+  const end = e.decisions[k + 1]?.ts ?? Infinity
+  return turns.filter(t => t.ts >= e.decisions[k]!.ts && t.ts < end)
+}
 
 // The Wilson 95 % interval of a share (successes may be fractional: failures are weighted).
 export function wilson(successes: number, n: number): { low: number; high: number } {
@@ -444,6 +472,13 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
   const rows = new Map<string, { tasks: number; usd: number; rework: number; ms: number; timed: number }>()
   const row = (m: string) => rows.get(m) ?? (rows.set(m, { tasks: 0, usd: 0, rework: 0, ms: 0, timed: 0 }), rows.get(m)!)
   let fails = 0
+  // Turns of sessions the router started, by the decision that started them.
+  const spawned = new Map<string, Turn[]>()
+  for (const r of records) {
+    if (r.kind !== 'turn' || !r.task) continue
+    const k = takenKey(r.task.chat, r.task.decision)
+    spawned.set(k, [...(spawned.get(k) ?? []), r])
+  }
   for (const e of episodes(records)) {
     if (!e.decisions.length || e.start < since) continue
     const d = e.decisions[0]!
@@ -451,13 +486,17 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     out.parts.classifier -= clsUsd
     if (!changed(d)) continue
     out.routed++
-    const f = failureOf(e).weight
+    const failed = failureOf(e)
+    const f = failed.weight
     fails += f
-    const actual = turnsUsd(e.turns)
-    const later = e.decisions[1] ? turnsUsd(e.turns.filter(t => t.ts >= e.decisions[1]!.ts)) : 0
-    const rework = f * later
+    // The task's own turns (a session's turns counted in the task that started it), and the turns of
+    // the session it started; subagents the router did not start left out.
+    const own = e.turns.filter(t => !t.task && !neutralAgent(t))
+    const turns = [...own, ...e.decisions.flatMap(x => spawned.get(takenKey(x.chat, x.ts)) ?? []).filter(t => !neutralAgent(t))]
+    const actual = turnsUsd(turns)
+    const rework = f * turnsUsd(reworkTurns(e, failed, own))
     const s = empty()
-    for (const t of e.turns) addTurn(s, t, null)
+    for (const t of turns) addTurn(s, t, null)
     const gain = s.withoutUsd - (actual - rework)
     // A subagent or session on a stronger model is an escalation, not a cheaper pick.
     if (movesDown(d.where, d.from, d.to)) out.parts.cheaper += gain
@@ -467,8 +506,8 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     r.tasks++
     r.usd += actual + clsUsd
     r.rework += f
-    if (timed(e.turns)) {
-      r.ms += turnsMs(e.turns) + classifierMs(e.decisions)
+    if (timed(own)) {
+      r.ms += turnsMs(own) + classifierMs(e.decisions)
       r.timed++
     }
   }

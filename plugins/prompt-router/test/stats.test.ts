@@ -437,7 +437,7 @@ test('episodes: older records without follows count each prompt as its own task,
 test('re-work also counts a correction, a switch up by hand and a cut-off answer, each by its weight', () => {
   const routed = (ts: number, key: string) => decision({ ts, key, from: { model: 'opus', effort: 'medium' }, to: cheap })
   const records: Entry[] = [
-    // Corrected: the next prompt says the answer was wrong.
+    // Read as a fix: the classifier took the next prompt for a correction.
     routed(NOW - 10 * HOUR, 'fix the parser'),
     turn('haiku', 'opus', { ts: NOW - 10 * HOUR + MIN }),
     decision({ ts: NOW - 10 * HOUR + 2 * MIN, key: 'still broken', follows: 'corrects' }),
@@ -456,7 +456,7 @@ test('re-work also counts a correction, a switch up by hand and a cut-off answer
   ]
   const total = summarize(records, NOW).total
   expect(total.routed).toBe(4)
-  close(total.rework, FAILURE_WEIGHTS.corrected + FAILURE_WEIGHTS.switched + FAILURE_WEIGHTS.interrupted)
+  close(total.rework, FAILURE_WEIGHTS.classifierFix + FAILURE_WEIGHTS.switched + FAILURE_WEIGHTS.interrupted)
   close(total.accuracyPct, (1 - total.rework / 4) * 100)
 })
 
@@ -479,7 +479,7 @@ test('failureOf: the strongest sign in the task wins, with every reason listed',
   ])
   expect(eps.length).toBe(1)
   const f = failureOf(eps[0]!)
-  expect(f.reasons.sort()).toEqual(['corrected', 'interrupted', 'repeated', 'switched'])
+  expect(f.reasons.sort()).toEqual(['classifierFix', 'interrupted', 'repeated', 'switched'])
   expect(f.weight).toBe(1)
 })
 
@@ -496,7 +496,8 @@ test('failureOf: a task that went on without trouble has no failure; a lone corr
     turn('haiku', 'opus', { ts: NOW - 59 * MIN }),
     decision({ ts: NOW - 55 * MIN, key: 'the button is not visible', follows: 'corrects' }),
   ])
-  expect(failureOf(fixed!)).toEqual({ weight: FAILURE_WEIGHTS.corrected, reasons: ['corrected'] })
+  expect(failureOf(fixed!)).toEqual({ weight: FAILURE_WEIGHTS.classifierFix, reasons: ['classifierFix'] })
+  expect(FAILURE_WEIGHTS.classifierFix).toBeLessThan(FAILURE_WEIGHTS.repeated)
   expect(FAILURE_WEIGHTS.corrected).toBeLessThan(FAILURE_WEIGHTS.repeated)
   // A switch up before the task's first answer is no sign against the task.
   const [first] = episodes([turn('opus', 'opus', { ts: NOW - 59 * MIN, manual: true }), decision({ ts: NOW - 58 * MIN, key: 'x', follows: 'continues' })])
@@ -526,13 +527,13 @@ test('balance: routed tasks priced by the token re-pricing, with parts and accur
   const down = { to: { model: 'haiku', effort: 'low' as const } }
   const records = [
     ...task('a', down, [{ usd: 1, durationMs: 60 * SEC }]),
-    ...task('b', down, [{ usd: 1, durationMs: 60 * SEC }], [{ d: { follows: 'corrects' }, turns: [{ usd: 0.5, durationMs: 30 * SEC }] }]),
+    ...task('b', down, [{ usd: 1, durationMs: 60 * SEC }], [{ d: { follows: 'corrects', redo: true }, turns: [{ usd: 0.5, durationMs: 30 * SEC }] }]),
     ...task('c', { from: { model: 'sonnet', effort: 'medium' }, to: { model: 'opus', effort: 'medium' } }, [{ model: 'opus', baseline: 'sonnet' }]),
   ]
   const b = balance(records)
   expect(b.routed).toBe(3)
   // Each haiku turn would have cost the gap to Opus more. a: one turn. b: two turns, its correction
-  // (0.7 × 0.5 = 0.35) is re-work. c: sonnet − opus, an escalation. Four prompts' classifier: 0.04.
+  // in the person's words (0.7 × 0.5 = 0.35) is re-work. c: sonnet − opus, an escalation. Four prompts' classifier: 0.04.
   const gap = cost(U, 'opus')! - cost(U, 'haiku')!
   const esc = cost(U, 'sonnet')! - cost(U, 'opus')!
   close(b.parts.cheaper, 3 * gap + 0.35)
@@ -813,4 +814,51 @@ test('limitRate: list price between weekly readings per point the fill moved, re
   // A classifier's price counts too.
   const d = decision({ ts: NOW - DAY + 3, classifier: { model: 'haiku', usage: U, usd: 1 } })
   expect(limitRate([t(1, 0, { pct: 0, resets: 'A' }), d, t(4, 3, { pct: 2, resets: 'A' })])).toBe(2)
+})
+
+// Accounting fixes: neutral subagents, router-started sessions, classifier-only corrections.
+test('balance: a subagent the router did not start (its own model as baseline) stays out of the task cost and re-work', () => {
+  const down = { to: { model: 'haiku', effort: 'low' as const } }
+  const fixed = { agentId: 'lint', model: 'sonnet', baseline: 'sonnet' }
+  const records = task('a', down, [{ usd: 1 }, { ...fixed, usd: 2 }], [{ d: { redo: true, follows: 'continues' }, turns: [{ usd: 0.5 }, { ...fixed, usd: 3 }] }])
+  const b = balance(records)
+  expect(b.routed).toBe(1)
+  close(b.parts.rework, -FAILURE_WEIGHTS.corrected * 0.5)
+  close(b.byModel[0]!.usdPerTask, 1 + 0.5 + 0.02)
+})
+
+test('balance: a subagent the router started on the main model still counts in the task', () => {
+  const records = task('a', { where: 'subagent', to: { model: 'opus', effort: 'low' } }, [{ agentId: 'r', model: 'opus', baseline: 'opus', routedAgent: true, usd: 1 }])
+  close(balance(records).byModel[0]!.usdPerTask, 1.01)
+})
+
+test('failureOf: a correction only the classifier read is classifierFix and weighs less than one in the person\'s words', () => {
+  const [e] = episodes([decision({ ts: NOW - HOUR, key: 'a', to: cheap }), decision({ ts: NOW - HOUR + 1, key: 'b', follows: 'corrects' })])
+  expect(failureOf(e!)).toEqual({ weight: FAILURE_WEIGHTS.classifierFix, reasons: ['classifierFix'] })
+  expect(FAILURE_WEIGHTS.classifierFix).toBeLessThan(FAILURE_WEIGHTS.corrected)
+  const [both] = episodes([decision({ ts: NOW - HOUR, key: 'a', to: cheap }), decision({ ts: NOW - HOUR + 1, key: 'b', follows: 'corrects', redo: true })])
+  expect(failureOf(both!)).toEqual({ weight: FAILURE_WEIGHTS.corrected, reasons: ['corrected'] })
+})
+
+test('balance: a classifier-only correction re-works just the answer to that prompt; one in the person\'s words the rest of the task', () => {
+  const down = { to: { model: 'haiku', effort: 'low' as const } }
+  const guess = balance(task('a', down, [{ usd: 1 }], [{ d: { follows: 'corrects' }, turns: [{ usd: 0.5 }] }, { d: { follows: 'continues' }, turns: [{ usd: 2 }] }]))
+  close(guess.parts.rework, -FAILURE_WEIGHTS.classifierFix * 0.5)
+  close(guess.accuracy!.pct, (1 - FAILURE_WEIGHTS.classifierFix) * 100)
+  const said = balance(task('a', down, [{ usd: 1 }], [{ d: { redo: true, follows: 'continues' }, turns: [{ usd: 0.5 }] }, { d: { follows: 'continues' }, turns: [{ usd: 2 }] }]))
+  close(said.parts.rework, -FAILURE_WEIGHTS.corrected * 2.5)
+})
+
+test('balance: a session the router started counts in the task that started it, against the parent\'s baseline', () => {
+  const t0 = NOW - DAY
+  const records: Entry[] = [
+    decision({ chat: 'p', ts: t0, key: 'export', follows: 'new', where: 'session', to: { model: 'haiku', effort: 'low' }, classifier: CLS }),
+    turn('opus', 'opus', { chat: 'p', ts: t0 + 1, usd: 0.1 }),
+    turn('haiku', 'opus', { chat: 'k', ts: t0 + 10, usd: 1, task: { chat: 'p', decision: t0 } }),
+  ]
+  const b = balance(records)
+  expect(b.routed).toBe(1)
+  const gap = cost(U, 'opus')! - cost(U, 'haiku')!
+  close(b.parts.cheaper, gap)
+  close(b.byModel[0]!.usdPerTask, 0.1 + 1 + 0.01)
 })

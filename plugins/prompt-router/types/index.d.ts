@@ -31,7 +31,7 @@ declare module 'claude-code' {
       /** The model the mod names on every main-chat request when the model setting could not be changed. */
       model: 'haiku' | 'sonnet' | 'opus' | 'fable' | null
       /** This chat's stats id, the effort and model it last ran on, and the person's own picks beside what the router set, so a mod reload in the same session goes on with them. */
-      chat: { session: string; id: string; effort: string; model: string; base: string; routedLevel: string; baseline: string; routed: string } | null
+      chat: { session: string; id: string; effort: string; model: string; base: string; routedLevel: string; baseline: string; routed: string; task?: { chat: string; decision: number } | null } | null
       /** The last routing decision, for the pane. */
       last: Shaped<LastDecision | null>
       /** The chat's prompt cache, for the pane. */

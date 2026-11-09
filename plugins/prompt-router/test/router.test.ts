@@ -1572,3 +1572,32 @@ test("stats: after a reload, an effort the router set still counts as the router
   const t = statsLines(seen).filter((x: any) => x.kind === 'turn').at(-1)
   expect(t).toMatchObject({ effort: 'low', baseEffort: 'high' })
 })
+
+test('stats: a session the router started takes the parent chat\'s baseline and belongs to its task; one handoff, once', async ($: any, on: any) => {
+  const opts: { model?: string } = {}
+  const seen = engine(on, PICK.session, opts)
+  on('store.delete', (_: unknown, e: any) => {
+    seen.store.delete(e.key)
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: { content: [{ type: 'text', text: 'Started session "Export" (session_id: local_abc, name: export).' }] } }))
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-sonnet-5-5' } }))
+  await start($)
+  await submit($, 'build the CSV export feature')
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 'Export', prompt: 'build it' })
+  await $.turn.complete(TURN_DONE)
+  const d = statsLines(seen).find((r: any) => r.kind === 'decision')
+  expect(d.where).toBe('session')
+  // The new session opens on the model the router picked.
+  opts.model = 'claude-sonnet-5-5'
+  await start($)
+  await $.turn.complete(TURN_DONE)
+  const t = statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1)
+  expect(t).toMatchObject({ model: 'claude-sonnet-5-5', baseline: 'claude-opus-5-5', task: { chat: d.chat, decision: d.ts } })
+  // Another session after it is on its own.
+  await start($)
+  await $.turn.complete(TURN_DONE)
+  const u = statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1)
+  expect(u.baseline).toBe('claude-sonnet-5-5')
+  expect(u.task).toBeUndefined()
+})
