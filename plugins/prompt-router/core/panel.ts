@@ -1,3 +1,4 @@
+import type { Period } from './stats.ts'
 // The Prompt Router pane's drawings: SVG for the app surfaces (animated by CSS in the sandboxed frame,
 // no scripts) and text bars for the terminal. Plain strings, so tests and a preview draw them too.
 // The frame cannot read the app's colours: mid tones that read on light and dark, text by
@@ -129,6 +130,42 @@ export function dayLabel(key: string): string {
   if (!y || !m || !d) return key
   const date = new Date(y, m - 1, d, 12)
   return `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()]} ${d} ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1]}`
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+// A month's first day key (2026-11-01) as the chart's readout names it: Nov 2026.
+export function monthLabel(key: string): string {
+  const [y, m] = key.split('-').map(Number)
+  return y && m ? `${MONTHS[m - 1]} ${y}` : key
+}
+
+// The pane's period buttons and the name the graph's readout gives each period.
+export const PERIOD_LABELS: Record<Period, string> = { today: 'Today', week: '7 days', month: 'This month', lastMonth: 'Last month', total: 'Total' }
+export const PERIOD_NAMES: Record<Period, string> = { today: 'Today', week: '7 days', month: 'This month', lastMonth: 'Last month', total: 'In total' }
+
+// The label under point i of n: the weekday for a week of days, else the date (day of the month for
+// days, 2 Nov for weeks, Nov for months) under every point while `room` labels fit, else under every
+// few and the last. A tick too close to the last one is left out, so two labels never touch.
+export function chartTick(unit: 'day' | 'week' | 'month', key: string, i: number, n: number, room = 7): string {
+  const [, m, d] = key.split('-').map(Number)
+  if (!m || !d) return ''
+  if (unit === 'day' && n <= 10) return dayLabel(key).split(' ')[0]!
+  const step = Math.ceil(n / Math.max(1, room))
+  const last = i === n - 1
+  if (!last && (i % step !== 0 || (step > 1 && n - 1 - i < step))) return ''
+  return unit === 'month' ? MONTHS[m - 1]! : unit === 'week' ? `${d} ${MONTHS[m - 1]}` : String(d)
+}
+
+// What the graph spans, after "Saved per day, ": last 7 days, this month, October, since 29 Oct.
+export function chartSpan(period: Period, points: readonly { day: string }[]): string {
+  const first = points[0]?.day ?? ''
+  const [, m, d] = first.split('-').map(Number)
+  if (period === 'week') return 'last 7 days'
+  if (period === 'month') return 'this month'
+  if (period === 'lastMonth') return m ? MONTH_NAMES[m - 1]! : 'last month'
+  return m && d ? `since ${d} ${MONTHS[m - 1]}` : 'in total'
 }
 
 // The chat's prompt cache. Claude Code writes 5-minute or 1-hour entries; every request that reads

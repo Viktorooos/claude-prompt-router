@@ -129,7 +129,10 @@ export type Summary = {
   tokens: { [model: string]: Usage }
 }
 
-export type Report = { today: Summary; week: Summary; total: Summary }
+// The pane's periods: today, the last 7 days, this and last calendar month, and everything.
+export type Period = 'today' | 'week' | 'month' | 'lastMonth' | 'total'
+export type Report = Record<Period, Summary>
+export const PERIOD_KEYS: readonly Period[] = ['today', 'week', 'month', 'lastMonth', 'total']
 
 const DAY = 86_400_000
 
@@ -479,7 +482,7 @@ export type Balance = {
 // re-done turns after a failure (reworkTurns) count as lost, by the failure's weight: a good answer
 // would have spared them, so their price without the router comes off too. usdNoRework leaves them in.
 // `since`: only tasks that started then or later count.
-export function balance(records: readonly Entry[], since = -Infinity): Balance {
+export function balance(records: readonly Entry[], since = -Infinity, until = Infinity): Balance {
   const taken = takenSet(records)
   const changed = (d: Decision) => routedDecision(d) || (d.outcome === 'asked' && taken.has(takenKey(d.chat, d.ts)))
   const out: Balance = { routed: 0, usd: 0, usdNoRework: 0, unlinkedSessions: 0, parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [] }
@@ -494,7 +497,7 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     spawned.set(k, [...(spawned.get(k) ?? []), r])
   }
   for (const e of episodes(records)) {
-    if (!e.decisions.length || e.start < since) continue
+    if (!e.decisions.length || e.start < since || e.start >= until) continue
     const d = e.decisions[0]!
     const clsUsd = e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
     out.parts.classifier -= clsUsd
@@ -550,11 +553,13 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
   return out
 }
 
-export type Balances = { today: Balance; week: Balance; total: Balance }
+export type Balances = Record<Period, Balance>
 
-// The balance of today (local calendar day), the last 7 days and everything, as summarize() splits them.
+// The balance of each period, as summarize() splits them.
 export function balances(records: readonly Entry[], now: number): Balances {
-  return { today: balance(records, startOfDay(now)), week: balance(records, now - 7 * DAY), total: balance(records) }
+  const out = {} as Balances
+  for (const [k, [from, to]] of Object.entries(periodRanges(now)) as [Period, [number, number]][]) out[k] = balance(records, from, to)
+  return out
 }
 
 // What scripts/usage-scan.mjs writes: every API request of a session's transcript (subagents with `agent`).
@@ -601,39 +606,94 @@ function startOfDay(ts: number) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
 
+// The start of the local month `offset` months from the one `ts` falls in.
+function startOfMonth(ts: number, offset = 0) {
+  const d = new Date(ts)
+  return new Date(d.getFullYear(), d.getMonth() + offset, 1).getTime()
+}
+
+// Each period's [from, to) as of `now`.
+function periodRanges(now: number): Record<Period, [number, number]> {
+  const month = startOfMonth(now)
+  return {
+    today: [startOfDay(now), Infinity],
+    week: [now - 7 * DAY, Infinity],
+    month: [month, Infinity],
+    lastMonth: [startOfMonth(now, -1), month],
+    total: [-Infinity, Infinity],
+  }
+}
+
 function dayKey(ts: number) {
   const d = new Date(ts)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// Today (local calendar day), the last 7 days and everything, as of `now`.
+// Each period's summary as of `now` (today and the months by the local calendar).
 export function summarize(records: readonly Entry[], now: number, c: Compare = null): Report {
-  const today = empty()
-  const week = empty()
-  const total = empty()
-  const dayStart = startOfDay(now)
+  const ranges = Object.entries(periodRanges(now)) as [Period, [number, number]][]
+  const out = Object.fromEntries(ranges.map(([k]) => [k, empty()])) as Record<Period, Summary>
+  const taken = takenSet(records)
+  const reworked = reworkedSet(records)
+  for (const r of records) for (const [k, [from, to]] of ranges) if (r.ts >= from && r.ts < to) add(out[k], r, taken, reworked, c)
+  return Object.fromEntries(ranges.map(([k]) => [k, finish(out[k])])) as Report
+}
+
+// One point of the graph: the summary of [start, end), `day` the local day key it starts on.
+export type ChartPoint = { day: string } & Summary
+type Slot = { day: string; start: number; end: number }
+
+function sumSlots(records: readonly Entry[], slots: readonly Slot[], c: Compare): ChartPoint[] {
+  const sums = slots.map(() => empty())
   const taken = takenSet(records)
   const reworked = reworkedSet(records)
   for (const r of records) {
-    add(total, r, taken, reworked, c)
-    if (r.ts >= now - 7 * DAY) add(week, r, taken, reworked, c)
-    if (r.ts >= dayStart) add(today, r, taken, reworked, c)
+    const i = slots.findIndex(x => r.ts >= x.start && r.ts < x.end)
+    if (i >= 0) add(sums[i]!, r, taken, reworked, c)
   }
-  return { today: finish(today), week: finish(week), total: finish(total) }
+  return slots.map((x, i) => ({ day: x.day, ...finish(sums[i]!) }))
+}
+
+// Local days from the day `from` falls in to the day `to` falls in, each a slot.
+function daySlots(from: number, to: number): Slot[] {
+  const out: Slot[] = []
+  for (let d = startOfDay(from); d <= to; ) {
+    const next = startOfDay(d + DAY + 12 * 3_600_000)
+    out.push({ day: dayKey(d), start: d, end: next })
+    d = next
+  }
+  return out
 }
 
 // The last `days` local days, oldest first, each with its own summary (for the graph).
-export function byDay(records: readonly Entry[], now: number, days: number, c: Compare = null): ({ day: string } & Summary)[] {
-  const keys: string[] = []
-  for (let i = days - 1; i >= 0; i--) keys.push(dayKey(startOfDay(now) - i * DAY + 12 * 3_600_000))
-  const map = new Map(keys.map(k => [k, empty()]))
-  const taken = takenSet(records)
-  const reworked = reworkedSet(records)
-  for (const r of records) {
-    const s = map.get(dayKey(r.ts))
-    if (s) add(s, r, taken, reworked, c)
+export function byDay(records: readonly Entry[], now: number, days: number, c: Compare = null): ChartPoint[] {
+  return sumSlots(records, daySlots(startOfDay(now) - (days - 1) * DAY + 12 * 3_600_000, now), c)
+}
+
+// A period's graph: a point per day, or for a long total one per week (Monday on) or month, so it
+// never has more than about 31 points.
+export type Chart = { unit: 'day' | 'week' | 'month'; points: ChartPoint[] }
+
+export function chartFor(records: readonly Entry[], now: number, period: Period, c: Compare = null): Chart {
+  if (period === 'today') return { unit: 'day', points: [] }
+  if (period === 'week') return { unit: 'day', points: byDay(records, now, 7, c) }
+  const [from, to] = periodRanges(now)[period]
+  if (period !== 'total') return { unit: 'day', points: sumSlots(records, daySlots(from, Math.min(now, to - 1)), c) }
+  const first = records.reduce((m, r) => Math.min(m, r.ts), now)
+  const days = daySlots(first, now)
+  if (days.length <= 31) return { unit: 'day', points: sumSlots(records, days, c) }
+  if (days.length <= 31 * 7) {
+    const slots: Slot[] = []
+    for (const d of days) {
+      const monday = new Date(d.start).getDay() === 1
+      if (!slots.length || monday) slots.push({ ...d })
+      else slots.at(-1)!.end = d.end
+    }
+    return { unit: 'week', points: sumSlots(records, slots, c) }
   }
-  return keys.map(day => ({ day, ...finish(map.get(day)!) }))
+  const slots: Slot[] = []
+  for (let m = startOfMonth(first); m <= now; m = startOfMonth(m, 1)) slots.push({ day: dayKey(m), start: m, end: startOfMonth(m, 1) })
+  return { unit: 'month', points: sumSlots(records, slots, c) }
 }
 
 // The JSONL log as records; broken lines and unknown kinds are skipped. Fields of older versions
@@ -895,6 +955,12 @@ export function glance(s: Summary, window = 200_000, perPct: number | null = nul
   if (s.savedUsd >= 0.005) {
     const extra = s.extraUsd >= 0.005 ? `; stronger picks used ${usd(s.extraUsd)}` : ''
     out.push({ key: 'cheaper', label: 'Cheaper picks saved', value: usd(s.savedUsd), sub: `${perPct ? week(s.savedUsd) : 'at list price'}${extra}` })
+  }
+  const allTokens = Object.values(s.tokens).reduce((n, u) => n + (u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0), 0)
+  if (s.savedUsd >= 0.005 && s.actualUsd > 0 && allTokens > 0) {
+    // The dollars saved, as the tokens they would have bought at this period's average price per token.
+    const saved = (s.savedUsd / s.actualUsd) * allTokens
+    out.push({ key: 'savedTokens', label: '≈ Tokens saved', value: `${tokensWord(saved)} tokens`, sub: 'the cheaper picks, at your average price per token' })
   }
   if (s.withoutUsd >= 0.01) {
     const more = s.balanceUsd < 0

@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import { promptKey } from '../core/router.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, signed, statsHtml, statsRows, statsText, summarize, switchedModel, usd, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, chartFor, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, signed, statsHtml, statsRows, statsText, summarize, switchedModel, usd, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -907,6 +907,32 @@ test('balance: a started session whose own first prompt was routed too is not a 
   const b = balance(records)
   expect(b.routed).toBe(1)
   close(b.byModel[0]!.usdPerTask, 1)
+})
+
+test('summarize splits this and last calendar month', () => {
+  const lastMonth = new Date(2026, 8, 20, 10, 0).getTime()
+  const r = summarize([turn('haiku', 'opus'), turn('haiku', 'opus', { ts: lastMonth })], NOW)
+  const one = cost(U, 'opus')! - cost(U, 'haiku')!
+  close(r.month.netUsd, one)
+  close(r.lastMonth.netUsd, one)
+  close(r.total.netUsd, 2 * one)
+})
+
+test('chartFor gives days for the months and weeks or months for a long total', () => {
+  const recs = [turn('haiku', 'opus'), turn('haiku', 'opus', { ts: new Date(2026, 8, 20, 10, 0).getTime() })]
+  const month = chartFor(recs, NOW, 'month')
+  expect([month.unit, month.points.length, month.points[0].day]).toEqual(['day', 31, '2026-10-01'])
+  const last = chartFor(recs, NOW, 'lastMonth')
+  expect([last.unit, last.points.length, last.points.at(-1)!.day]).toEqual(['day', 30, '2026-09-30'])
+  const weeks = chartFor(recs, NOW, 'total')
+  expect(weeks.unit).toBe('week')
+  expect(weeks.points.length).toBeLessThanOrEqual(31)
+  expect(weeks.points[1].day).toBe('2026-09-21')
+  const one = cost(U, 'opus')! - cost(U, 'haiku')!
+  close(weeks.points.reduce((a, p) => a + p.netUsd, 0), 2 * one)
+  const months = chartFor([...recs, turn('haiku', 'opus', { ts: new Date(2025, 0, 5).getTime() })], NOW, 'total')
+  expect([months.unit, months.points.length, months.points[0].day]).toEqual(['month', 22, '2025-01-01'])
+  expect(chartFor(recs, NOW, 'today').points).toEqual([])
 })
 
 test('a subagent on its own model saves nothing against compareWith', () => {

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, dayLineSvg, ringSvg, dayReadSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { ago, barText, cacheBarSvg, cacheTime, cacheView, chartTick, contextBarSvg, dayLabel, dayLineSvg, ringSvg, dayReadSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -823,6 +823,12 @@ test('in the terminal the ticker repaints only the countdown Raster, no pane red
   await ui.unmount()
 })
 
+
+test('chartTick labels every point while they fit, else every few and the last', () => {
+  const keys = Array.from({ length: 12 }, (_, i) => `2026-11-${String(i + 1).padStart(2, '0')}`)
+  expect(keys.map((k, i) => chartTick('day', k, i, 12, 16))).toEqual(keys.map((_, i) => String(i + 1)))
+  expect(keys.map((k, i) => chartTick('day', k, i, 12, 7))).toEqual(['1', '', '3', '', '5', '', '7', '', '9', '', '', '12'])
+})
 
 test('You saved shows a share of the weekly limit once it is measured; hovering it shows the dollars', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
