@@ -824,7 +824,7 @@ test('in the terminal the ticker repaints only the countdown Raster, no pane red
 })
 
 
-test('You saved shows a share of the weekly limit once it is measured; a button switches to dollars', async ($: any, on: any) => {
+test('You saved shows a share of the weekly limit once it is measured; hovering it shows the dollars', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   const weekTurn = (ts: number, pct: number) => JSON.stringify({ ...JSON.parse(TURN(ts)), week: { pct, resets: 'r1' } })
   const seen = engine(on, { now, log: [weekTurn(now - 3 * HOUR, 10), weekTurn(now - 2 * HOUR, 12), weekTurn(now - HOUR, 14)].join('\n') })
@@ -832,17 +832,21 @@ test('You saved shows a share of the weekly limit once it is measured; a button 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await textsOf(ui)).toMatch(/You saved\nof your weekly limit, compared with keeping each chat's first model\n\$\d+\.\d\d/)
   expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/You saved: [\d.]+ %/)
-  await ui.press({ key: 'savings-in' })
-  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.savingsIn', value: 'money' })
+  // The dollars wait hidden beside the share and show while it is hovered (the test engine keeps no hover prop); no button.
+  expect(await ui.find({ type: 'Button', key: 'savings-in' })).toBeUndefined()
+  const usdBox = await ui.find({ key: 'saved-usd' })
+  expect(usdBox.props.display).toBe('none')
+  expect(JSON.stringify(usdBox)).toMatch(/\$\d+\.\d\d at list price/)
+  expect(seen.sets).toEqual([])
   await ui.unmount()
 })
 
-test('without weekly limit readings the saving stays in dollars, with no button to switch', async ($: any, on: any) => {
+test('without weekly limit readings the saving stays in dollars, with nothing to hover', async ($: any, on: any) => {
   const now = 20 * 86_400_000 + 12 * HOUR
   const plain = engine(on, { now, log: TURN(now - HOUR) })
   await start($)
   const ui2 = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui2.find({ type: 'Button', key: 'savings-in' })).toBeUndefined()
+  expect(await ui2.find({ key: 'saved-usd' })).toBeUndefined()
   expect(JSON.stringify(await ui2.findAll({ type: 'Svg' }))).toMatch(/You saved: \$\d+\.\d\d/)
   expect(plain.sets).toEqual([])
   await ui2.unmount()

@@ -1515,11 +1515,6 @@ export const register: Register = (on, options) => {
         {PERIODS.map(([k, label]) => (term
           ? <Button key={`period-${k}`} plain label={k === panePeriod ? `[${label}]` : label} onPress={pickPeriod(k)} />
           : <Button key={`period-${k}`} label={label} variant={k === panePeriod ? 'primary' : 'secondary'} onPress={pickPeriod(k)} />))}
-        {d.savings?.perPct ? (() => {
-          const label = cfg.savingsIn === 'limit' ? 'Show $' : 'Show % of limit'
-          const flip = () => saveOption($, 'savingsIn', cfg.savingsIn === 'limit' ? 'money' : 'limit')
-          return term ? <Button key="savings-in" plain label={label} onPress={flip} /> : <Button key="savings-in" label={label} variant="secondary" onPress={flip} />
-        })() : null}
       </Box>
     ) : null
 
@@ -1578,6 +1573,7 @@ export const register: Register = (on, options) => {
           <Box key="saved-v" flexDirection="column">
             <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
             <Text dimColor>{savedSub}</Text>
+            {inLimit ? <Text dimColor>{`${usdText} at list price`}</Text> : null}
             {why ? <Text dimColor>{why}</Text> : null}
           </Box>
         ),
@@ -1595,10 +1591,11 @@ export const register: Register = (on, options) => {
         : (
           <Box key="saved-v" flexDirection="column" gap={1}>
             <Box flexDirection="row" alignItems="center" gap={2}>
-              <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                <Svg source={bigNumberSvg(savedText, savedColor, px, 44)} alt={`${savedWord}: ${savedText}`} height={56} />
+              {/* A hover can reveal but not hide, so the dollars show beside the share, not in its place. */}
+              <Box flexGrow={1} flexShrink={1} minWidth={0} hover={inLimit ? { scope: 'saved-num', backgroundColor: '#00000000' } : undefined}>
+                <Svg source={bigNumberSvg(savedText, savedColor, px, 44)} alt={`${savedWord}: ${savedText}${inLimit ? ` (${usdText})` : ''}`} height={56} />
               </Box>
-              {inLimit ? <Box flexShrink={0}><Text bold color={savedColor}>{usdText}</Text></Box> : savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
+              {inLimit ? <Box key="saved-usd" flexShrink={0} display="none" hover={{ scope: 'saved-num', display: 'flex' }}><Text bold color={savedColor}>{`${usdText} at list price`}</Text></Box> : savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
             </Box>
             <Svg source={costBarSvg(withUsd, s.withoutUsd)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
             {why ? <Text dimColor>{why}</Text> : null}

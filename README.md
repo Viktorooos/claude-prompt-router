@@ -267,7 +267,7 @@ The same keys on every platform (except where marked). Each feature has its own 
 | `newSessionAt` | `50%`, `10%` … `100%` in steps of 10 (`off` for old configs) | `50%` | Once the chat holds this share of its model's context window, any prompt that would stay here is offered as a new session: every reply re-reads the whole context. In Claude Code the window is cut to where the chat compacts (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`). In the pane, "off" is `sessionSuggestions: off`. |
 | `notifications` | `on`, `off` | `on` | A toast after an automatic change, and a footer label in Claude Code. |
 | `compareWith` | `first`, `opus-medium`, any `<model>-<effort>` (`haiku`, `sonnet`, `opus`, `fable` × `low` … `max`), `history` (Claude Code) | `first` | What the [savings](#savings) are compared with. OpenCode always uses `first`. |
-| `savingsIn` | `limit`, `money` | `limit` | Claude Code. How the pane shows the saving: a share of your weekly limit (dollars until the limit has moved enough to measure) or dollars at list price. A button on the savings card switches it. |
+| `savingsIn` | `limit`, `money` | `limit` | Claude Code. How the pane shows the saving: a share of your weekly limit (dollars until the limit has moved enough to measure) or dollars at list price. Hovering the share shows the dollars. |
 | `stats` | `on`, `off` | | Claude Code. `on`: note each decision and each turn's token use in a local file for the [savings](#savings). |
 | `openPane` | `off`, `on` | `off` | Claude Code. `on`: the pane opens by itself when a session starts (from 144 terminal columns, 110 once you have opened it with `/router panel`), or else on your first prompt. |
 
