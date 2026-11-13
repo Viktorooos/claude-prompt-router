@@ -22,8 +22,8 @@ export type Where = 'here' | 'subagent' | 'session'
 const COMPARE_MODELS = ['opus', 'haiku', 'sonnet', 'fable'] as const
 const COMPARE_LEVELS = ['medium', 'low', 'high', 'xhigh', 'max'] as const
 type CompareValue = `${(typeof COMPARE_MODELS)[number]}-${(typeof COMPARE_LEVELS)[number]}` | 'first' | 'history'
-// opus-medium first (the default): Anthropic's pick for everyday work.
-const COMPARE_VALUES = [...COMPARE_MODELS.flatMap(m => COMPARE_LEVELS.map(l => `${m}-${l}` as CompareValue)), 'first' as const, 'history' as const] as readonly CompareValue[]
+// first (the default): the chat's own first model, so only the router's switches count as savings.
+const COMPARE_VALUES = ['first' as const, ...COMPARE_MODELS.flatMap(m => COMPARE_LEVELS.map(l => `${m}-${l}` as CompareValue)), 'history' as const] as readonly CompareValue[]
 
 // compareWith as a model and effort; null for `first` and `history` (history: core/stats.ts historyCompare).
 export function compareTarget(v: string): { model: Model; effort: Level } | null {
@@ -53,6 +53,8 @@ export const SWITCHES = {
   // What the savings are measured against: a model at an effort for every chat, or `first`, the
   // chat's first model (the main chat's for a subagent). Read from the tokens, so it reprices old data.
   compareWith: COMPARE_VALUES,
+  // How the pane shows the saving: a share of the weekly limit (once it is measured) or dollars.
+  savingsIn: ['limit', 'money'],
 } as const
 
 export type Switch = keyof typeof SWITCHES

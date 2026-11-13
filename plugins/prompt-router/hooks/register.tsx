@@ -6,7 +6,7 @@ import { ALL_MODELS, BASE_MODELS, claudeDir, quickReply, DECIDE_OTHER, DEFAULT_W
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, unlinkedNote, parseLog, rotate, signed, statsHtml, statsText, summarize, switchedModel, usd } from '../core/stats.ts'
+import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, unlinkedNote, parseLog, rotate, signed, statsHtml, statsText, summarize, switchedModel, usd, pctWord } from '../core/stats.ts'
 import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, dayLineSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
@@ -810,6 +810,7 @@ const LABELS: Record<Option, string> = {
   stats: 'Savings stats',
   openPane: 'Open pane by itself',
   compareWith: 'Compare with',
+  savingsIn: 'Savings shown as',
 }
 
 // The order a press steps through: numbers from low to high with off last (40%, 50% … off), any
@@ -824,7 +825,7 @@ const CHOICES = [
   { key: 'classifier' as Option, values: CLASSIFIERS as readonly string[] },
 ]
 // The value the pane marks "Recommended" for each setting, by the setting's key. The only place that names them:
-// the defaults of the config schema, except the classifier (Haiku is cheaper) and the savings baseline (history).
+// the defaults of the config schema, except the classifier (Haiku is cheaper).
 const RECOMMENDED: Record<string, string> = {
   enabled: 'on',
   firstChatDetection: 'ask',
@@ -834,7 +835,8 @@ const RECOMMENDED: Record<string, string> = {
   newSessionAt: '50%',
   notifications: 'on',
   classifier: 'haiku',
-  compareModel: 'history',
+  compareModel: 'first',
+  savingsIn: 'limit',
   compareEffort: 'medium',
   openPane: 'off',
 }
@@ -1513,9 +1515,19 @@ export const register: Register = (on, options) => {
         {PERIODS.map(([k, label]) => (term
           ? <Button key={`period-${k}`} plain label={k === panePeriod ? `[${label}]` : label} onPress={pickPeriod(k)} />
           : <Button key={`period-${k}`} label={label} variant={k === panePeriod ? 'primary' : 'secondary'} onPress={pickPeriod(k)} />))}
+        {d.savings?.perPct ? (() => {
+          const label = cfg.savingsIn === 'limit' ? 'Show $' : 'Show % of limit'
+          const flip = () => saveOption($, 'savingsIn', cfg.savingsIn === 'limit' ? 'money' : 'limit')
+          return term ? <Button key="savings-in" plain label={label} onPress={flip} /> : <Button key="savings-in" label={label} variant="secondary" onPress={flip} />
+        })() : null}
       </Box>
     ) : null
 
+    // savingsIn limit: the saving as a share of the weekly limit, once limitRate has measured it.
+    const perPct = d.savings?.perPct ?? null
+    const inLimit = cfg.savingsIn === 'limit' && !!perPct
+    const minus = s && money(s.balanceUsd) === 'down' ? '−' : ''
+    const usdText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : `${minus}${usd(Math.abs(s.balanceUsd))}`) : ''
     // You saved: the work's cost without the router (everything on the compareWith model) less its cost with it.
     const against = c ? `running every prompt on ${compareLabel(c)}` : "keeping each chat's first model"
     const withUsd = s ? s.actualUsd + s.classifierUsd : 0
@@ -1523,12 +1535,12 @@ export const register: Register = (on, options) => {
     const few = !!s && (s.pricedTurns === 0 || s.withoutUsd < 0.01)
     const down = !few && !!s && money(s.balanceUsd) === 'down'
     const savedWord = few ? 'Not enough data yet' : down ? 'The router cost more' : 'You saved'
-    const savedSub = few ? 'Use the router for a few prompts and the saving shows here.' : down ? `than ${against}` : `compared with ${against}`
+    const savedSub = (inLimit && !few ? 'of your weekly limit, ' : '') + (few ? 'Use the router for a few prompts and the saving shows here.' : down ? `than ${against}` : `compared with ${against}`)
     // Why it cost more: stronger picks outweighed the cheaper ones, or the classifier ate the saving.
     const why = !down || !s ? null : s.actualUsd > s.withoutUsd
       ? 'Stronger models cost more than the cheaper ones saved. Raising the bar for a stronger model in Model & effort lowers it.'
       : 'The classifier cost more than routing saved. It pays off over longer tasks.'
-    const savedText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : `${money(s.balanceUsd) === 'down' ? '−' : ''}${usd(Math.abs(s.balanceUsd))}`) : ''
+    const savedText = s && inLimit ? `${minus}${pctWord(Math.abs(s.balanceUsd) / perPct!)} %` : usdText
     const savedColor = money(s?.balanceUsd ?? 0) === 'up' ? GREEN : MONEY_COLOR[money(s?.balanceUsd ?? 0)] ?? TONES.idle[0]
     const savedPct = s && s.withoutUsd > 0 ? Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100) : 0
     const days = d.savings?.days.slice(panePeriod === 'week' ? -7 : -14) ?? []
@@ -1586,7 +1598,7 @@ export const register: Register = (on, options) => {
               <Box flexGrow={1} flexShrink={1} minWidth={0}>
                 <Svg source={bigNumberSvg(savedText, savedColor, px, 44)} alt={`${savedWord}: ${savedText}`} height={56} />
               </Box>
-              {savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
+              {inLimit ? <Box flexShrink={0}><Text bold color={savedColor}>{usdText}</Text></Box> : savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
             </Box>
             <Svg source={costBarSvg(withUsd, s.withoutUsd)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
             {why ? <Text dimColor>{why}</Text> : null}
@@ -1803,6 +1815,7 @@ export const register: Register = (on, options) => {
         same(CLASSIFIERS.filter(x => x !== 'opus' || cfg.classifier === 'opus'))),
       { key: 'compareModel', icon: 'scale', name: 'Savings compared with', what: 'What "You saved" is measured against.', values: COMPARE_MODELS.map(m => [m, m === 'first' ? 'first model' : m] as const), now: () => cfg.compareWith.split('-')[0] ?? 'first', pick: m => saveOption($, 'compareWith', compareValue(m, cfg.compareWith.split('-')[1] ?? '')) },
       ...(cm === 'first' || cm === 'history' ? [] : [{ key: 'compareEffort', icon: 'gauge', name: 'at effort', what: '', values: same(COMPARE_EFFORTS), now: () => cfg.compareWith.split('-')[1] ?? '', pick: (l: string) => saveOption($, 'compareWith', compareValue(cfg.compareWith.split('-')[0] ?? 'first', l)) }]),
+      opt('savingsIn', 'coin', 'Savings shown as', 'A share of your weekly limit (once it has moved enough to measure) or dollars at list price.', [['limit', '% of weekly limit'], ['money', 'dollars']]),
       opt('openPane', 'pane', 'Open this pane on start', 'Opens this pane by itself when a session starts.'),
     ]
     const isSwitch = (x: Setting) => x.values.length === 2 && x.values.every(([v]) => v === 'on' || v === 'off')

@@ -1398,11 +1398,13 @@ test('subagentSuggestions defaults to ask; a session pick still asks with auto',
   expect(seen.sent[0] ?? '').toMatch(/AskUserQuestion/)
 })
 
-test('compareWith: Opus medium by default, first and any model-effort pair, junk falls back', () => {
-  expect(toConfig({}).compareWith).toBe('opus-medium')
+test('compareWith: the first model by default, first and any model-effort pair, junk falls back', () => {
+  expect(toConfig({}).compareWith).toBe('first')
   expect(toConfig({ compareWith: 'first' }).compareWith).toBe('first')
   expect(toConfig({ compareWith: 'sonnet-high' }).compareWith).toBe('sonnet-high')
-  expect(toConfig({ compareWith: 'gpt-5' }).compareWith).toBe('opus-medium')
+  expect(toConfig({ compareWith: 'gpt-5' }).compareWith).toBe('first')
+  expect(toConfig({}).savingsIn).toBe('limit')
+  expect(toConfig({ savingsIn: 'money' }).savingsIn).toBe('money')
   expect(toConfig({ compareWith: 'history' }).compareWith).toBe('history')
 })
 

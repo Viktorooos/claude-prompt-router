@@ -879,7 +879,7 @@ export function limitRate(records: readonly Entry[]): number | null {
   return pctSum >= MIN_PCT && usdSum > 0 ? usdSum / pctSum : null
 }
 
-const pctWord = (p: number) => (p < 10 ? p.toFixed(1) : String(Math.round(p)))
+export const pctWord = (p: number) => (p < 10 ? p.toFixed(1) : String(Math.round(p)))
 
 // The pane's "What you got" card: what the router gave the person in the period, each a figure and one
 // line on it; only figures with data show. With `perPct` (limitRate) money also reads as a share of the
