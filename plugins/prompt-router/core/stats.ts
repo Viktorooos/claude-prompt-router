@@ -201,7 +201,7 @@ function priceWithout(t: Turn, usage: Usage, actual: number, listActual: number 
   const same = withoutUsage(t, usage)
   if (t.model === t.baseline && same === usage) return { without: actual, saved: 0, extra: 0, unpriced: false }
   // The saving compares list prices on both sides; without one of them, no saving is claimed.
-  const listWithout = cost(same, t.baseline)
+  const listWithout = cost(same, t.baseline, t.requests)
   if (listActual === null || listWithout === null) return { without: actual, saved: 0, extra: 0, unpriced: true }
   const diff = listWithout - listActual
   return { without: actual + diff, saved: Math.max(diff, 0), extra: Math.max(-diff, 0), unpriced: false }
@@ -215,7 +215,7 @@ function addTurn(s: Summary, turn: Turn, c: Compare) {
   }
   const sum = (s.tokens[turn.model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
   for (const k of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) sum[k] += turn.usage[k] ?? 0
-  const listActual = cost(turn.usage, turn.model)
+  const listActual = cost(turn.usage, turn.model, turn.requests)
   const actual = turn.usd ?? listActual
   if (actual === null) {
     s.unpricedTurns++
@@ -313,6 +313,12 @@ function failure(reasons: FailureReason[]): Failure {
 }
 
 const main = (t: Turn) => !t.agentId
+
+// The main chat runs on another model than its last turn: what this turn wrote to the cache it would
+// have read without the switch, also when the switch went back to the baseline.
+export function switchedModel(last: string, model: string): boolean {
+  return !!last && !!model && model !== last
+}
 // A subagent the router did not start: on its own model (the turn's baseline is its model) and not
 // one the router offered. Neutral for the router: its cost is the person's pick either way, so it
 // stays out of the task's cost and re-work.
@@ -418,7 +424,7 @@ export function failureOf(e: Episode): Failure {
 const movesDown = (where: string, from: Decision['from'], to: Decision['to']) =>
   above(from.model, to.model) || (from.model === to.model && (where !== 'here' || above(from.effort, to.effort)))
 
-const turnUsd = (t: Turn) => (t.usage ? (t.usd ?? cost(t.usage, t.model) ?? 0) : 0)
+const turnUsd = (t: Turn) => (t.usage ? (t.usd ?? cost(t.usage, t.model, t.requests) ?? 0) : 0)
 const turnsUsd = (ts: readonly Turn[]) => ts.reduce((n, t) => n + turnUsd(t), 0)
 const turnsMs = (ts: readonly Turn[]) => ts.filter(main).reduce((n, t) => n + (t.durationMs ?? 0), 0)
 const classifierMs = (ds: readonly Decision[]) => ds.reduce((n, d) => n + (d.classifier?.ms ?? 0), 0)
@@ -578,7 +584,8 @@ export function withTranscripts(records: readonly Entry[], scans: readonly Usage
 }
 
 function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>, c: Compare) {
-  if (r.kind === 'turn') addTurn(s, r, c)
+  // A subagent on its own model is the person's pick: priced against itself, so it saves nothing.
+  if (r.kind === 'turn') addTurn(s, r, neutralAgent(r) ? null : c)
   else if (r.kind === 'decision') {
     addDecision(s, r, taken.has(takenKey(r.chat, r.ts)))
     s.classifierUsd += classifierUsd(r)

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { MODELS } from '../core/router.ts'
-import { PRICES, cacheCosts, cost, priceOf, usageOf } from '../core/prices.ts'
+import { HAIKU_LONG, PRICES, cacheCosts, cost, priceOf, usageOf } from '../core/prices.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
 function close(a: number | null, b: number) {
@@ -46,4 +46,14 @@ test('cacheCosts: the context read from a warm cache, or written again (1-hour e
   expect(cacheCosts(null, 'opus', '5m')).toBe(null)
   expect(cacheCosts(0, 'opus', '5m')).toBe(null)
   expect(cacheCosts(100_000, 'gpt-5', '5m')).toBe(null)
+})
+
+test('Haiku prompts over 100K tokens use the long rate card, per request', () => {
+  const short = { input: 10_000, output: 0, cacheRead: 90_000, cacheWrite: 0 }
+  close(cost(short, 'haiku'), (10_000 * PRICES.haiku.input + 90_000 * PRICES.haiku.cacheRead) / 1e6)
+  const long = { ...short, cacheRead: 90_001 }
+  close(cost(long, 'haiku'), (10_000 * HAIKU_LONG.input + 90_001 * HAIKU_LONG.cacheRead) / 1e6)
+  // Two requests of half the prompt each stay on the short card; other models have one card.
+  close(cost(long, 'haiku', 2), (10_000 * PRICES.haiku.input + 90_001 * PRICES.haiku.cacheRead) / 1e6)
+  close(cost({ input: 1_000_000 }, 'sonnet'), PRICES.sonnet.input)
 })

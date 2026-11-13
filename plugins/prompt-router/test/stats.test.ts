@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import { promptKey } from '../core/router.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, signed, statsHtml, statsRows, statsText, summarize, usd, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, signed, statsHtml, statsRows, statsText, summarize, switchedModel, usd, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -631,7 +631,7 @@ test('compareWith reprices old turns on the chosen model and effort, whatever ba
 })
 
 test('compareWith on a cheaper model: a turn on a stronger one is extra cost; a turn with no effort keeps its output', () => {
-  const sub = turn('opus', 'opus', { agentId: 'a1' })
+  const sub = turn('opus', 'opus', { agentId: 'a1', routedAgent: true })
   const s = summarize([sub], NOW, { model: 'sonnet', effort: 'high' }).today
   close(s.withoutUsd, cost(U, 'sonnet')!)
   close(s.extraUsd, cost(U, 'opus')! - cost(U, 'sonnet')!)
@@ -907,4 +907,25 @@ test('balance: a started session whose own first prompt was routed too is not a 
   const b = balance(records)
   expect(b.routed).toBe(1)
   close(b.byModel[0]!.usdPerTask, 1)
+})
+
+test('a subagent on its own model saves nothing against compareWith', () => {
+  const opusMedium = { model: 'opus', effort: 'medium' as const }
+  const s = summarize([turn('haiku', 'haiku', { agentId: 'explore' }), turn('sonnet', 'sonnet', { agentId: 'tests' })], NOW, opusMedium).today
+  close(s.actualUsd, cost(U, 'haiku')! + cost(U, 'sonnet')!)
+  close(s.withoutUsd, s.actualUsd)
+  expect(s.savedUsd).toBe(0)
+  // A subagent the router started is still priced against compareWith.
+  const r = summarize([turn('haiku', 'haiku', { agentId: 'r', routedAgent: true })], NOW, opusMedium).today
+  close(r.savedUsd, cost(U, 'opus')! - cost(U, 'haiku')!)
+})
+
+test('a switch back to the baseline model counts as a switch', () => {
+  expect(switchedModel('haiku', 'opus')).toBe(true)
+  expect(switchedModel('opus', 'haiku')).toBe(true)
+  expect(switchedModel('opus', 'opus')).toBe(false)
+  expect(switchedModel('', 'opus')).toBe(false)
+  // Back on the baseline, the cache write would have been a read without the router.
+  const s = summarize([turn('opus', 'opus', { switched: true })], NOW).today
+  close(s.extraUsd, cost(U, 'opus')! - cost({ ...U, cacheRead: U.cacheRead + U.cacheWrite, cacheWrite: 0 }, 'opus')!)
 })

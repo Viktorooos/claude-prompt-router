@@ -6,7 +6,7 @@ import { ALL_MODELS, BASE_MODELS, claudeDir, quickReply, DECIDE_OTHER, DEFAULT_W
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, unlinkedNote, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
+import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, unlinkedNote, parseLog, rotate, signed, statsHtml, statsText, summarize, switchedModel, usd } from '../core/stats.ts'
 import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, dayLineSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
 import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
@@ -1277,7 +1277,7 @@ export const register: Register = (on, options) => {
       const requests = e.agentId ? (agentSteps.get(e.agentId) ?? 0) : 0
       if (e.agentId) agentSteps.delete(e.agentId)
       // The router moved this chat to another model since the last turn (not the person's own switch).
-      const switched = !e.agentId && !!lastTurnModel && !!model && model !== lastTurnModel && model !== base
+      const switched = !e.agentId && switchedModel(lastTurnModel, model)
       if (!e.agentId && model) lastTurnModel = model
       // The router asked and the turn ended with no switch, subagent or session: the person kept their setting.
       if (!e.agentId && routerAsked && lastAsked) {
