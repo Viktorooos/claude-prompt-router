@@ -50,6 +50,12 @@ export type Turn = {
    *  the router each of those requests would have read that context from the main chat's cache. */
   mainContext?: number
   requests?: number
+  /** A subagent the router started (older records: only `mainContext` says so). Any other subagent
+   *  on its own model is the person's choice and stays out of the router's tasks (neutralAgent). */
+  routedAgent?: true
+  /** A turn of a session the router started: the task it belongs to (the parent chat and the `ts`
+   *  of the decision that started it), priced against the parent chat's baseline. */
+  task?: { chat: string; decision: number }
   /** The router switched the chat's model since the last turn: without it, what this turn wrote to
    *  the cache would have been read from it. */
   switched?: true
@@ -123,7 +129,10 @@ export type Summary = {
   tokens: { [model: string]: Usage }
 }
 
-export type Report = { today: Summary; week: Summary; total: Summary }
+// The pane's periods: today, the last 7 days, this and last calendar month, and everything.
+export type Period = 'today' | 'week' | 'month' | 'lastMonth' | 'total'
+export type Report = Record<Period, Summary>
+export const PERIOD_KEYS: readonly Period[] = ['today', 'week', 'month', 'lastMonth', 'total']
 
 const DAY = 86_400_000
 
@@ -195,7 +204,7 @@ function priceWithout(t: Turn, usage: Usage, actual: number, listActual: number 
   const same = withoutUsage(t, usage)
   if (t.model === t.baseline && same === usage) return { without: actual, saved: 0, extra: 0, unpriced: false }
   // The saving compares list prices on both sides; without one of them, no saving is claimed.
-  const listWithout = cost(same, t.baseline)
+  const listWithout = cost(same, t.baseline, t.requests)
   if (listActual === null || listWithout === null) return { without: actual, saved: 0, extra: 0, unpriced: true }
   const diff = listWithout - listActual
   return { without: actual + diff, saved: Math.max(diff, 0), extra: Math.max(-diff, 0), unpriced: false }
@@ -209,7 +218,7 @@ function addTurn(s: Summary, turn: Turn, c: Compare) {
   }
   const sum = (s.tokens[turn.model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
   for (const k of ['input', 'output', 'cacheRead', 'cacheWrite'] as const) sum[k] += turn.usage[k] ?? 0
-  const listActual = cost(turn.usage, turn.model)
+  const listActual = cost(turn.usage, turn.model, turn.requests)
   const actual = turn.usd ?? listActual
   if (actual === null) {
     s.unpricedTurns++
@@ -291,8 +300,12 @@ const routedDecision = (d: Decision) => d.outcome === 'applied' && d.where !== '
 
 // How surely each sign says a cheaper answer did not do the job (1 = surely). Guesses, to tune:
 // switched = the person moved the picker up and went on, repeated = the same text again, corrected =
-// the classifier read the next prompt as a fix of the answer, interrupted = the answer was cut off.
-export const FAILURE_WEIGHTS = { switched: 1, repeated: 1, corrected: 0.7, interrupted: 0.4 } as const
+// the next prompt's own words say the answer failed (isRedo), interrupted = the answer was cut off,
+// classifierFix = only the classifier read the next prompt as a fix (follows: 'corrects'), with
+// nothing in the person's words. That reading is a weak sign: on the log of Oct 31 – Nov 9 2026 it
+// stood alone in 16 of 146 routed tasks and made $16 of the $20 re-work, the person never switching
+// up by hand. So it weighs little, and its re-work is the one answer to that prompt (reworkTurns).
+export const FAILURE_WEIGHTS = { switched: 1, repeated: 1, corrected: 0.7, interrupted: 0.4, classifierFix: 0.2 } as const
 
 export type FailureReason = keyof typeof FAILURE_WEIGHTS
 export type Failure = { weight: number; reasons: FailureReason[] }
@@ -303,6 +316,16 @@ function failure(reasons: FailureReason[]): Failure {
 }
 
 const main = (t: Turn) => !t.agentId
+
+// The main chat runs on another model than its last turn: what this turn wrote to the cache it would
+// have read without the switch, also when the switch went back to the baseline.
+export function switchedModel(last: string, model: string): boolean {
+  return !!last && !!model && model !== last
+}
+// A subagent the router did not start: on its own model (the turn's baseline is its model) and not
+// one the router offered. Neutral for the router: its cost is the person's pick either way, so it
+// stays out of the task's cost and re-work.
+const neutralAgent = (t: Turn) => !!t.agentId && !t.routedAgent && !t.mainContext && t.model === t.baseline
 // A turn that did not finish: no tokens in the log, or only those its transcript had.
 const cutOff = (t: Turn) => !t.usage || !!t.transcript
 
@@ -331,7 +354,8 @@ function reworkedSet(records: readonly Entry[]) {
       const answer = turns.find(t => t.ts >= d.ts && t.ts < until(0))
       const reasons: FailureReason[] = []
       if (d.key && next.some(n => n.key === d.key)) reasons.push('repeated')
-      if (next[0]?.follows === 'corrects' || next[0]?.redo) reasons.push('corrected')
+      if (next[0]?.redo) reasons.push('corrected')
+      else if (next[0]?.follows === 'corrects') reasons.push('classifierFix')
       if (next[0] && turns.some(t => t.manual && t.ts >= next[0]!.ts && t.ts < until(1))) reasons.push('switched')
       if (answer && cutOff(answer)) reasons.push('interrupted')
       if (reasons.length) out.set(takenKey(d.chat, d.ts), failure(reasons))
@@ -389,7 +413,9 @@ export function failureOf(e: Episode): Failure {
   const reasons: FailureReason[] = []
   if (!e.decisions.length) return failure(reasons)
   if (e.decisions.some((d, i) => d.key && e.decisions.slice(0, i).some(x => x.key === d.key))) reasons.push('repeated')
-  if (e.decisions.slice(1).some(d => d.follows === 'corrects' || d.redo)) reasons.push('corrected')
+  const later = e.decisions.slice(1)
+  if (later.some(d => d.redo)) reasons.push('corrected')
+  if (later.some(d => d.follows === 'corrects' && !d.redo)) reasons.push('classifierFix')
   const answers = e.turns.filter(main)
   if (answers.slice(1).some(t => t.manual)) reasons.push('switched')
   if (answers.some(cutOff)) reasons.push('interrupted')
@@ -401,12 +427,23 @@ export function failureOf(e: Episode): Failure {
 const movesDown = (where: string, from: Decision['from'], to: Decision['to']) =>
   above(from.model, to.model) || (from.model === to.model && (where !== 'here' || above(from.effort, to.effort)))
 
-const turnUsd = (t: Turn) => (t.usage ? (t.usd ?? cost(t.usage, t.model) ?? 0) : 0)
+const turnUsd = (t: Turn) => (t.usage ? (t.usd ?? cost(t.usage, t.model, t.requests) ?? 0) : 0)
 const turnsUsd = (ts: readonly Turn[]) => ts.reduce((n, t) => n + turnUsd(t), 0)
 const turnsMs = (ts: readonly Turn[]) => ts.filter(main).reduce((n, t) => n + (t.durationMs ?? 0), 0)
 const classifierMs = (ds: readonly Decision[]) => ds.reduce((n, d) => n + (d.classifier?.ms ?? 0), 0)
 // Whether the task's main turns carry their times (older records and some platforms do not).
 const timed = (ts: readonly Turn[]) => ts.some(t => main(t) && t.durationMs !== undefined)
+
+// The turns a failed task re-did. A classifier-only correction (the strongest sign there) re-did
+// just the answer to the first prompt read as a fix; any surer sign, everything after the first prompt.
+function reworkTurns(e: Episode, f: Failure, turns: readonly Turn[]): Turn[] {
+  if (!f.weight || !e.decisions[1]) return []
+  const onlyFix = f.reasons.every(r => r === 'classifierFix' || FAILURE_WEIGHTS[r] < FAILURE_WEIGHTS.classifierFix)
+  if (!onlyFix) return turns.filter(t => t.ts >= e.decisions[1]!.ts)
+  const k = e.decisions.findIndex((d, i) => i > 0 && d.follows === 'corrects' && !d.redo)
+  const end = e.decisions[k + 1]?.ts ?? Infinity
+  return turns.filter(t => t.ts >= e.decisions[k]!.ts && t.ts < end)
+}
 
 // The Wilson 95 % interval of a share (successes may be fractional: failures are weighted).
 export function wilson(successes: number, n: number): { low: number; high: number } {
@@ -424,8 +461,15 @@ export type ModelRow = { model: string; tasks: number; usdPerTask: number; rewor
 export type Balance = {
   /** Tasks the router changed (model, effort, subagent, session). */
   routed: number
-  /** Money the router saved (+) or cost (−) against no router, classifier included. An estimate. */
+  /** Money the router saved (+) or cost (−) against no router, classifier included. An estimate.
+   *  A failed task's re-done turns would not have run without the router: their share by the failure
+   *  weight comes off the price without the router. */
   usd: number
+  /** Routed tasks that started a session with no turns linked to them (logged before sessions were
+   *  linked, Turn.task): that session's turns are priced on its own first model, outside the task. */
+  unlinkedSessions: number
+  /** usd as if no follow-up were re-work (each would have run without the router too): the upper bound. */
+  usdNoRework: number
   /** usd split: cheaper picks, higher picks (escalation), re-work after a failed answer, classifier. */
   parts: { cheaper: number; escalation: number; rework: number; classifier: number }
   /** Share of routed tasks that did the job (weighted failures), with its Wilson interval. */
@@ -435,30 +479,51 @@ export type Balance = {
 
 // The router's balance per task: each routed task's turns priced on the model they would have run on
 // without the router (the token re-pricing above), minus what they cost and the classifier. A task's
-// later prompts after a failure count as re-work, by the failure's weight.
+// re-done turns after a failure (reworkTurns) count as lost, by the failure's weight: a good answer
+// would have spared them, so their price without the router comes off too. usdNoRework leaves them in.
 // `since`: only tasks that started then or later count.
-export function balance(records: readonly Entry[], since = -Infinity): Balance {
+export function balance(records: readonly Entry[], since = -Infinity, until = Infinity): Balance {
   const taken = takenSet(records)
   const changed = (d: Decision) => routedDecision(d) || (d.outcome === 'asked' && taken.has(takenKey(d.chat, d.ts)))
-  const out: Balance = { routed: 0, usd: 0, parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [] }
+  const out: Balance = { routed: 0, usd: 0, usdNoRework: 0, unlinkedSessions: 0, parts: { cheaper: 0, escalation: 0, rework: 0, classifier: 0 }, accuracy: null, byModel: [] }
   const rows = new Map<string, { tasks: number; usd: number; rework: number; ms: number; timed: number }>()
   const row = (m: string) => rows.get(m) ?? (rows.set(m, { tasks: 0, usd: 0, rework: 0, ms: 0, timed: 0 }), rows.get(m)!)
   let fails = 0
+  // Turns of sessions the router started, by the decision that started them.
+  const spawned = new Map<string, Turn[]>()
+  for (const r of records) {
+    if (r.kind !== 'turn' || !r.task) continue
+    const k = takenKey(r.task.chat, r.task.decision)
+    spawned.set(k, [...(spawned.get(k) ?? []), r])
+  }
   for (const e of episodes(records)) {
-    if (!e.decisions.length || e.start < since) continue
+    if (!e.decisions.length || e.start < since || e.start >= until) continue
     const d = e.decisions[0]!
     const clsUsd = e.decisions.reduce((n, x) => n + classifierUsd(x), 0)
     out.parts.classifier -= clsUsd
     if (!changed(d)) continue
+    // A started session's own routed first prompt: its turns all count in the parent's task already.
+    if (e.turns.length && e.turns.every(t => t.task)) continue
     out.routed++
-    const f = failureOf(e).weight
+    const failed = failureOf(e)
+    const f = failed.weight
     fails += f
-    const actual = turnsUsd(e.turns)
-    const later = e.decisions[1] ? turnsUsd(e.turns.filter(t => t.ts >= e.decisions[1]!.ts)) : 0
-    const rework = f * later
+    // The task's own turns (a session's turns counted in the task that started it), and the turns of
+    // the session it started; subagents the router did not start left out.
+    const own = e.turns.filter(t => !t.task && !neutralAgent(t))
+    const linked = e.decisions.flatMap(x => spawned.get(takenKey(x.chat, x.ts)) ?? [])
+    if (d.where === 'session' && !linked.length) out.unlinkedSessions++
+    const turns = [...own, ...linked.filter(t => !neutralAgent(t))]
+    const actual = turnsUsd(turns)
+    const redone = reworkTurns(e, failed, own)
+    const rework = f * turnsUsd(redone)
     const s = empty()
-    for (const t of e.turns) addTurn(s, t, null)
-    const gain = s.withoutUsd - (actual - rework)
+    for (const t of turns) addTurn(s, t, null)
+    const spared = empty()
+    for (const t of redone) addTurn(spared, t, null)
+    out.usdNoRework += s.withoutUsd - actual
+    // The pick's gain on the work that had to be done; the re-done turns' cost is re-work below.
+    const gain = s.withoutUsd - f * spared.withoutUsd - (actual - rework)
     // A subagent or session on a stronger model is an escalation, not a cheaper pick.
     if (movesDown(d.where, d.from, d.to)) out.parts.cheaper += gain
     else out.parts.escalation += gain
@@ -467,13 +532,14 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
     r.tasks++
     r.usd += actual + clsUsd
     r.rework += f
-    if (timed(e.turns)) {
-      r.ms += turnsMs(e.turns) + classifierMs(e.decisions)
+    if (timed(own)) {
+      r.ms += turnsMs(own) + classifierMs(e.decisions)
       r.timed++
     }
   }
   const p = out.parts
   out.usd = p.cheaper + p.escalation + p.rework + p.classifier
+  out.usdNoRework += p.classifier
   if (out.routed) {
     const w = wilson(out.routed - fails, out.routed)
     out.accuracy = { pct: (1 - fails / out.routed) * 100, low: w.low * 100, high: w.high * 100 }
@@ -487,11 +553,13 @@ export function balance(records: readonly Entry[], since = -Infinity): Balance {
   return out
 }
 
-export type Balances = { today: Balance; week: Balance; total: Balance }
+export type Balances = Record<Period, Balance>
 
-// The balance of today (local calendar day), the last 7 days and everything, as summarize() splits them.
+// The balance of each period, as summarize() splits them.
 export function balances(records: readonly Entry[], now: number): Balances {
-  return { today: balance(records, startOfDay(now)), week: balance(records, now - 7 * DAY), total: balance(records) }
+  const out = {} as Balances
+  for (const [k, [from, to]] of Object.entries(periodRanges(now)) as [Period, [number, number]][]) out[k] = balance(records, from, to)
+  return out
 }
 
 // What scripts/usage-scan.mjs writes: every API request of a session's transcript (subagents with `agent`).
@@ -521,7 +589,8 @@ export function withTranscripts(records: readonly Entry[], scans: readonly Usage
 }
 
 function add(s: Summary, r: Entry, taken: Set<string>, reworked: Map<string, Failure>, c: Compare) {
-  if (r.kind === 'turn') addTurn(s, r, c)
+  // A subagent on its own model is the person's pick: priced against itself, so it saves nothing.
+  if (r.kind === 'turn') addTurn(s, r, neutralAgent(r) ? null : c)
   else if (r.kind === 'decision') {
     addDecision(s, r, taken.has(takenKey(r.chat, r.ts)))
     s.classifierUsd += classifierUsd(r)
@@ -537,39 +606,94 @@ function startOfDay(ts: number) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
 
+// The start of the local month `offset` months from the one `ts` falls in.
+function startOfMonth(ts: number, offset = 0) {
+  const d = new Date(ts)
+  return new Date(d.getFullYear(), d.getMonth() + offset, 1).getTime()
+}
+
+// Each period's [from, to) as of `now`.
+function periodRanges(now: number): Record<Period, [number, number]> {
+  const month = startOfMonth(now)
+  return {
+    today: [startOfDay(now), Infinity],
+    week: [now - 7 * DAY, Infinity],
+    month: [month, Infinity],
+    lastMonth: [startOfMonth(now, -1), month],
+    total: [-Infinity, Infinity],
+  }
+}
+
 function dayKey(ts: number) {
   const d = new Date(ts)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// Today (local calendar day), the last 7 days and everything, as of `now`.
+// Each period's summary as of `now` (today and the months by the local calendar).
 export function summarize(records: readonly Entry[], now: number, c: Compare = null): Report {
-  const today = empty()
-  const week = empty()
-  const total = empty()
-  const dayStart = startOfDay(now)
+  const ranges = Object.entries(periodRanges(now)) as [Period, [number, number]][]
+  const out = Object.fromEntries(ranges.map(([k]) => [k, empty()])) as Record<Period, Summary>
+  const taken = takenSet(records)
+  const reworked = reworkedSet(records)
+  for (const r of records) for (const [k, [from, to]] of ranges) if (r.ts >= from && r.ts < to) add(out[k], r, taken, reworked, c)
+  return Object.fromEntries(ranges.map(([k]) => [k, finish(out[k])])) as Report
+}
+
+// One point of the graph: the summary of [start, end), `day` the local day key it starts on.
+export type ChartPoint = { day: string } & Summary
+type Slot = { day: string; start: number; end: number }
+
+function sumSlots(records: readonly Entry[], slots: readonly Slot[], c: Compare): ChartPoint[] {
+  const sums = slots.map(() => empty())
   const taken = takenSet(records)
   const reworked = reworkedSet(records)
   for (const r of records) {
-    add(total, r, taken, reworked, c)
-    if (r.ts >= now - 7 * DAY) add(week, r, taken, reworked, c)
-    if (r.ts >= dayStart) add(today, r, taken, reworked, c)
+    const i = slots.findIndex(x => r.ts >= x.start && r.ts < x.end)
+    if (i >= 0) add(sums[i]!, r, taken, reworked, c)
   }
-  return { today: finish(today), week: finish(week), total: finish(total) }
+  return slots.map((x, i) => ({ day: x.day, ...finish(sums[i]!) }))
+}
+
+// Local days from the day `from` falls in to the day `to` falls in, each a slot.
+function daySlots(from: number, to: number): Slot[] {
+  const out: Slot[] = []
+  for (let d = startOfDay(from); d <= to; ) {
+    const next = startOfDay(d + DAY + 12 * 3_600_000)
+    out.push({ day: dayKey(d), start: d, end: next })
+    d = next
+  }
+  return out
 }
 
 // The last `days` local days, oldest first, each with its own summary (for the graph).
-export function byDay(records: readonly Entry[], now: number, days: number, c: Compare = null): ({ day: string } & Summary)[] {
-  const keys: string[] = []
-  for (let i = days - 1; i >= 0; i--) keys.push(dayKey(startOfDay(now) - i * DAY + 12 * 3_600_000))
-  const map = new Map(keys.map(k => [k, empty()]))
-  const taken = takenSet(records)
-  const reworked = reworkedSet(records)
-  for (const r of records) {
-    const s = map.get(dayKey(r.ts))
-    if (s) add(s, r, taken, reworked, c)
+export function byDay(records: readonly Entry[], now: number, days: number, c: Compare = null): ChartPoint[] {
+  return sumSlots(records, daySlots(startOfDay(now) - (days - 1) * DAY + 12 * 3_600_000, now), c)
+}
+
+// A period's graph: a point per day, or for a long total one per week (Monday on) or month, so it
+// never has more than about 31 points.
+export type Chart = { unit: 'day' | 'week' | 'month'; points: ChartPoint[] }
+
+export function chartFor(records: readonly Entry[], now: number, period: Period, c: Compare = null): Chart {
+  if (period === 'today') return { unit: 'day', points: [] }
+  if (period === 'week') return { unit: 'day', points: byDay(records, now, 7, c) }
+  const [from, to] = periodRanges(now)[period]
+  if (period !== 'total') return { unit: 'day', points: sumSlots(records, daySlots(from, Math.min(now, to - 1)), c) }
+  const first = records.reduce((m, r) => Math.min(m, r.ts), now)
+  const days = daySlots(first, now)
+  if (days.length <= 31) return { unit: 'day', points: sumSlots(records, days, c) }
+  if (days.length <= 31 * 7) {
+    const slots: Slot[] = []
+    for (const d of days) {
+      const monday = new Date(d.start).getDay() === 1
+      if (!slots.length || monday) slots.push({ ...d })
+      else slots.at(-1)!.end = d.end
+    }
+    return { unit: 'week', points: sumSlots(records, slots, c) }
   }
-  return keys.map(day => ({ day, ...finish(map.get(day)!) }))
+  const slots: Slot[] = []
+  for (let m = startOfMonth(first); m <= now; m = startOfMonth(m, 1)) slots.push({ day: dayKey(m), start: m, end: startOfMonth(m, 1) })
+  return { unit: 'month', points: sumSlots(records, slots, c) }
 }
 
 // The JSONL log as records; broken lines and unknown kinds are skipped. Fields of older versions
@@ -815,7 +939,7 @@ export function limitRate(records: readonly Entry[]): number | null {
   return pctSum >= MIN_PCT && usdSum > 0 ? usdSum / pctSum : null
 }
 
-const pctWord = (p: number) => (p < 10 ? p.toFixed(1) : String(Math.round(p)))
+export const pctWord = (p: number) => (p < 10 ? p.toFixed(1) : String(Math.round(p)))
 
 // The pane's "What you got" card: what the router gave the person in the period, each a figure and one
 // line on it; only figures with data show. With `perPct` (limitRate) money also reads as a share of the
@@ -831,6 +955,12 @@ export function glance(s: Summary, window = 200_000, perPct: number | null = nul
   if (s.savedUsd >= 0.005) {
     const extra = s.extraUsd >= 0.005 ? `; stronger picks used ${usd(s.extraUsd)}` : ''
     out.push({ key: 'cheaper', label: 'Cheaper picks saved', value: usd(s.savedUsd), sub: `${perPct ? week(s.savedUsd) : 'at list price'}${extra}` })
+  }
+  const allTokens = Object.values(s.tokens).reduce((n, u) => n + (u.input ?? 0) + (u.output ?? 0) + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0), 0)
+  if (s.savedUsd >= 0.005 && s.actualUsd > 0 && allTokens > 0) {
+    // The dollars saved, as the tokens they would have bought at this period's average price per token.
+    const saved = (s.savedUsd / s.actualUsd) * allTokens
+    out.push({ key: 'savedTokens', label: '≈ Tokens saved', value: `${tokensWord(saved)} tokens`, sub: 'the cheaper picks, at your average price per token' })
   }
   if (s.withoutUsd >= 0.01) {
     const more = s.balanceUsd < 0
@@ -865,6 +995,10 @@ export const balanceParts = (b: Balance) => [
   ['classifier', 'Classifier', b.parts.classifier],
 ] as const
 
+// Older sessions the router started are not in their tasks: says how many, or '' when none.
+export const unlinkedNote = (b: Balance) =>
+  b.unlinkedSessions ? `${b.unlinkedSessions} ${b.unlinkedSessions === 1 ? 'session the router started is' : 'sessions the router started are'} priced on ${b.unlinkedSessions === 1 ? 'its' : 'their'} own first model (logged before sessions were linked)` : ''
+
 export const accuracyText = (b: Balance) => (b.accuracy ? `${Math.round(b.accuracy.pct)} % (95 %: ${Math.round(b.accuracy.low)}–${Math.round(b.accuracy.high)} %)` : '–')
 
 // The per-model table as rows of cells, header first.
@@ -876,16 +1010,18 @@ export function modelTable(b: Balance): string[][] {
 }
 
 const BALANCE_NOTE =
-  'Per task: a routed task (its prompt, the prompts that fixed or went on with it, its subagents, the classifier), its turns priced on the model they would have run on without the router, as in the table above. Re-work: the later prompts of a task whose answer failed, by the failure weight. Accuracy: the share of routed tasks with no sign of failure.'
+  'Per task: a routed task (its prompt, the prompts that fixed or went on with it, its subagents, the classifier), its turns priced on the model they would have run on without the router, as in the table above. Re-work: the re-done prompts of a task whose answer failed, by the failure weight; they come off the money, as a good answer would have spared them. Without re-work: the money if every follow-up would have run anyway, the upper bound. Accuracy: the share of routed tasks with no sign of failure.'
 
 // /router stats: the balance per task, under the token table.
 export function balanceText(b: Balance): string {
   const lines = [
     'Per task (total, estimated)',
     `Money      ${signed(b.usd)}`,
+    `Without re-work ${signed(b.usdNoRework)} (upper bound)`,
     ...balanceParts(b).map(([, label, v]) => `  ${label.padEnd(15)}${signed(v)}`),
     `Accuracy   ${accuracyText(b)}`,
     sampleNote(b),
+    ...(unlinkedNote(b) ? [unlinkedNote(b)] : []),
   ]
   const t = modelTable(b)
   if (t.length > 1) {
@@ -901,7 +1037,7 @@ function balanceHtml(b: Balance): string {
   const parts = balanceParts(b).map(([, label, v]) => `<tr><th>${label}</th><td>${signed(v)}</td></tr>`).join('')
   return `<h2>Per task</h2>
 <div class="big">${isRough(b) ? '~' : ''}${signed(b.usd)} <span style="font-size:15px;font-weight:400;color:var(--muted)">total, estimated</span></div>
-<p>${sampleNote(b)}</p>
+<p>${sampleNote(b)} · without re-work ${signed(b.usdNoRework)} (upper bound)${unlinkedNote(b) ? ` · ${unlinkedNote(b)}` : ''}</p>
 <div class="wrap"><table><tbody>${parts}<tr><th>Accuracy</th><td>${accuracyText(b)}</td></tr></tbody></table></div>
 ${table}
 <p>${BALANCE_NOTE}</p>`

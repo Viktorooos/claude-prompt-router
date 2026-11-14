@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { TEMPLATE, claudeDir, compactWindow, promptKey, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig, SWITCHES } from '../core/router.ts'
+import { pickPrompt, TEMPLATE, claudeDir, compactWindow, promptKey, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig, SWITCHES } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -1398,11 +1398,13 @@ test('subagentSuggestions defaults to ask; a session pick still asks with auto',
   expect(seen.sent[0] ?? '').toMatch(/AskUserQuestion/)
 })
 
-test('compareWith: Opus medium by default, first and any model-effort pair, junk falls back', () => {
-  expect(toConfig({}).compareWith).toBe('opus-medium')
+test('compareWith: the first model by default, first and any model-effort pair, junk falls back', () => {
+  expect(toConfig({}).compareWith).toBe('first')
   expect(toConfig({ compareWith: 'first' }).compareWith).toBe('first')
   expect(toConfig({ compareWith: 'sonnet-high' }).compareWith).toBe('sonnet-high')
-  expect(toConfig({ compareWith: 'gpt-5' }).compareWith).toBe('opus-medium')
+  expect(toConfig({ compareWith: 'gpt-5' }).compareWith).toBe('first')
+  expect(toConfig({}).savingsIn).toBe('limit')
+  expect(toConfig({ savingsIn: 'money' }).savingsIn).toBe('money')
   expect(toConfig({ compareWith: 'history' }).compareWith).toBe('history')
 })
 
@@ -1471,10 +1473,12 @@ test('quickReply: plain approvals, thanks and picks from the agent\'s options, i
   // The eval's yes / option2 / thanks / cz_yes / es_yes cases.
   for (const t of ['yes, go on', 'option 2', 'thanks!', 'ano, pokračuj', 'sí, hazlo']) expect(quickReply(t)).toBe(true)
   for (const t of ['yes', 'ok', 'OK.', 'd', 'B)', '3', '2.', 'Možnost 2', 'jo', 'ne', 'díky', 'do it', 'sounds good', 'ja, weiter', 'merci', '👍']) expect(quickReply(t)).toBe(true)
+  // Czech "it works" acknowledgements.
+  for (const t of ['tak nice takže to funguje', 'funguje', 'jo, funguje', 'fajn', 'skvěle, díky', 'bezva', 'výborně']) expect(quickReply(t)).toBe(true)
 })
 
 test('quickReply: anything with a word of its own, a re-work sign or a slash command goes to the classifier', () => {
-  for (const t of ['yes but use postgres', 'no, fix the tests first', 'continue with the refactor', 'why', 'what?', 'ano, ale v Kotlinu', 'nefunguje', 'still wrong', 'try again', '/router', '', 'ok '.repeat(6)]) expect(quickReply(t)).toBe(false)
+  for (const t of ['yes but use postgres', 'no, fix the tests first', 'continue with the refactor', 'why', 'what?', 'ano, ale v Kotlinu', 'nefunguje', 'tak to nefunguje', 'funguje, ale ne na iOS', 'still wrong', 'try again', '/router', '', 'ok '.repeat(6)]) expect(quickReply(t)).toBe(false)
   expect(quickReply('yes '.repeat(12))).toBe(false)
 })
 
@@ -1569,4 +1573,115 @@ test("stats: after a reload, an effort the router set still counts as the router
   await $.turn.complete(TURN_DONE)
   const t = statsLines(seen).filter((x: any) => x.kind === 'turn').at(-1)
   expect(t).toMatchObject({ effort: 'low', baseEffort: 'high' })
+})
+
+test('stats: a session the router started takes the parent chat\'s baseline and belongs to its task; one handoff, once', async ($: any, on: any) => {
+  const opts: { model?: string } = {}
+  const seen = engine(on, PICK.session, opts)
+  on('store.delete', (_: unknown, e: any) => {
+    seen.store.delete(e.key)
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: { content: [{ type: 'text', text: 'Started session "Export" (session_id: local_abc, name: export).' }] } }))
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-sonnet-5-5' } }))
+  await start($)
+  await submit($, 'build the CSV export feature')
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 'Export', prompt: 'build it' })
+  await $.turn.complete(TURN_DONE)
+  const d = statsLines(seen).find((r: any) => r.kind === 'decision')
+  expect(d.where).toBe('session')
+  // The new session opens on the model the router picked.
+  opts.model = 'claude-sonnet-5-5'
+  await start($)
+  await $.turn.complete(TURN_DONE)
+  const t = statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1)
+  expect(t).toMatchObject({ model: 'claude-sonnet-5-5', baseline: 'claude-opus-5-5', task: { chat: d.chat, decision: d.ts } })
+  // Another session after it is on its own.
+  await start($)
+  await $.turn.complete(TURN_DONE)
+  const u = statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1)
+  expect(u.baseline).toBe('claude-sonnet-5-5')
+  expect(u.task).toBeUndefined()
+})
+
+// Handoff: the parent chat starts a session through start_session; the next session takes it only on the
+// model the router picked and within HANDOFF_TTL. One engine stands for both: each start() is a new session.
+function handoffEngine(on: any, opts: { model?: string; now?: number }) {
+  const seen = engine(on, PICK.session, opts)
+  on('store.delete', (_: unknown, e: any) => {
+    seen.store.delete(e.key)
+    return { value: undefined }
+  })
+  on('tool.call', () => ({ result: { content: [{ type: 'text', text: 'Started session "Export" (session_id: local_abc, name: export).' }] } }))
+  on('turn.complete', () => ({ text: '', usage: { input_tokens: 10, output_tokens: 10, model: 'claude-sonnet-5-5' } }))
+  return seen
+}
+async function parentStarts($: any, seen: Seen, opts: { model?: string }) {
+  opts.model = 'claude-opus-5-5'
+  await start($)
+  await submit($, 'build the CSV export feature')
+  await $.tool.call({ tool: 'mcp__ccd_session__start_session', title: 'Export', prompt: 'build it' })
+  await $.turn.complete(TURN_DONE)
+  return statsLines(seen).filter((r: any) => r.kind === 'decision').at(-1)
+}
+async function childTurn($: any, seen: Seen, opts: { model?: string }, model: string) {
+  opts.model = model
+  await start($)
+  await $.turn.complete(TURN_DONE)
+  return statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1)
+}
+
+test('handoff: past HANDOFF_TTL the new session is on its own', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  await parentStarts($, seen, opts)
+  opts.now = 11 * 60_000
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeUndefined()
+})
+
+test('handoff: a session on another model, or on a model not known, does not take it', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  await parentStarts($, seen, opts)
+  expect((await childTurn($, seen, opts, 'claude-haiku-5-5')).task).toBeUndefined()
+  expect((await childTurn($, seen, opts, 'some-other-model')).task).toBeUndefined()
+  // The router's own session after them still finds it.
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeTruthy()
+})
+
+test('handoff: the person\'s own session on the parent\'s model within the TTL does not take it', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  const d = await parentStarts($, seen, opts)
+  expect((await childTurn($, seen, opts, 'claude-opus-5-5')).task).toBeUndefined()
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toEqual({ chat: d.chat, decision: d.ts })
+})
+
+test('handoff: two parents at once each hand over their own session, oldest first', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  const a = await parentStarts($, seen, opts)
+  opts.now = 60_000
+  const b = await parentStarts($, seen, opts)
+  expect(a.chat).not.toBe(b.chat)
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toEqual({ chat: a.chat, decision: a.ts })
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toEqual({ chat: b.chat, decision: b.ts })
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeUndefined()
+})
+
+test('handoff: only the started session\'s first answer belongs to the parent task, prompt noted or not', async ($: any, on: any) => {
+  const opts: { model?: string; now?: number } = { now: 0 }
+  const seen = handoffEngine(on, opts)
+  await parentStarts($, seen, opts)
+  expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeTruthy()
+  await $.turn.complete(TURN_DONE)
+  expect(statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1).task).toBeUndefined()
+})
+
+test('pickPrompt: host swaps only the chat and reply phrases', async () => {
+  const chat: any = { first: 'f', recent: [], reply: 'r', model: 'opus', now: 'medium', tokens: 5000, conf: toConfig({}), models: ['opus', 'sonnet', 'haiku'] }
+  const a = pickPrompt('hello', chat)
+  expect(a).toContain('in a Claude Code chat about')
+  const b = pickPrompt('hello', chat, TEMPLATE, { chat: 'an OpenCode session', reply: "The assistant's last reply" })
+  expect(b).toBe(a.replace('a Claude Code chat', 'an OpenCode session').replace("Claude's last reply", "The assistant's last reply"))
 })

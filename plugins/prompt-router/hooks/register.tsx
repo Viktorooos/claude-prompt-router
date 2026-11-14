@@ -6,10 +6,10 @@ import { ALL_MODELS, BASE_MODELS, claudeDir, quickReply, DECIDE_OTHER, DEFAULT_W
 import type { Chat, Config, Follows, Model, Option, Pick, Switch, Where } from '../core/router.ts'
 import { cacheCosts, cost, usageOf } from '../core/prices.ts'
 import type { Usage } from '../core/prices.ts'
-import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, compareLabel, glance, limitRate, isReference, isRough, modelTable, parseLog, rotate, signed, statsHtml, statsText, summarize, usd } from '../core/stats.ts'
-import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, clockTime, dayLabel, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, dayLineSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
+import { Pending, REFERENCE, withTranscripts, accuracyText, historyCompare, balance, balanceParts, balances, byDay, chartFor, compareLabel, PERIOD_KEYS, glance, limitRate, isReference, isRough, modelTable, unlinkedNote, parseLog, rotate, signed, statsHtml, statsText, summarize, switchedModel, usd, pctWord } from '../core/stats.ts'
+import { CACHE_TONE, TONES, cacheCells, cacheClock, TONE_THEME, TTL_NAME, WHERE_LABEL, ago, barText, cacheBarSvg, cacheTime, cacheView, chartSpan, chartTick, clockTime, dayLabel, monthLabel, PERIOD_LABELS, PERIOD_NAMES, bigNumberSvg, contextBarSvg, costBarSvg, dayReadSvg, dotSvg, itemSvg, kTokens, ringSvg, ruleSvg, dayLineSvg, sparkText, splitBarSvg, splitBarText, stackSvg, tileSvg, tone, VIOLETS } from '../core/panel.ts'
 import type { CacheView, CardIcon } from '../core/panel.ts'
-import type { Balance, Balances, Compare, Decision, Entry, History, Report, Turn, UsageScan } from '../core/stats.ts'
+import type { Balance, Balances, Chart, Compare, Decision, Entry, History, Period, Report, Turn, UsageScan } from '../core/stats.ts'
 
 const NAME = 'prompt-router'
 const OVERRIDE = { plugin: 'prompt-router', key: 'override' } as const
@@ -89,6 +89,16 @@ let baseline = ''
 let routed = ''
 // The same for effort: the person's own level, the level the router set, and the last main-chat request's.
 let effortBase = ''
+// A session the router started: the task in the parent chat its turns belong to (Turn.task), until
+// its first main-chat turn is logged. Its own work after the first answer is not the parent's.
+let taskLink: { chat: string; decision: number } | null = null
+// The parent chats' side of the sessions the router starts, a list in $.store until a new session
+// takes one: the session's id in the app is not the one the new session sees, so a new session takes
+// the oldest handoff on the model it starts on (known, and the same), at most HANDOFF_TTL old, once.
+// Expired ones go at every read and write.
+const HANDOFF = 'handoff'
+const HANDOFF_TTL = 10 * 60_000
+type Handoff = { at: number; chat: string; decision: number; model: string; baseline: string }
 let routedLevel = ''
 let stepEffort: { effort: Level | ''; base: Level | '' } | null = null
 let lastClassifier: { model: string; usage: Usage; ms?: number } | null = null
@@ -106,7 +116,7 @@ let manualUp = false
 // openPane on: the pane was opened (and placed, or retried on the first prompt) this session.
 let paneOpened = false
 // The period the pane's savings show (a pane button picks it).
-let panePeriod: 'today' | 'week' | 'total' = 'week'
+let panePeriod: Period = 'week'
 
 // Adds text to a log beside other sessions' writes: scripts/append.mjs appends under a lock, so
 // parallel sessions keep each other's lines. Without Node, the old whole-file rewrite (one write at
@@ -159,7 +169,7 @@ async function keptChat($: EngineInterface) {
 let keptLine = ''
 async function keepChat($: EngineInterface) {
   if (!sessionId) return
-  const value = { session: sessionId, id: chatId, effort: seen, model: seenModel, base: effortBase, routedLevel, baseline, routed }
+  const value = { session: sessionId, id: chatId, effort: seen, model: seenModel, base: effortBase, routedLevel, baseline, routed, task: taskLink }
   const line = JSON.stringify(value)
   if (line === keptLine) return
   keptLine = line
@@ -630,6 +640,53 @@ function failed(r: unknown) {
   return 'deny' in o || !!o.isError || !!(o.result && typeof o.result === 'object' && o.result.isError)
 }
 
+// The handoffs not yet taken and not expired, oldest first (an older single record counts as none).
+async function handoffs($: EngineInterface, now: number): Promise<Handoff[]> {
+  const v = await $.store.get(HANDOFF)
+  return (Array.isArray(v) ? (v as Handoff[]) : [])
+    .filter(h => h && typeof h.at === 'number' && !!h.baseline && now - h.at <= HANDOFF_TTL)
+    .sort((a, b) => a.at - b.at)
+}
+
+// The router started a session: its turns are priced against this chat's baseline, in this task.
+async function giveHandoff($: EngineInterface, asked: { ts: number; model: string }) {
+  if (cfg.stats !== 'on') return
+  try {
+    const now = await $.clock.now()
+    const h: Handoff = { at: now, chat: chatId, decision: asked.ts, model: asked.model, baseline: baseline || seenModel || (await chatModel($)) }
+    await $.store.set(HANDOFF, [...(await handoffs($, now)), h])
+  } catch (err) {
+    await log($, 'stats', err)
+  }
+}
+
+// A new session takes the handoff the router left for it: the parent's baseline, the model the router
+// set (so the first request does not count as the person's own pick), and the task.
+async function takeHandoff($: EngineInterface) {
+  try {
+    const now = await $.clock.now()
+    const stored = await $.store.get(HANDOFF)
+    const list = await handoffs($, now)
+    const model = knownModel(await chatModel($))
+    const h = model ? list.find(x => knownModel(x.model) === model) : undefined
+    const rest = list.filter(x => x !== h)
+    if (h || !Array.isArray(stored) || rest.length !== stored.length) {
+      if (rest.length) await $.store.set(HANDOFF, rest)
+      else if (stored !== undefined) await $.store.delete(HANDOFF)
+    }
+    if (!h) return
+    baseline = h.baseline
+    routed = h.model
+    taskLink = { chat: h.chat, decision: h.decision }
+  } catch (err) {
+    await log($, 'stats', err)
+  }
+}
+
+// The balance's upper bound beside it: re-work counts as lost in the balance, here as work that
+// would have run anyway, so the two numbers are the range of the estimate.
+const noReworkLine = (b: Balance) => `Up to ${signed(b.usdNoRework)} if no follow-up was re-work${b.unlinkedSessions ? `. ${unlinkedNote(b)}` : ''}`
+
 // Works out the prompt to send; the hook sends it, so a failure here never loses the prompt.
 async function decide($: EngineInterface, e: PromptSubmitInput): Promise<PromptSubmitInput> {
   if (!enabled || e.command || e.isMeta) return e
@@ -753,6 +810,7 @@ const LABELS: Record<Option, string> = {
   stats: 'Savings stats',
   openPane: 'Open pane by itself',
   compareWith: 'Compare with',
+  savingsIn: 'Savings shown as',
 }
 
 // The order a press steps through: numbers from low to high with off last (40%, 50% … off), any
@@ -767,7 +825,7 @@ const CHOICES = [
   { key: 'classifier' as Option, values: CLASSIFIERS as readonly string[] },
 ]
 // The value the pane marks "Recommended" for each setting, by the setting's key. The only place that names them:
-// the defaults of the config schema, except the classifier (Haiku is cheaper) and the savings baseline (history).
+// the defaults of the config schema, except the classifier (Haiku is cheaper).
 const RECOMMENDED: Record<string, string> = {
   enabled: 'on',
   firstChatDetection: 'ask',
@@ -777,7 +835,8 @@ const RECOMMENDED: Record<string, string> = {
   newSessionAt: '50%',
   notifications: 'on',
   classifier: 'haiku',
-  compareModel: 'history',
+  compareModel: 'first',
+  savingsIn: 'limit',
   compareEffort: 'medium',
   openPane: 'off',
 }
@@ -918,7 +977,7 @@ async function paneData($: EngineInterface) {
   const at = cfg.sessionSuggestions === 'off' ? 0 : Number.parseInt(cfg.newSessionAt, 10) || 0
   const model = knownModel(seenModel || (await chatModel($)))
   const effort = await currentLevel($)
-  let savings: { report: Report; days: ReturnType<typeof byDay>; balance: Balances; perPct: number | null } | null = null
+  let savings: { report: Report; charts: Record<Period, Chart>; balance: Balances; perPct: number | null } | null = null
   const quick = tickOnly
   tickOnly = false
   if (cfg.stats === 'on') {
@@ -927,7 +986,8 @@ async function paneData($: EngineInterface) {
     else {
       const records = [...parseLog(await readStats($)), ...pending.items]
       const c = compareNow()
-      savings = { report: summarize(records, now, c), days: byDay(records, now, 14, c), balance: balances(records, now), perPct: limitRate(records) }
+      const charts = Object.fromEntries(PERIOD_KEYS.map(k => [k, chartFor(records, now, k, c)])) as Record<Period, Chart>
+      savings = { report: summarize(records, now, c), charts, balance: balances(records, now), perPct: limitRate(records) }
       savingsMemo = { at: now, pending: pending.items.length, value: savings }
     }
   }
@@ -1032,6 +1092,8 @@ export const register: Register = (on, options) => {
     routed = goesOn ? same.routed ?? '' : ''
     effortBase = goesOn ? same.base ?? '' : ''
     routedLevel = goesOn ? same.routedLevel ?? '' : ''
+    taskLink = goesOn ? same.task ?? null : null
+    if (!goesOn) await takeHandoff($)
     await keepChat($)
     stepEffort = null
     lastAsked = null
@@ -1218,7 +1280,7 @@ export const register: Register = (on, options) => {
       const requests = e.agentId ? (agentSteps.get(e.agentId) ?? 0) : 0
       if (e.agentId) agentSteps.delete(e.agentId)
       // The router moved this chat to another model since the last turn (not the person's own switch).
-      const switched = !e.agentId && !!lastTurnModel && !!model && model !== lastTurnModel && model !== base
+      const switched = !e.agentId && switchedModel(lastTurnModel, model)
       if (!e.agentId && model) lastTurnModel = model
       // The router asked and the turn ended with no switch, subagent or session: the person kept their setting.
       if (!e.agentId && routerAsked && lastAsked) {
@@ -1243,10 +1305,17 @@ export const register: Register = (on, options) => {
         ...(typeof e.durationMs === 'number' ? { durationMs: e.durationMs } : {}),
         ...(manual ? { manual: true } : {}),
         ...(agent?.context && requests ? { mainContext: agent.context, requests } : {}),
+        ...(agent ? { routedAgent: true } : {}),
+        ...(taskLink ? { task: taskLink } : {}),
         ...(switched ? { switched: true } : {}),
         ...(week ? { week } : {}),
         ...(!e.agentId && stepEffort?.effort && stepEffort.base ? { effort: stepEffort.effort, baseEffort: stepEffort.base } : {}),
       })
+      // The started session's first answer is logged: what follows is the person's own work there.
+      if (!e.agentId && taskLink) {
+        taskLink = null
+        await keepChat($)
+      }
       await flush($)
     } catch (err) {
       await log($, 'stats', err)
@@ -1262,7 +1331,10 @@ export const register: Register = (on, options) => {
       const a = e as { tool?: unknown; questions?: unknown }
       const name = String(a.tool ?? '')
       if (name === 'AskUserQuestion' && Array.isArray(a.questions) && a.questions.some(q => (q as { header?: unknown })?.header === 'Prompt Router')) routerAsked = true
-      if (/(^|__)start_session$/.test(name) && !failed(r) && lastAsked?.where === 'session') await noteAccept($)
+      if (/(^|__)start_session$/.test(name) && !failed(r) && lastAsked?.where === 'session') {
+        await giveHandoff($, lastAsked)
+        await noteAccept($)
+      }
     } catch (err) {
       await log($, 'stats', err)
     }
@@ -1378,6 +1450,7 @@ export const register: Register = (on, options) => {
       panePeriod = k
       redraw($)
     }
+    const PERIODS = PERIOD_KEYS.map(k => [k, PERIOD_LABELS[k]] as const)
     const s = d.savings?.report[panePeriod] ?? null
     const b: Balance | null = d.savings?.balance[panePeriod] ?? null
     const c = compareNow()
@@ -1438,15 +1511,19 @@ export const register: Register = (on, options) => {
       return card(id, [head(`${id}-head`, icon, color, label, sub, { strong: true }), body()], { borderColor: color })
     }
 
-    const PERIODS = [['today', 'Today'], ['week', '7 days'], ['total', 'Total']] as const
     const tabs = d.savings ? (
-      <Box key="tabs" flexDirection="row" gap={1}>
+      <Box key="tabs" flexDirection="row" flexWrap="wrap" gap={1}>
         {PERIODS.map(([k, label]) => (term
           ? <Button key={`period-${k}`} plain label={k === panePeriod ? `[${label}]` : label} onPress={pickPeriod(k)} />
           : <Button key={`period-${k}`} label={label} variant={k === panePeriod ? 'primary' : 'secondary'} onPress={pickPeriod(k)} />))}
       </Box>
     ) : null
 
+    // savingsIn limit: the saving as a share of the weekly limit, once limitRate has measured it.
+    const perPct = d.savings?.perPct ?? null
+    const inLimit = cfg.savingsIn === 'limit' && !!perPct
+    const minus = s && money(s.balanceUsd) === 'down' ? '−' : ''
+    const usdText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : `${minus}${usd(Math.abs(s.balanceUsd))}`) : ''
     // You saved: the work's cost without the router (everything on the compareWith model) less its cost with it.
     const against = c ? `running every prompt on ${compareLabel(c)}` : "keeping each chat's first model"
     const withUsd = s ? s.actualUsd + s.classifierUsd : 0
@@ -1454,33 +1531,39 @@ export const register: Register = (on, options) => {
     const few = !!s && (s.pricedTurns === 0 || s.withoutUsd < 0.01)
     const down = !few && !!s && money(s.balanceUsd) === 'down'
     const savedWord = few ? 'Not enough data yet' : down ? 'The router cost more' : 'You saved'
-    const savedSub = few ? 'Use the router for a few prompts and the saving shows here.' : down ? `than ${against}` : `compared with ${against}`
+    const savedSub = (inLimit && !few ? 'of your weekly limit, ' : '') + (few ? 'Use the router for a few prompts and the saving shows here.' : down ? `than ${against}` : `compared with ${against}`)
     // Why it cost more: stronger picks outweighed the cheaper ones, or the classifier ate the saving.
     const why = !down || !s ? null : s.actualUsd > s.withoutUsd
       ? 'Stronger models cost more than the cheaper ones saved. Raising the bar for a stronger model in Model & effort lowers it.'
       : 'The classifier cost more than routing saved. It pays off over longer tasks.'
-    const savedText = s ? (money(s.balanceUsd) === 'none' ? '$0.00' : `${money(s.balanceUsd) === 'down' ? '−' : ''}${usd(Math.abs(s.balanceUsd))}`) : ''
+    const savedText = s && inLimit ? `${minus}${pctWord(Math.abs(s.balanceUsd) / perPct!)} %` : usdText
     const savedColor = money(s?.balanceUsd ?? 0) === 'up' ? GREEN : MONEY_COLOR[money(s?.balanceUsd ?? 0)] ?? TONES.idle[0]
     const savedPct = s && s.withoutUsd > 0 ? Math.round((Math.abs(s.balanceUsd) / s.withoutUsd) * 100) : 0
-    const days = d.savings?.days.slice(panePeriod === 'week' ? -7 : -14) ?? []
+    const chart = d.savings?.charts[panePeriod] ?? { unit: 'day' as const, points: [] }
+    const days = chart.points
     const trend = days.some(x => Math.abs(x.balanceUsd) >= 0.005) && panePeriod !== 'today'
+    // A point's name: the day, the week it starts (Week of Mon 2 Nov) or the month (Nov 2026).
+    const pointName = (key: string) => chart.unit === 'month' ? monthLabel(key) : chart.unit === 'week' ? `Week of ${dayLabel(key)}` : dayLabel(key)
     // The chart's readout: each day's net and what it was made of, shown while the day is hovered.
     // A day or period in the minus shows a minus sign and red, so it never reads as a saving.
     const dayNet = (v: number) => (v < 0 ? `−${usd(-v)}, the router cost more` : `saved ${usd(v)}`)
     const dayTone = (v: number) => (v < 0 ? TONES.over[0] : GREEN)
     const dayValues = days.map(x => x.balanceUsd)
+    // How many date labels fit under the graph: a day of the month takes about 26 px, 2 Nov about 44.
+    const tickRoom = Math.max(4, Math.floor(px / (chart.unit === 'week' ? 44 : 26)))
     const dayPoints = days.map((x, i) => ({
       value: x.balanceUsd,
-      head: `${dayLabel(x.day)}: ${dayNet(x.balanceUsd)}`,
-      // Under its point: the weekday for a week or so, else every few days' date and the last day's.
-      label: days.length <= 10 ? dayLabel(x.day).split(' ')[0]! : i % Math.ceil(days.length / 7) === 0 || i === days.length - 1 ? dayLabel(x.day).split(' ')[1]! : '',
-      detail: x.prompts ? `${usd(x.actualUsd + x.classifierUsd)} with router · ${usd(x.withoutUsd)} without · ${x.prompts} prompt${x.prompts === 1 ? '' : 's'}` : 'No prompts that day',
+      head: `${pointName(x.day)}: ${dayNet(x.balanceUsd)}`,
+      // Under its point: the weekday for a week of days, else every few points' date (the month for
+      // months) and the last one's, so the labels never crowd.
+      label: chartTick(chart.unit, x.day, i, days.length, tickRoom),
+      detail: x.prompts ? `${usd(x.actualUsd + x.classifierUsd)} with router · ${usd(x.withoutUsd)} without · ${x.prompts} prompt${x.prompts === 1 ? '' : 's'}` : `No prompts that ${chart.unit}`,
     }))
     const daySum = days.reduce((a, x) => a + x.balanceUsd, 0)
     const best = days.reduce<(typeof days)[number] | null>((a, x) => (!a || x.balanceUsd > a.balanceUsd ? x : a), null)
     const dayIdle = {
-      head: `${days.length} days: ${dayNet(daySum)}`,
-      detail: best && best.balanceUsd >= 0.005 ? `Best ${dayLabel(best.day)}, ${usd(best.balanceUsd)} · point at a day for its numbers` : 'Point at a day for its numbers',
+      head: `${PERIOD_NAMES[panePeriod]}: ${dayNet(daySum)}`,
+      detail: best && best.balanceUsd >= 0.005 ? `Best ${pointName(best.day).replace(/^Week/, 'week')}, ${usd(best.balanceUsd)} · point at a ${chart.unit} for its numbers` : `Point at a ${chart.unit} for its numbers`,
     }
     const stat = (key: string, label: string, value: string, color?: string) => (
       <Box key={key} flexDirection="column" flexGrow={1}>
@@ -1497,6 +1580,7 @@ export const register: Register = (on, options) => {
           <Box key="saved-v" flexDirection="column">
             <Text bold color={MONEY_COLOR[money(s.balanceUsd)]}>{savedText}</Text>
             <Text dimColor>{savedSub}</Text>
+            {inLimit ? <Text dimColor>{`${usdText} at list price`}</Text> : null}
             {why ? <Text dimColor>{why}</Text> : null}
           </Box>
         ),
@@ -1514,10 +1598,11 @@ export const register: Register = (on, options) => {
         : (
           <Box key="saved-v" flexDirection="column" gap={1}>
             <Box flexDirection="row" alignItems="center" gap={2}>
-              <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                <Svg source={bigNumberSvg(savedText, savedColor, px, 44)} alt={`${savedWord}: ${savedText}`} height={56} />
+              {/* A hover can reveal but not hide, so the dollars show beside the share, not in its place. */}
+              <Box flexGrow={1} flexShrink={1} minWidth={0} hover={inLimit ? { scope: 'saved-num', backgroundColor: '#00000000' } : undefined}>
+                <Svg source={bigNumberSvg(savedText, savedColor, px, 44)} alt={`${savedWord}: ${savedText}${inLimit ? ` (${usdText})` : ''}`} height={56} />
               </Box>
-              {savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
+              {inLimit ? <Box key="saved-usd" flexShrink={0} display="none" hover={{ scope: 'saved-num', display: 'flex' }}><Text bold color={savedColor}>{`${usdText} at list price`}</Text></Box> : savedPct ? <Box flexShrink={0}><Text bold color={savedColor}>{`${savedPct} % ${money(s.balanceUsd) === 'down' ? 'more' : 'less'}`}</Text></Box> : null}
             </Box>
             <Svg source={costBarSvg(withUsd, s.withoutUsd)} alt={`With router ${usd(withUsd)} of ${usd(s.withoutUsd)} without`} height={10} />
             {why ? <Text dimColor>{why}</Text> : null}
@@ -1531,7 +1616,7 @@ export const register: Register = (on, options) => {
       ) : null,
       trend ? (
         <Box key="saved-trend" flexDirection="column" gap={0} width="100%">
-          <Text dimColor>{`Saved per day, last ${days.length} days`}</Text>
+          <Text dimColor>{`Saved per ${chart.unit}, ${chartSpan(panePeriod, days)}`}</Text>
           {/* The period's readout stays; a hovered day's numbers show in the two rows kept for them
               below it. A hover can reveal or recolor but not hide (a transparent color does not
               apply), so the day's numbers cannot take the period's place. */}
@@ -1734,6 +1819,7 @@ export const register: Register = (on, options) => {
         same(CLASSIFIERS.filter(x => x !== 'opus' || cfg.classifier === 'opus'))),
       { key: 'compareModel', icon: 'scale', name: 'Savings compared with', what: 'What "You saved" is measured against.', values: COMPARE_MODELS.map(m => [m, m === 'first' ? 'first model' : m] as const), now: () => cfg.compareWith.split('-')[0] ?? 'first', pick: m => saveOption($, 'compareWith', compareValue(m, cfg.compareWith.split('-')[1] ?? '')) },
       ...(cm === 'first' || cm === 'history' ? [] : [{ key: 'compareEffort', icon: 'gauge', name: 'at effort', what: '', values: same(COMPARE_EFFORTS), now: () => cfg.compareWith.split('-')[1] ?? '', pick: (l: string) => saveOption($, 'compareWith', compareValue(cfg.compareWith.split('-')[0] ?? 'first', l)) }]),
+      opt('savingsIn', 'coin', 'Savings shown as', 'A share of your weekly limit (once it has moved enough to measure) or dollars at list price.', [['limit', '% of weekly limit'], ['money', 'dollars']]),
       opt('openPane', 'pane', 'Open this pane on start', 'Opens this pane by itself when a session starts.'),
     ]
     const isSwitch = (x: Setting) => x.values.length === 2 && x.values.every(([v]) => v === 'on' || v === 'off')
@@ -1842,6 +1928,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column">
             {row('balance', balanceName, signed(b.usd), { bold: true, color: MONEY_COLOR[money(b.usd)] })}
             <Text dimColor>{balanceWhat}</Text>
+            <Text dimColor>{noReworkLine(b)}</Text>
           </Box>
           {row('accuracy', 'Decisions right', accuracyText(b))}
           {t.length > 1 ? row('tasks', 'Tasks', tasksText) : null}
@@ -1856,6 +1943,7 @@ export const register: Register = (on, options) => {
                 <Text dimColor>{balanceName}</Text>
                 <Svg source={bigNumberSvg(signed(b.usd), MONEY_COLOR[money(b.usd)] ?? TONES.idle[0], px, 30)} alt={`${balanceName} ${signed(b.usd)}`} height={38} />
                 <Text dimColor>vs. your own picks, classifier included</Text>
+                <Text dimColor>{noReworkLine(b)}</Text>
               </Box>
               <Box key="accuracy" flexShrink={0}>
                 <Svg source={ringSvg(b.accuracy?.pct ?? null, b.accuracy?.low ?? null, b.accuracy?.high ?? null, VIOLET)} alt={b.accuracy ? `Decisions right: ${Math.round(b.accuracy.pct)} %` : 'Decisions right: not enough tasks yet'} width={88} height={88} />

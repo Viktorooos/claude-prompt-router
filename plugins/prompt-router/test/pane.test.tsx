@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { ago, barText, cacheBarSvg, cacheTime, cacheView, contextBarSvg, dayLabel, dayLineSvg, ringSvg, dayReadSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
+import { ago, barText, cacheBarSvg, cacheTime, cacheView, chartTick, contextBarSvg, dayLabel, dayLineSvg, ringSvg, dayReadSvg, sparkText, splitBarSvg, splitBarText, tone } from '../core/panel.ts'
 
 const PANE = {
   plugin: 'prompt-router',
@@ -13,7 +13,7 @@ const SESSION_PICK = '{"where": "session", "model": "sonnet", "effort": "medium"
 type Seen = { writes: Map<string, string>; sets: { key: string; value: unknown }[]; store: Map<string, unknown>; opened: unknown[]; sent: string[]; redraws: number; state: Map<string, unknown>; statsReads: number; blits: any[]; blitDeny: string }
 
 // The mod's /config rows where the engine lists them (a terminal session); the desktop app lists none.
-const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions', 'newSessionAt', 'notifications', 'stats', 'openPane', 'compareWith', 'classifier']
+const MOD_ROWS = ['effortDetection', 'firstChatDetection', 'midChatModelDetection', 'subagentSuggestions', 'sessionSuggestions', 'newSessionAt', 'notifications', 'stats', 'openPane', 'compareWith', 'savingsIn', 'classifier']
   .map(k => ({ key: `prompt-router.${k}`, label: k, kind: 'choice', value: '', options: [], provider: { plugin: 'prompt-router', tier: 'user' }, isLocked: false }))
 
 // The engine beneath the plugin, as far as the pane needs it.
@@ -154,7 +154,7 @@ test('You saved comes first: the period\'s saving against compareWith, without a
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const texts = await textsOf(ui)
   // Each card is headed by its name and a line under it; the saving as a big figure, how much less, then without and with.
-  expect(texts).toMatch(/You saved\ncompared with running every prompt on Opus medium\n\d+ % less\nWithout router\n\$\d+\.\d\d\nWith router\n\$\d+\.\d\d/)
+  expect(texts).toMatch(/You saved\ncompared with keeping each chat's first model\n\d+ % less\nWithout router\n\$\d+\.\d\d\nWith router\n\$\d+\.\d\d/)
   expect(texts.indexOf('You saved')).toBeLessThan(texts.indexOf('This chat'))
   expect(texts.indexOf('This chat')).toBeLessThan(texts.indexOf('Model & effort'))
   expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/You saved: \$\d+\.\d\d/)
@@ -298,7 +298,7 @@ test('Details, always open: the strict balance, how often it was right, where th
       const hero = await ui.find({ key: 'details-hero' })
       expect(hero.props.backgroundColor).toBe('#8b7cf60f')
       expect(hero.props.borderColor).toBe('#8b7cf638')
-      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nDecisions right · 95 %: 21–100 %\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
+      expect(texts).toMatch(/Router balance \(rough\)\nvs\. your own picks, classifier included\nUp to \+\$2\.93 if no follow-up was re-work\nDecisions right · 95 %: 21–100 %\nWhere tasks went\n1 task\nhaiku\n1 task · \$1\.00\/task\n100 %/)
       const balance = JSON.stringify(await ui.find({ key: 'balance' }))
       expect(balance).toMatch(/Router balance \(rough\) \+\$2\.93/)
       expect(balance).toMatch(/fill=\\"#1fa37a\\"[^<]*>\+\$2\.93</)
@@ -355,7 +355,7 @@ test('a press on a value saves the option the way /config does, and the pane sho
 test('every setting says which value is recommended, on both surfaces', async ($: any, on: any) => {
   engine(on)
   await start($)
-  const want = [/suggests a better model[^\n]*Recommended: ask\./, /offers to switch[^\n]*Recommended: ask\./, /thinking effort[^\n]*Recommended: ask\./, /cheaper subagent[^\n]*Recommended: ask\./, /fresh session[^\n]*Recommended: 50%\./, /short note[^\n]*Recommended: on\./, /decides[^\n]*Recommended: haiku\./, /measured against[^\n]*Recommended: history\./, /by itself[^\n]*Recommended: off\./, /cheapest model[^]*?Recommended: on\./]
+  const want = [/suggests a better model[^\n]*Recommended: ask\./, /offers to switch[^\n]*Recommended: ask\./, /thinking effort[^\n]*Recommended: ask\./, /cheaper subagent[^\n]*Recommended: ask\./, /fresh session[^\n]*Recommended: 50%\./, /short note[^\n]*Recommended: on\./, /decides[^\n]*Recommended: haiku\./, /measured against[^\n]*Recommended: first model\./, /dollars at list price[^\n]*Recommended: % of weekly limit\./, /by itself[^\n]*Recommended: off\./, /cheapest model[^]*?Recommended: on\./]
   for (const surface of ['desktop', 'terminal']) {
     const ui = await $.ui.mount({ ...PANE, surface })
     const texts = await textsOf(ui)
@@ -404,11 +404,14 @@ test('More settings, always open: the classifier, what the saving is compared wi
     { key: 'prompt-router.compareWith', value: 'haiku-medium' },
     { key: 'prompt-router.openPane', value: 'on' },
   ])
-  await ui.select({ key: 'pick-compareEffort', value: 'high' })
-  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'haiku-high' })
-  await ui.select({ key: 'pick-compareModel', value: 'first' })
-  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'first' })
   await ui.unmount()
+  // The default is the first model, which has no effort: the effort picker shows once a model is picked.
+  const picked = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await picked.select({ key: 'pick-compareEffort', value: 'high' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'haiku-high' })
+  await picked.select({ key: 'pick-compareModel', value: 'first' })
+  expect(seen.sets.at(-1)).toEqual({ key: 'prompt-router.compareWith', value: 'first' })
+  await picked.unmount()
   const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await again.find({ type: 'Select', key: 'pick-compareEffort' })).toBeUndefined()
   await again.select({ key: 'pick-compareModel', value: 'opus' })
@@ -820,3 +823,37 @@ test('in the terminal the ticker repaints only the countdown Raster, no pane red
   await ui.unmount()
 })
 
+
+test('chartTick labels every point while they fit, else every few and the last', () => {
+  const keys = Array.from({ length: 12 }, (_, i) => `2026-11-${String(i + 1).padStart(2, '0')}`)
+  expect(keys.map((k, i) => chartTick('day', k, i, 12, 16))).toEqual(keys.map((_, i) => String(i + 1)))
+  expect(keys.map((k, i) => chartTick('day', k, i, 12, 7))).toEqual(['1', '', '3', '', '5', '', '7', '', '9', '', '', '12'])
+})
+
+test('You saved shows a share of the weekly limit once it is measured; hovering it shows the dollars', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const weekTurn = (ts: number, pct: number) => JSON.stringify({ ...JSON.parse(TURN(ts)), week: { pct, resets: 'r1' } })
+  const seen = engine(on, { now, log: [weekTurn(now - 3 * HOUR, 10), weekTurn(now - 2 * HOUR, 12), weekTurn(now - HOUR, 14)].join('\n') })
+  await start($)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await textsOf(ui)).toMatch(/You saved\nof your weekly limit, compared with keeping each chat's first model\n\$\d+\.\d\d/)
+  expect(JSON.stringify(await ui.findAll({ type: 'Svg' }))).toMatch(/You saved: [\d.]+ %/)
+  // The dollars wait hidden beside the share and show while it is hovered (the test engine keeps no hover prop); no button.
+  expect(await ui.find({ type: 'Button', key: 'savings-in' })).toBeUndefined()
+  const usdBox = await ui.find({ key: 'saved-usd' })
+  expect(usdBox.props.display).toBe('none')
+  expect(JSON.stringify(usdBox)).toMatch(/\$\d+\.\d\d at list price/)
+  expect(seen.sets).toEqual([])
+  await ui.unmount()
+})
+
+test('without weekly limit readings the saving stays in dollars, with nothing to hover', async ($: any, on: any) => {
+  const now = 20 * 86_400_000 + 12 * HOUR
+  const plain = engine(on, { now, log: TURN(now - HOUR) })
+  await start($)
+  const ui2 = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui2.find({ key: 'saved-usd' })).toBeUndefined()
+  expect(JSON.stringify(await ui2.findAll({ type: 'Svg' }))).toMatch(/You saved: \$\d+\.\d\d/)
+  expect(plain.sets).toEqual([])
+  await ui2.unmount()
+})

@@ -22,8 +22,8 @@ export type Where = 'here' | 'subagent' | 'session'
 const COMPARE_MODELS = ['opus', 'haiku', 'sonnet', 'fable'] as const
 const COMPARE_LEVELS = ['medium', 'low', 'high', 'xhigh', 'max'] as const
 type CompareValue = `${(typeof COMPARE_MODELS)[number]}-${(typeof COMPARE_LEVELS)[number]}` | 'first' | 'history'
-// opus-medium first (the default): Anthropic's pick for everyday work.
-const COMPARE_VALUES = [...COMPARE_MODELS.flatMap(m => COMPARE_LEVELS.map(l => `${m}-${l}` as CompareValue)), 'first' as const, 'history' as const] as readonly CompareValue[]
+// first (the default): the chat's own first model, so only the router's switches count as savings.
+const COMPARE_VALUES = ['first' as const, ...COMPARE_MODELS.flatMap(m => COMPARE_LEVELS.map(l => `${m}-${l}` as CompareValue)), 'history' as const] as readonly CompareValue[]
 
 // compareWith as a model and effort; null for `first` and `history` (history: core/stats.ts historyCompare).
 export function compareTarget(v: string): { model: Model; effort: Level } | null {
@@ -53,6 +53,8 @@ export const SWITCHES = {
   // What the savings are measured against: a model at an effort for every chat, or `first`, the
   // chat's first model (the main chat's for a subagent). Read from the tokens, so it reprices old data.
   compareWith: COMPARE_VALUES,
+  // How the pane shows the saving: a share of the weekly limit (once it is measured) or dollars.
+  savingsIn: ['limit', 'money'],
 } as const
 
 export type Switch = keyof typeof SWITCHES
@@ -134,7 +136,7 @@ const QUICK_WORDS = new Set(
   (
     'yes yeah yep yup ya no nope nah ok okay okey k kk sure fine good great perfect cool nice right correct exactly agreed lgtm ' +
     'thanks thank you thx ty please pls go on ahead continue proceed do it sounds looks option ' +
-    'ano jo jj ne nee dobre jasne jasny diky dekuju dekuji pokracuj pokracujte delej udelej to klidne souhlas super parada presne moznost varianta ' +
+    'ano jo jj ne nee dobre jasne jasny diky dekuju dekuji pokracuj pokracujte delej udelej to klidne souhlas super parada presne moznost varianta tak takze funguje fajn skvele bezva vyborne ' +
     'si vale dale hazlo gracias claro adelante sigue continua perfecto bien de acuerdo opcion ' +
     'ja nein danke weiter mach es genau gut bitte variante oui non merci vas'
   ).split(' '),
@@ -174,7 +176,7 @@ export type Chat = { first: string; recent: string[]; reply: string; model: stri
 
 // The classifier prompt. {{name}} slots are filled per prompt; the test tool can swap the whole
 // template for a file, so the rules can be tuned without reloading the mod.
-export const TEMPLATE = `You route one prompt in a Claude Code chat about {{project}}. Decide where it should run, on which model and at which effort. Prompts can be in any language.
+export const TEMPLATE = `You route one prompt in {{host_chat}} about {{project}}. Decide where it should run, on which model and at which effort. Prompts can be in any language.
 
 WHERE
 - keep: the prompt only approves, answers a question or says to go on (yes, ok, go on, do it, option 2, or the same in another language). Answer keep for all three fields.
@@ -217,7 +219,7 @@ Recent prompts:
 {{recent}}
 </recent>
 
-Claude's last reply (start):
+{{host_reply}} (start):
 <reply>{{reply}}</reply>
 
 The new prompt:
@@ -242,11 +244,15 @@ export const MODEL_HEAD_HERE = 'MODEL (the model the task needs, also for here: 
 export const FABLE_RULE = `
 - fable: rare, 2.5 times the price of opus; only where opus at high effort is likely not enough: a new architecture across several layers (shared code plus iOS and Android, or backend plus clients) with no clear solution yet; a hard concurrency or race problem, or a security hole whose reach across several services is still unknown; a bug that two or more fixes already failed to solve; a deep analysis of a whole large system (many services) where a wrong conclusion costs a lot of money or data. Not fable (opus instead): an everyday feature, however big or important; a code review of a given module, also of payments or security code; payments, auth or a migration with a known approach or an official guide; anything mechanical; a question about architecture. A single failed fix is not two.`
 
-export function pickPrompt(text: string, c: Chat, template = TEMPLATE) {
+// host names the platform in the two places the classifier sees it; the default is Claude Code's wording.
+export const HOST = { chat: 'a Claude Code chat', reply: "Claude's last reply" }
+export function pickPrompt(text: string, c: Chat, template = TEMPLATE, host = HOST) {
   const conf = c.conf
   const lang = conf.language && conf.language.toLowerCase() !== 'auto' ? conf.language : 'the language of the new prompt'
   const share = longShare(c, conf)
   const slots: Record<string, string> = {
+    host_chat: host.chat,
+    host_reply: host.reply,
     project: conf.project.trim() || 'a software project',
     model_head: c.isFirst
       ? conf.firstChatDetection === 'off' ? MODEL_HEAD : MODEL_HEAD_FIRST

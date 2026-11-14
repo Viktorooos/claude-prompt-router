@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 import { cost } from '../core/prices.ts'
 import { promptKey } from '../core/router.ts'
 import type { Usage } from '../core/prices.ts'
-import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, statsHtml, statsRows, statsText, summarize, usd, wilson } from '../core/stats.ts'
+import { FAILURE_WEIGHTS, MIN_PCT, glance, limitRate, withTranscripts, REFERENCE, ROUGH_BELOW, balance, balanceLabel, balanceText, balances, byDay, chartFor, compareLabel, episodes, failureOf, historyCompare, historyMix, needsRotate, parseLog, Pending, rotate, savingLabel, signed, statsHtml, statsRows, statsText, summarize, switchedModel, usd, wilson } from '../core/stats.ts'
 import type { Accept, Decision, Entry, Turn } from '../core/stats.ts'
 
 // Dollars as floats: equal to 9 decimal places (the runner has no toBeCloseTo).
@@ -437,7 +437,7 @@ test('episodes: older records without follows count each prompt as its own task,
 test('re-work also counts a correction, a switch up by hand and a cut-off answer, each by its weight', () => {
   const routed = (ts: number, key: string) => decision({ ts, key, from: { model: 'opus', effort: 'medium' }, to: cheap })
   const records: Entry[] = [
-    // Corrected: the next prompt says the answer was wrong.
+    // Read as a fix: the classifier took the next prompt for a correction.
     routed(NOW - 10 * HOUR, 'fix the parser'),
     turn('haiku', 'opus', { ts: NOW - 10 * HOUR + MIN }),
     decision({ ts: NOW - 10 * HOUR + 2 * MIN, key: 'still broken', follows: 'corrects' }),
@@ -456,7 +456,7 @@ test('re-work also counts a correction, a switch up by hand and a cut-off answer
   ]
   const total = summarize(records, NOW).total
   expect(total.routed).toBe(4)
-  close(total.rework, FAILURE_WEIGHTS.corrected + FAILURE_WEIGHTS.switched + FAILURE_WEIGHTS.interrupted)
+  close(total.rework, FAILURE_WEIGHTS.classifierFix + FAILURE_WEIGHTS.switched + FAILURE_WEIGHTS.interrupted)
   close(total.accuracyPct, (1 - total.rework / 4) * 100)
 })
 
@@ -479,7 +479,7 @@ test('failureOf: the strongest sign in the task wins, with every reason listed',
   ])
   expect(eps.length).toBe(1)
   const f = failureOf(eps[0]!)
-  expect(f.reasons.sort()).toEqual(['corrected', 'interrupted', 'repeated', 'switched'])
+  expect(f.reasons.sort()).toEqual(['classifierFix', 'interrupted', 'repeated', 'switched'])
   expect(f.weight).toBe(1)
 })
 
@@ -496,7 +496,8 @@ test('failureOf: a task that went on without trouble has no failure; a lone corr
     turn('haiku', 'opus', { ts: NOW - 59 * MIN }),
     decision({ ts: NOW - 55 * MIN, key: 'the button is not visible', follows: 'corrects' }),
   ])
-  expect(failureOf(fixed!)).toEqual({ weight: FAILURE_WEIGHTS.corrected, reasons: ['corrected'] })
+  expect(failureOf(fixed!)).toEqual({ weight: FAILURE_WEIGHTS.classifierFix, reasons: ['classifierFix'] })
+  expect(FAILURE_WEIGHTS.classifierFix).toBeLessThan(FAILURE_WEIGHTS.repeated)
   expect(FAILURE_WEIGHTS.corrected).toBeLessThan(FAILURE_WEIGHTS.repeated)
   // A switch up before the task's first answer is no sign against the task.
   const [first] = episodes([turn('opus', 'opus', { ts: NOW - 59 * MIN, manual: true }), decision({ ts: NOW - 58 * MIN, key: 'x', follows: 'continues' })])
@@ -526,20 +527,24 @@ test('balance: routed tasks priced by the token re-pricing, with parts and accur
   const down = { to: { model: 'haiku', effort: 'low' as const } }
   const records = [
     ...task('a', down, [{ usd: 1, durationMs: 60 * SEC }]),
-    ...task('b', down, [{ usd: 1, durationMs: 60 * SEC }], [{ d: { follows: 'corrects' }, turns: [{ usd: 0.5, durationMs: 30 * SEC }] }]),
+    ...task('b', down, [{ usd: 1, durationMs: 60 * SEC }], [{ d: { follows: 'corrects', redo: true }, turns: [{ usd: 0.5, durationMs: 30 * SEC }] }]),
     ...task('c', { from: { model: 'sonnet', effort: 'medium' }, to: { model: 'opus', effort: 'medium' } }, [{ model: 'opus', baseline: 'sonnet' }]),
   ]
   const b = balance(records)
   expect(b.routed).toBe(3)
   // Each haiku turn would have cost the gap to Opus more. a: one turn. b: two turns, its correction
-  // (0.7 × 0.5 = 0.35) is re-work. c: sonnet − opus, an escalation. Four prompts' classifier: 0.04.
+  // in the person's words (0.7 × 0.5 = 0.35) is re-work. c: sonnet − opus, an escalation. Four prompts' classifier: 0.04.
   const gap = cost(U, 'opus')! - cost(U, 'haiku')!
   const esc = cost(U, 'sonnet')! - cost(U, 'opus')!
-  close(b.parts.cheaper, 3 * gap + 0.35)
+  // The corrected follow-up would not have run without the router: its Opus price (0.5 + gap) comes
+  // off by the weight; the balance without re-work keeps it.
+  const spared = 0.7 * (0.5 + gap)
+  close(b.parts.cheaper, 3 * gap + 0.35 - spared)
   close(b.parts.rework, -0.35)
   close(b.parts.escalation, esc)
   close(b.parts.classifier, -0.04)
-  close(b.usd, 3 * gap + esc - 0.04)
+  close(b.usd, 3 * gap + esc - 0.04 - spared)
+  close(b.usdNoRework, 3 * gap + esc - 0.04)
   close(b.accuracy!.pct, (1 - 0.7 / 3) * 100)
   const w = wilson(3 - 0.7, 3)
   close(b.accuracy!.low, w.low * 100)
@@ -626,7 +631,7 @@ test('compareWith reprices old turns on the chosen model and effort, whatever ba
 })
 
 test('compareWith on a cheaper model: a turn on a stronger one is extra cost; a turn with no effort keeps its output', () => {
-  const sub = turn('opus', 'opus', { agentId: 'a1' })
+  const sub = turn('opus', 'opus', { agentId: 'a1', routedAgent: true })
   const s = summarize([sub], NOW, { model: 'sonnet', effort: 'high' }).today
   close(s.withoutUsd, cost(U, 'sonnet')!)
   close(s.extraUsd, cost(U, 'opus')! - cost(U, 'sonnet')!)
@@ -813,4 +818,140 @@ test('limitRate: list price between weekly readings per point the fill moved, re
   // A classifier's price counts too.
   const d = decision({ ts: NOW - DAY + 3, classifier: { model: 'haiku', usage: U, usd: 1 } })
   expect(limitRate([t(1, 0, { pct: 0, resets: 'A' }), d, t(4, 3, { pct: 2, resets: 'A' })])).toBe(2)
+})
+
+// Accounting fixes: neutral subagents, router-started sessions, classifier-only corrections.
+test('balance: a subagent the router did not start (its own model as baseline) stays out of the task cost and re-work', () => {
+  const down = { to: { model: 'haiku', effort: 'low' as const } }
+  const fixed = { agentId: 'lint', model: 'sonnet', baseline: 'sonnet' }
+  const records = task('a', down, [{ usd: 1 }, { ...fixed, usd: 2 }], [{ d: { redo: true, follows: 'continues' }, turns: [{ usd: 0.5 }, { ...fixed, usd: 3 }] }])
+  const b = balance(records)
+  expect(b.routed).toBe(1)
+  close(b.parts.rework, -FAILURE_WEIGHTS.corrected * 0.5)
+  close(b.byModel[0]!.usdPerTask, 1 + 0.5 + 0.02)
+})
+
+test('balance: a subagent the router started on the main model still counts in the task', () => {
+  const records = task('a', { where: 'subagent', to: { model: 'opus', effort: 'low' } }, [{ agentId: 'r', model: 'opus', baseline: 'opus', routedAgent: true, usd: 1 }])
+  close(balance(records).byModel[0]!.usdPerTask, 1.01)
+})
+
+test('failureOf: a correction only the classifier read is classifierFix and weighs less than one in the person\'s words', () => {
+  const [e] = episodes([decision({ ts: NOW - HOUR, key: 'a', to: cheap }), decision({ ts: NOW - HOUR + 1, key: 'b', follows: 'corrects' })])
+  expect(failureOf(e!)).toEqual({ weight: FAILURE_WEIGHTS.classifierFix, reasons: ['classifierFix'] })
+  expect(FAILURE_WEIGHTS.classifierFix).toBeLessThan(FAILURE_WEIGHTS.corrected)
+  const [both] = episodes([decision({ ts: NOW - HOUR, key: 'a', to: cheap }), decision({ ts: NOW - HOUR + 1, key: 'b', follows: 'corrects', redo: true })])
+  expect(failureOf(both!)).toEqual({ weight: FAILURE_WEIGHTS.corrected, reasons: ['corrected'] })
+})
+
+test('balance: a classifier-only correction re-works just the answer to that prompt; one in the person\'s words the rest of the task', () => {
+  const down = { to: { model: 'haiku', effort: 'low' as const } }
+  const guess = balance(task('a', down, [{ usd: 1 }], [{ d: { follows: 'corrects' }, turns: [{ usd: 0.5 }] }, { d: { follows: 'continues' }, turns: [{ usd: 2 }] }]))
+  close(guess.parts.rework, -FAILURE_WEIGHTS.classifierFix * 0.5)
+  close(guess.accuracy!.pct, (1 - FAILURE_WEIGHTS.classifierFix) * 100)
+  const said = balance(task('a', down, [{ usd: 1 }], [{ d: { redo: true, follows: 'continues' }, turns: [{ usd: 0.5 }] }, { d: { follows: 'continues' }, turns: [{ usd: 2 }] }]))
+  close(said.parts.rework, -FAILURE_WEIGHTS.corrected * 2.5)
+})
+
+test('balance: a session the router started counts in the task that started it, against the parent\'s baseline', () => {
+  const t0 = NOW - DAY
+  const records: Entry[] = [
+    decision({ chat: 'p', ts: t0, key: 'export', follows: 'new', where: 'session', to: { model: 'haiku', effort: 'low' }, classifier: CLS }),
+    turn('opus', 'opus', { chat: 'p', ts: t0 + 1, usd: 0.1 }),
+    turn('haiku', 'opus', { chat: 'k', ts: t0 + 10, usd: 1, task: { chat: 'p', decision: t0 } }),
+  ]
+  const b = balance(records)
+  expect(b.routed).toBe(1)
+  const gap = cost(U, 'opus')! - cost(U, 'haiku')!
+  close(b.parts.cheaper, gap)
+  close(b.byModel[0]!.usdPerTask, 0.1 + 1 + 0.01)
+})
+
+test('balance: re-work comes off the balance (those follow-ups would not have run without the router); the balance without it is the upper bound', () => {
+  const down = { to: { model: 'haiku', effort: 'low' as const } }
+  const b = balance(task('a', down, [{ usd: 1 }], [{ d: { redo: true, follows: 'continues' }, turns: [{ usd: 0.5 }] }]))
+  const gap = cost(U, 'opus')! - cost(U, 'haiku')!
+  const f = FAILURE_WEIGHTS.corrected
+  // Without the router: both turns on Opus (1 + gap, 0.5 + gap), less the share of the follow-up a
+  // good answer would have spared. With it: 1.5. Two prompts' classifier: 0.02.
+  close(b.usdNoRework, 2 * gap - 0.02)
+  close(b.usd, 2 * gap - f * (0.5 + gap) - 0.02)
+  close(b.parts.rework, -f * 0.5)
+  close(b.parts.cheaper + b.parts.escalation + b.parts.rework + b.parts.classifier, b.usd)
+  const t = balanceText(b)
+  expect(t).toContain(`Without re-work ${signed(b.usdNoRework)} (upper bound)`)
+  expect(statsHtml(summarize(task('a', down, [{ usd: 1 }]), NOW), [], null, b)).toContain(`without re-work ${signed(b.usdNoRework)} (upper bound)`)
+})
+
+test('balance: sessions the router started with no linked turns (older records) are counted, so the pane can say they are priced on their own model', () => {
+  const t0 = NOW - DAY
+  const session = (chat: string) => decision({ chat, ts: t0, key: chat, follows: 'new', where: 'session', to: { model: 'haiku', effort: 'low' } })
+  const records: Entry[] = [
+    session('old'),
+    session('new'),
+    turn('haiku', 'opus', { chat: 'k', ts: t0 + 10, task: { chat: 'new', decision: t0 } }),
+  ]
+  const b = balance(records)
+  expect(b.unlinkedSessions).toBe(1)
+  expect(balanceText(b)).toContain('1 session the router started is priced on its own first model (logged before sessions were linked)')
+  expect(balance(task('a', { to: cheap }, [{ usd: 1 }])).unlinkedSessions).toBe(0)
+})
+
+test('balance: a started session whose own first prompt was routed too is not a second task', () => {
+  const t0 = NOW - DAY
+  const records: Entry[] = [
+    decision({ chat: 'p', ts: t0, key: 'export', follows: 'new', where: 'session', to: { model: 'haiku', effort: 'low' } }),
+    decision({ chat: 'k', ts: t0 + 5, key: 'brief', follows: 'new', to: { model: 'haiku', effort: 'low' } }),
+    turn('haiku', 'opus', { chat: 'k', ts: t0 + 10, usd: 1, task: { chat: 'p', decision: t0 } }),
+  ]
+  const b = balance(records)
+  expect(b.routed).toBe(1)
+  close(b.byModel[0]!.usdPerTask, 1)
+})
+
+test('summarize splits this and last calendar month', () => {
+  const lastMonth = new Date(2026, 8, 20, 10, 0).getTime()
+  const r = summarize([turn('haiku', 'opus'), turn('haiku', 'opus', { ts: lastMonth })], NOW)
+  const one = cost(U, 'opus')! - cost(U, 'haiku')!
+  close(r.month.netUsd, one)
+  close(r.lastMonth.netUsd, one)
+  close(r.total.netUsd, 2 * one)
+})
+
+test('chartFor gives days for the months and weeks or months for a long total', () => {
+  const recs = [turn('haiku', 'opus'), turn('haiku', 'opus', { ts: new Date(2026, 8, 20, 10, 0).getTime() })]
+  const month = chartFor(recs, NOW, 'month')
+  expect([month.unit, month.points.length, month.points[0].day]).toEqual(['day', 31, '2026-10-01'])
+  const last = chartFor(recs, NOW, 'lastMonth')
+  expect([last.unit, last.points.length, last.points.at(-1)!.day]).toEqual(['day', 30, '2026-09-30'])
+  const weeks = chartFor(recs, NOW, 'total')
+  expect(weeks.unit).toBe('week')
+  expect(weeks.points.length).toBeLessThanOrEqual(31)
+  expect(weeks.points[1].day).toBe('2026-09-21')
+  const one = cost(U, 'opus')! - cost(U, 'haiku')!
+  close(weeks.points.reduce((a, p) => a + p.netUsd, 0), 2 * one)
+  const months = chartFor([...recs, turn('haiku', 'opus', { ts: new Date(2025, 0, 5).getTime() })], NOW, 'total')
+  expect([months.unit, months.points.length, months.points[0].day]).toEqual(['month', 22, '2025-01-01'])
+  expect(chartFor(recs, NOW, 'today').points).toEqual([])
+})
+
+test('a subagent on its own model saves nothing against compareWith', () => {
+  const opusMedium = { model: 'opus', effort: 'medium' as const }
+  const s = summarize([turn('haiku', 'haiku', { agentId: 'explore' }), turn('sonnet', 'sonnet', { agentId: 'tests' })], NOW, opusMedium).today
+  close(s.actualUsd, cost(U, 'haiku')! + cost(U, 'sonnet')!)
+  close(s.withoutUsd, s.actualUsd)
+  expect(s.savedUsd).toBe(0)
+  // A subagent the router started is still priced against compareWith.
+  const r = summarize([turn('haiku', 'haiku', { agentId: 'r', routedAgent: true })], NOW, opusMedium).today
+  close(r.savedUsd, cost(U, 'opus')! - cost(U, 'haiku')!)
+})
+
+test('a switch back to the baseline model counts as a switch', () => {
+  expect(switchedModel('haiku', 'opus')).toBe(true)
+  expect(switchedModel('opus', 'haiku')).toBe(true)
+  expect(switchedModel('opus', 'opus')).toBe(false)
+  expect(switchedModel('', 'opus')).toBe(false)
+  // Back on the baseline, the cache write would have been a read without the router.
+  const s = summarize([turn('opus', 'opus', { switched: true })], NOW).today
+  close(s.extraUsd, cost(U, 'opus')! - cost({ ...U, cacheRead: U.cacheRead + U.cacheWrite, cacheWrite: 0 }, 'opus')!)
 })
