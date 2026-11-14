@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { TEMPLATE, claudeDir, compactWindow, promptKey, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig, SWITCHES } from '../core/router.ts'
+import { pickPrompt, TEMPLATE, claudeDir, compactWindow, promptKey, quickReply, describeOptions, isRedo, optionSources, parsePick, preferSession, toConfig, SWITCHES } from '../core/router.ts'
 
 // Canned classifier replies; nothing here calls a real model.
 const PICK = {
@@ -1676,4 +1676,12 @@ test('handoff: only the started session\'s first answer belongs to the parent ta
   expect((await childTurn($, seen, opts, 'claude-sonnet-5-5')).task).toBeTruthy()
   await $.turn.complete(TURN_DONE)
   expect(statsLines(seen).filter((r: any) => r.kind === 'turn').at(-1).task).toBeUndefined()
+})
+
+test('pickPrompt: host swaps only the chat and reply phrases', async () => {
+  const chat: any = { first: 'f', recent: [], reply: 'r', model: 'opus', now: 'medium', tokens: 5000, conf: toConfig({}), models: ['opus', 'sonnet', 'haiku'] }
+  const a = pickPrompt('hello', chat)
+  expect(a).toContain('in a Claude Code chat about')
+  const b = pickPrompt('hello', chat, TEMPLATE, { chat: 'an OpenCode session', reply: "The assistant's last reply" })
+  expect(b).toBe(a.replace('a Claude Code chat', 'an OpenCode session').replace("Claude's last reply", "The assistant's last reply"))
 })

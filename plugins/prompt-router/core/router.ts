@@ -176,7 +176,7 @@ export type Chat = { first: string; recent: string[]; reply: string; model: stri
 
 // The classifier prompt. {{name}} slots are filled per prompt; the test tool can swap the whole
 // template for a file, so the rules can be tuned without reloading the mod.
-export const TEMPLATE = `You route one prompt in a Claude Code chat about {{project}}. Decide where it should run, on which model and at which effort. Prompts can be in any language.
+export const TEMPLATE = `You route one prompt in {{host_chat}} about {{project}}. Decide where it should run, on which model and at which effort. Prompts can be in any language.
 
 WHERE
 - keep: the prompt only approves, answers a question or says to go on (yes, ok, go on, do it, option 2, or the same in another language). Answer keep for all three fields.
@@ -219,7 +219,7 @@ Recent prompts:
 {{recent}}
 </recent>
 
-Claude's last reply (start):
+{{host_reply}} (start):
 <reply>{{reply}}</reply>
 
 The new prompt:
@@ -244,11 +244,15 @@ export const MODEL_HEAD_HERE = 'MODEL (the model the task needs, also for here: 
 export const FABLE_RULE = `
 - fable: rare, 2.5 times the price of opus; only where opus at high effort is likely not enough: a new architecture across several layers (shared code plus iOS and Android, or backend plus clients) with no clear solution yet; a hard concurrency or race problem, or a security hole whose reach across several services is still unknown; a bug that two or more fixes already failed to solve; a deep analysis of a whole large system (many services) where a wrong conclusion costs a lot of money or data. Not fable (opus instead): an everyday feature, however big or important; a code review of a given module, also of payments or security code; payments, auth or a migration with a known approach or an official guide; anything mechanical; a question about architecture. A single failed fix is not two.`
 
-export function pickPrompt(text: string, c: Chat, template = TEMPLATE) {
+// host names the platform in the two places the classifier sees it; the default is Claude Code's wording.
+export const HOST = { chat: 'a Claude Code chat', reply: "Claude's last reply" }
+export function pickPrompt(text: string, c: Chat, template = TEMPLATE, host = HOST) {
   const conf = c.conf
   const lang = conf.language && conf.language.toLowerCase() !== 'auto' ? conf.language : 'the language of the new prompt'
   const share = longShare(c, conf)
   const slots: Record<string, string> = {
+    host_chat: host.chat,
+    host_reply: host.reply,
     project: conf.project.trim() || 'a software project',
     model_head: c.isFirst
       ? conf.firstChatDetection === 'off' ? MODEL_HEAD : MODEL_HEAD_FIRST
