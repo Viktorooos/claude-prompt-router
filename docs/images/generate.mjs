@@ -69,7 +69,7 @@ ${body}
 </g>
 </svg>
 `
-  return { T, C, t, rect, card, soft, tile, bar, chip, check, cross, svg, dark }
+  return { T, C, t, rect, card, soft, tile, bar, chip, check, cross, svg }
 }
 
 // Smooth path through points (Catmull-Rom to Bezier).
