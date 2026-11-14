@@ -105,9 +105,9 @@ Média do PR: jen textové výstupy.
 
 ## Feature F3 `readme`: nové prémiové README
 Feature je hotová, když:
-- `README.md` je přepsané celé a působí prémiově (jednotný vizuální styl, vlastní SVG grafika, žádné rozbité odkazy),
-- všechny obrázky vznikají skriptem `docs/images/generate.mjs` (opakovatelně),
-- fakta v README sedí s kódem.
+- [x] `README.md` je přepsané celé a působí prémiově (jednotný vizuální styl, vlastní SVG grafika, žádné rozbité odkazy), ověřeno: kontrola odkazů, xmllint, SVG < 300 KB, 15/15 voleb; styl jen strukturálně
+- [x] všechny obrázky vznikají skriptem `docs/images/generate.mjs` (opakovatelně), ověřeno: druhý běh, git status čistý
+- [x] fakta v README sedí s kódem, ověřeno proti plugin.json, prices.ts, router.ts, install.ts, stats.ts; grafika opravena na `first` (56da00a)
 
 Média do PR: seznam vygenerovaných obrázků, výstupy kontrol a `git diff --stat`.
 
@@ -186,6 +186,8 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 - F2.2: větve `declined`/`isRouterQuestion` golden nekryje; pokryto unit testy ve `flow.test.ts` a `adapters/opencode/test/stats.test.ts` (uzavřeno ověřením jadra).
 - F1.1: `claude -p --plugin-dir plugins/prompt-router "/router"` = ano (exit 0), ale mohla se načíst nainstalovaná kopie stejného jména.
 
+- F3 (ověření readme): vzorová čísla a štítky v `docs/images/generate.mjs` jsou psané ručně, můžou se rozejít s kódem.
+
 ### Před spuštěním (uživatel)
 1. Hotovo: rozpracované změny commitnuté jako `5663ac3`, plán commitnutý.
 2. Novou session otevřít ve složce `~/.claude/mods-src/prompt-router` a spustit `/proved docs/plans/shared-flow.md`. Rozpis schválit (jediný dotaz) a nechat běžet. Povolit scratchpad, `~/.claude/pr-media/` a `~/.claude/scripts/cleanup-worktrees.sh`.
@@ -198,13 +200,13 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 | jadro | F2.2 | claude/shared-flow-jadro-flow-828c4f (d38a91a) | jadro-flow | 36c9c7d | Opus/high | mergnuto (066e129), kritéria 2/2 | worktree smazán |
 | jadro | F2.3 | claude/shared-flow-jadro-opencode-00a840 (32d6e03) | jadro-opencode | 066e129 | Opus/high | mergnuto (28d8564), kritéria 5/5 ano + 1 odloženo (dluh) | worktree smazán |
 | readme | F3.1 | claude/shared-flow-readme-grafika-498adb (6b58182) | readme-grafika | 141ca73 | Opus/medium | mergnuto (dbad4d1), kritéria 3/3 | worktree smazán |
-| readme | F3.2 | claude/shared-flow-readme-text-5a416c (ed1f221) | readme-text | dbad4d1 | Opus/medium | mergnuto (61581c0), kritéria 5/5 | worktree ponechán: běží v něm sleep, uklidí závěrečný úklid |
+| readme | F3.2 | claude/shared-flow-readme-text-5a416c (ed1f221) | readme-text | dbad4d1 | Opus/medium | mergnuto (61581c0), kritéria 5/5 | worktree smazán |
 
 | Feature | Větev | Konec SHA | Stav | Kritéria | Média | PR |
 | --- | --- | --- | --- | --- | --- | --- |
 | golden | shared-flow-golden | 36c9c7d | ověřeno (overeni-golden, claude/shared-flow-golden-overeni-f389f2, oprava f51c20f; worktree spark-hover-7cb7a4 ponechán: běží v něm sleep, uklidí závěrečný úklid) | 4/4 | ~/.claude/pr-media/shared-flow/golden/ | ne |
 | jadro | shared-flow-jadro | 141ca73 | ověřeno (overeni-jadro, claude/shared-flow-jadro-overeni-778ec6, simplify 0ecfcc8; worktree smazán) | 3/3 | ~/.claude/pr-media/shared-flow/jadro/ | ne |
-| readme | shared-flow-readme | 61581c0 | ověřuje se (overeni-readme, základ 141ca73) | – | – | ne |
+| readme | shared-flow-readme | e3bb2ee | ověřeno (overeni-readme, claude/shared-flow-readme-overeni-b42b6c, opravy 56da00a 50625ac; worktree smazán) | 3/3 | ~/.claude/pr-media/shared-flow/readme/ | ne |
 
 ## Podklady: proč ne další nástroje (průzkum 2026-11-13)
 - Codex CLI a Factory: háček umí jen přidat kontext, model ani effort nepřepne. Router by jen radil „přepni `/model …`“ a za to přidal 1–3 s a tokeny klasifikátoru na každý prompt. Codex byl kvůli tomu pozastaven (`e743931`) a smazán (`ee191bd`), obnovit se dá z gitu.
@@ -212,3 +214,5 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 - Gemini CLI model přepnout umí (`BeforeModel` → `llm_request.model`), effort neověřen. Pro neplacené účty ho od 18. 6. 2026 nahrazuje Antigravity CLI s jiným formátem hooků. Kandidát na později.
 - Orchestrátory (Orca stablyai/orca, Claude Squad, Conductor, Crystal, Vibe Kanban) spouštějí skutečné CLI, není co portovat.
 - Duplicita CC ↔ OpenCode: `register.tsx` :370-406, :407-506, :579-616, :691-781, :1232-1290 vs. `adapters/opencode/prompt-router.ts` :412-505, `notes.ts`.
+
+Další: `overeni-celku` nad `shared-flow-readme` (e3bb2ee): jen plná sada (režim feature), pak `/recap` a závěrečný úklid `--prefix shared-flow`.
