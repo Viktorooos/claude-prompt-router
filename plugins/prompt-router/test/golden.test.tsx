@@ -199,16 +199,14 @@ const usage = (model: string) => ({ input_tokens: 1000, output_tokens: 2000, cac
 gtest('golden log: five turns', null, async ($: any, on: any) => {
   const replies = [reply('here', 'haiku', 'low'), reply('subagent', 'haiku', 'low'), reply('keep', 'keep', 'keep'), reply('here', 'opus', 'high'), reply('session', 'sonnet', 'medium')]
   let i = 0
-  let first = true
-  // After the first turn the chat has an answer, so later prompts are not first.
-  const seen = engine(on, () => replies[i] ?? '', { messages: () => (first ? [] : [{ role: 'user', text: 'what does this regex match', toolUses: [] }, { role: 'assistant', text: 'It matches dates.', toolUses: [] }]) })
+  // After the first turn (i >= 1) the chat has an answer, so later prompts are not first.
+  const seen = engine(on, () => replies[i] ?? '', { messages: () => (i === 0 ? [] : [{ role: 'user', text: 'what does this regex match', toolUses: [] }, { role: 'assistant', text: 'It matches dates.', toolUses: [] }]) })
   let turnModel = IDS.opus
   on('turn.complete', () => ({ text: '', usage: usage(turnModel) }))
   on('agent.spawn', () => ({ model: IDS.haiku, agentId: 'a1' }))
   await start($)
   await submit($, 'what does this regex match')
   await $.turn.complete({ ...TURN, turnId: 't1' })
-  first = false
   i = 1
   await submit($, 'run the whole test suite and tell me what fails')
   await $.agent.spawn({ tool_use_id: 'x', prompt: 'run tests', description: 'tests', subagentType: 'general-purpose', provider: { kind: 'builtin' } })
@@ -258,9 +256,9 @@ gtest('golden stats: /router stats text and the page it writes', null, async ($:
 })
 
 gtest('golden stats: statsHtml for fixed records', null, () => {
-  const report = summarize(RECORDS, NOW)
-  golden('stats/html', statsHtml(report, byDay(RECORDS, NOW, 30), null, balance(RECORDS)))
-  golden('stats/html-reference', statsHtml(summarize(RECORDS, NOW, { model: 'opus', effort: 'medium' }), byDay(RECORDS, NOW, 30, { model: 'opus', effort: 'medium' }), { model: 'opus', effort: 'medium' }, balance(RECORDS)))
+  const ref = { model: 'opus', effort: 'medium' }
+  golden('stats/html', statsHtml(summarize(RECORDS, NOW), byDay(RECORDS, NOW, 30), null, balance(RECORDS)))
+  golden('stats/html-reference', statsHtml(summarize(RECORDS, NOW, ref), byDay(RECORDS, NOW, 30, ref), ref, balance(RECORDS)))
 })
 
 // 6. Option names and defaults. The test cannot read plugin.json; the engine hands the mod the
