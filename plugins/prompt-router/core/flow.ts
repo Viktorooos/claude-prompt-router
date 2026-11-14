@@ -18,6 +18,12 @@ export type Names = {
   modelId: (m: Model) => string
   /** Shown to the person: "Low". */
   effortOf: (l: Level) => string
+  /** The host's own "call the switch tool …" (default: Claude Code's, below). */
+  switchCall?: (to: { model?: Model; effort?: Level }) => string
+  /** The host's own "new session = …" step (default: Claude Code's, below). */
+  sessionThen?: (p: Pick, inApp: boolean) => string
+  /** The host's own "call the … tool" for a subagent on p (default: the agent tool with model and effort). */
+  agentCall?: (p: Pick) => string
 }
 
 export const CLAUDE_CODE_NAMES: Names = {
@@ -45,6 +51,7 @@ export function finalizePick(parsed: Pick | null, c: { cfg: Config; tokens: numb
 
 // The chat's own model and effort change through the mod's tool.
 export function switchCall(n: Ctx, to: { model?: Model; effort?: Level }) {
+  if (n.names.switchCall) return n.names.switchCall(to)
   const tool = n.names.switchTool
   const args = JSON.stringify({ ...(to.model ? { model: to.model } : {}), ...(to.effort ? { effort: to.effort } : {}) })
   const slash = [to.model ? `/model ${to.model}` : '', to.effort ? `/effort ${to.effort}` : ''].filter(Boolean).join(' and ')
@@ -64,9 +71,12 @@ function askFirst(n: Ctx, options: string) {
 }
 
 const label = (n: Ctx, p: Pick) => `${n.names.modelName(p.model)} · ${p.effort}`
+const agentCall = (n: Ctx, p: Pick) => n.names.agentCall?.(p) ?? `call the ${n.names.agentTool} tool with model "${p.model}" and effort "${p.effort}"`
+const cap = (s: string) => s[0].toUpperCase() + s.slice(1)
 const because = (p: Pick) => (p.why ? `, because: ${p.why}` : '')
 
 export function sessionThen(n: Ctx, p: Pick, inApp: boolean) {
+  if (n.names.sessionThen) return n.names.sessionThen(p, inApp)
   if (inApp) return `new session = call ${n.names.sessionTool} right away with initiation "user_asked", context "fresh", model "${n.names.modelId(p.model)}", effort "${p.effort}", use_worktree true only when the task changes code, prompt = the task from this message, background = what it needs to know; here, say in one line where the work went.`
   return `new session = this client cannot start one, so give the user, in a bash code block, the command to run in a new terminal: claude --model ${n.names.modelId(p.model)} --effort ${p.effort} "<the task from this message, with what it needs to know, in one line>", then stop here.`
 }
@@ -78,7 +88,7 @@ export function askNote(n: Ctx, p: Pick, now: Level | '', midTurn = false, inApp
   const agent = `"Subagent (${l})"`
   const here = hereChoice(n, 'Do it here', p, now, !midTurn && p.effort !== now)
   const options = p.where === 'session' ? `${session}, ${agent}, ${here.options}` : `${agent}, ${here.options}`
-  return `${askFirst(n, options)} Prompt Router suggests running this prompt in ${where} (${l})${because(p)}. This chat currently runs at effort ${now || 'unknown'}. Then: ${sessionThen(n, p, inApp)} Subagent = call the ${n.names.agentTool} tool with model "${p.model}" and effort "${p.effort}" and have it return only a short result. ${here.then}`
+  return `${askFirst(n, options)} Prompt Router suggests running this prompt in ${where} (${l})${because(p)}. This chat currently runs at effort ${now || 'unknown'}. Then: ${sessionThen(n, p, inApp)} Subagent = ${agentCall(n, p)} and have it return only a short result. ${here.then}`
 }
 
 export function runAgentNote(n: Ctx, p: Pick, other?: Model) {
@@ -87,7 +97,7 @@ export function runAgentNote(n: Ctx, p: Pick, other?: Model) {
     ? `Prompt Router: this prompt fits ${l} better than this chat's ${n.names.modelName(other)}`
     : `Prompt Router: run this prompt in a subagent (${l})`
   const brief = other ? '; it does not see this chat, so give it everything it needs from this chat in its prompt,' : ''
-  return `${head}${because(p)}. ${RUN_SUBAGENT} Call the ${n.names.agentTool} tool with model "${p.model}" and effort "${p.effort}"${brief} and have it return only a short result.${other ? " Never switch this chat's model for it." : ''}`
+  return `${head}${because(p)}. ${RUN_SUBAGENT} ${cap(agentCall(n, p))}${brief} and have it return only a short result.${other ? " Never switch this chat's model for it." : ''}`
 }
 
 export function autoSessionNote(n: Ctx, p: Pick) {
@@ -97,7 +107,7 @@ export function autoSessionNote(n: Ctx, p: Pick) {
 export function otherNote(n: Ctx, p: Pick, from: Model, now: Level | '') {
   const l = label(n, p)
   const here = hereChoice(n, 'Stay here', p, now, p.effort !== now)
-  return `${askFirst(n, `"Subagent (${l})", ${here.options}`)} Prompt Router: this prompt belongs to this chat but fits ${l} better than this chat's ${n.names.modelName(from)}${because(p)}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. Then: Subagent = call the ${n.names.agentTool} tool with model "${p.model}" and effort "${p.effort}"; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. ${here.then}`
+  return `${askFirst(n, `"Subagent (${l})", ${here.options}`)} Prompt Router: this prompt belongs to this chat but fits ${l} better than this chat's ${n.names.modelName(from)}${because(p)}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. Then: Subagent = ${agentCall(n, p)}; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. ${here.then}`
 }
 
 export function otherAutoNote(n: Ctx, p: Pick, from: Model, now: Level | '') {
@@ -106,7 +116,7 @@ export function otherAutoNote(n: Ctx, p: Pick, from: Model, now: Level | '') {
   const stay = n.cfg.effortDetection === 'off' || p.effort === now ? 'handle the prompt normally.'
     : n.cfg.effortDetection === 'ask' ? `ask the user only about the effort with the ${n.names.askTool} tool (header "Prompt Router", the question "Effort?" with the reason in one sentence) with the options ${here.options}, in ${userLang(n.cfg)}; ${here.then}`
     : `${switchCall(n, { effort: p.effort })}, then handle the prompt.`
-  return `Prompt Router: this prompt belongs to this chat but fits ${l} better than this chat's ${n.names.modelName(from)}${because(p)}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. ${DECIDE_OTHER} Subagent = call the ${n.names.agentTool} tool with model "${p.model}" and effort "${p.effort}"; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. Here = ${stay} ${TOLD_OTHER}`
+  return `Prompt Router: this prompt belongs to this chat but fits ${l} better than this chat's ${n.names.modelName(from)}${because(p)}. This chat currently runs at effort ${now || 'unknown'}. Switching this chat's model would break its prompt cache, so never switch this chat's model for it. ${DECIDE_OTHER} Subagent = ${agentCall(n, p)}; it does not see this chat, so give it everything it needs from this chat in its prompt, and have it return only a short result. Here = ${stay} ${TOLD_OTHER}`
 }
 
 export function switchNote(n: Ctx, p: Pick, model: { from: Model } | null, effort: { now: Level | '' } | null) {

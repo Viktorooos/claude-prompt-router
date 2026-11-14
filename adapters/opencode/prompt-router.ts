@@ -29,11 +29,12 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 
 import type { Level } from '../../plugins/prompt-router/types/index.d.ts'
-import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, allowed, asLevel, clip, compareTarget, isRedo, preferSession, describeOptions, knownModel, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, quickReply, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
-import type { Chat, Config, Model, Pick } from '../../plugins/prompt-router/core/router.ts'
-import { SESSION_TOOL, STATS_TOOL, SWITCH_TOOL, agentFor, askNote, modelName, otherAutoNote, otherNote, switchNote } from './notes.ts'
+import { ALL_MODELS, BASE_MODELS, LEVELS, NAMES, TEMPLATE, asLevel, clip, compareTarget, isRedo, describeOptions, knownModel, optionsLine, parseFollows, parsePick, pickPrompt, promptKey, quickReply, toConfig, typed } from '../../plugins/prompt-router/core/router.ts'
+import type { Chat, Config, Model, Pick, Where } from '../../plugins/prompt-router/core/router.ts'
+import { acceptRecord, declinedAtEnd, decisionRecord, finalizePick, isRouterQuestion, route, spawnAccepts } from '../../plugins/prompt-router/core/flow.ts'
+import type { Ctx } from '../../plugins/prompt-router/core/flow.ts'
+import { SESSION_TOOL, STATS_TOOL, SWITCH_TOOL, agentFor, modelName, openCodeNames } from './notes.ts'
 import { TIER_NAMES, fromTiers, shownOptions, tierLine, tierModel } from '../shared/tiers.ts'
-import type { NoteCtx } from './notes.ts'
 import { statsLog, statsTable } from './stats.ts'
 import type { Accept, Decision, Turn } from '../../plugins/prompt-router/core/stats.ts'
 import type { Usage } from '../../plugins/prompt-router/core/prices.ts'
@@ -57,8 +58,10 @@ type ChatState = {
   // What the picker sent with the last message.
   cur: { model: string; variant: string }
   last: Pick | null
-  // The router's open offer (its decision's time stamp) until the user takes it or another offer replaces it.
-  offer: { ts: number; where: Decision['where'] } | null
+  // The router's open offer (its decision's time stamp) until the user takes it or the next prompt.
+  offer: { ts: number; where: Where; model: Model } | null
+  // The router's own question was asked this turn: a turn that ends with the offer open declined it.
+  routerAsked: boolean
 }
 
 type Part = { type: string; text?: string; synthetic?: boolean }
@@ -88,7 +91,11 @@ function strMap<K extends string>(keys: readonly K[], v: unknown, base: Record<K
   return out
 }
 
-const NOTE = /\n\n\[Prompt Router [\s\S]*\]\s*$/
+// The classifier's words for an OpenCode chat (core/router.ts HOST is Claude Code's).
+const HOST = { chat: 'an OpenCode chat', reply: "the assistant's last reply" }
+
+// The router's note at the end of a prompt (core/flow.ts: the asking ones open with ACTION FIRST).
+const NOTE = /\n\n\[(?:Prompt Router |ACTION FIRST)[\s\S]*\]\s*$/
 
 export function routerPlugin(tool: ToolFn) {
   return async (input: { client: Client }, options?: Record<string, unknown>) => {
@@ -114,7 +121,7 @@ export function routerPlugin(tool: ToolFn) {
     const cfg: Config = toConfig(given)
     const models = strMap(ALL_MODELS, given.models, DEFAULT_MODELS)
     const variants = strMap(LEVELS, given.variants, Object.fromEntries(LEVELS.map(l => [l, l])) as Record<Level, string>)
-    const ctx: NoteCtx = { cfg, models, variants }
+    const ctx: Ctx = { cfg, names: openCodeNames(models, variants) }
 
     let enabled = true
     try {
@@ -179,7 +186,7 @@ export function routerPlugin(tool: ToolFn) {
     function chat(sid: string) {
       let st = chats.get(sid)
       if (!st) {
-        st = { seen: '', seenModel: '', turnLevel: null, hold: null, modelHold: null, cur: { model: '', variant: '' }, last: null, offer: null }
+        st = { seen: '', seenModel: '', turnLevel: null, hold: null, modelHold: null, cur: { model: '', variant: '' }, last: null, offer: null, routerAsked: false }
         chats.set(sid, st)
       }
       return st
@@ -265,12 +272,12 @@ export function routerPlugin(tool: ToolFn) {
     }
 
     // The user took the router's open offer of this kind in this chat (a subagent, a session, a switch).
-    async function took(sid: string, where: Decision['where']) {
+    async function took(sid: string, where: Where, declined = false) {
       const st = chats.get(sid)
       if (!st?.offer || st.offer.where !== where) return
       const decision = st.offer.ts
       st.offer = null
-      await record({ kind: 'accept', ts: Date.now(), platform: 'opencode', chat: sid, decision })
+      await record(acceptRecord({ ts: Date.now(), platform: 'opencode', chat: sid, decision, declined }))
     }
 
     const modelID = (id: string) => split(id).modelID
@@ -378,7 +385,7 @@ export function routerPlugin(tool: ToolFn) {
       try {
         const call = client.session.prompt({
           path: { id },
-          body: { model: split(models[c.conf.classifier]), variant: variantOf('low') || undefined, tools: { '*': false }, parts: [{ type: 'text', text: pickPrompt(text, c) }] },
+          body: { model: split(models[c.conf.classifier]), variant: variantOf('low') || undefined, tools: { '*': false }, parts: [{ type: 'text', text: pickPrompt(text, c, TEMPLATE, HOST) }] },
         })
         const late = new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error(`classifier timed out after ${timeoutMs} ms`)), timeoutMs)
@@ -419,14 +426,10 @@ export function routerPlugin(tool: ToolFn) {
       const { reply, classifier } = await classify(text, c)
       const parsed = parsePick(reply, avail)
       if (!parsed && !/"where"\s*:\s*"keep"/.test(reply)) await log('parse', 'reply could not be parsed')
-      const p = parsed && preferSession(allowed(parsed, cfg), c, cfg)
       await log('pick', `${clip(text, 60)} | now ${model || '?'} ${now || '?'} ${tokens ?? '?'} tok | first ${c.isFirst} | ${clip(reply, 200)}`)
-      // The first prompt of a chat has nothing to leave: only its model and effort count.
-      const follows = parseFollows(reply)
-      if (p && c.isFirst) return { p: { ...p, where: 'here', first: { now: routerModel(model) } }, classifier, follows }
-      const cur = routerModel(model)
-      if (p?.where === 'here' && cur && p.model !== cur && cfg.midChatModelDetection !== 'off') return { p: { ...p, other: { now: cur } }, classifier, follows }
-      return { p: p || null, classifier, follows }
+      // The chat's model by the router's name: a mapped id need not name its tier.
+      const p = finalizePick(parsed, { cfg, tokens, window: c.window, isFirst: c.isFirst, model: routerModel(model) })
+      return { p, classifier, follows: parseFollows(reply) }
     }
 
     function addNote(parts: Part[], note: string) {
@@ -434,11 +437,13 @@ export function routerPlugin(tool: ToolFn) {
       if (part) part.text = `${part.text ?? ''}\n\n[${note}]`
     }
 
-    // Works out the note for the prompt; a failure here never loses the prompt.
+    // Works out the note for the prompt (core/flow.ts route); a failure here never loses the prompt.
     async function decide(sid: string, st: ChatState, parts: Part[]) {
       const text = typed(textOf(parts))
       if (!text || text.startsWith('/')) return
       st.turnLevel = null
+      st.offer = null
+      st.routerAsked = false
       // "yes", "option 2", "díky": nothing to route, no classifier call.
       if (quickReply(text)) return
       const now = st.seen
@@ -450,57 +455,22 @@ export function routerPlugin(tool: ToolFn) {
       }
       if (!res) return
       const { p, classifier, follows } = res
-      const fromSide = { model: routerModel(st.seenModel) || st.seenModel, effort: now }
-      const ts = Date.now()
-      const key = promptKey(text)
-      const redo = isRedo(text)
+      const from = routerModel(st.seenModel) || st.seenModel
+      if (p) st.last = p
       // A prompt typed over a running turn belongs to that work.
       const midTurn = !!p && (await isBusy(sid))
-      const note = async (where: Decision['where'], outcome: Decision['outcome'], to: Decision['to']) => {
-        if (where !== 'keep') st.offer = outcome === 'asked' ? { ts, where } : null
-        await record({ kind: 'decision', ts, platform: 'opencode', chat: sid, where, from: fromSide, to, ...(follows ? { follows } : {}), outcome, key, classifier, ...(redo ? { redo: true as const } : {}) })
+      // OpenCode starts sessions itself (router_session).
+      const step = route(ctx, { p, now, from, classified: true, midTurn, inApp: true })
+      if (step.apply.model) applyModel(st, step.apply.model)
+      if (step.apply.effort) applyLevel(st, step.apply.effort)
+      if (step.decision) {
+        const ts = Date.now()
+        const redo = isRedo(text)
+        await record(decisionRecord({ ts, platform: 'opencode', chat: sid, from, now, key: promptKey(text), follows, classifier, ...(redo ? { redo } : {}) }, step.decision))
+        if (step.asked) st.offer = { ts, ...step.asked }
       }
-      // No pick (an approval, or a reply that could not be read): the classifier still cost.
-      if (!p) return note('keep', 'applied', fromSide)
-      st.last = p
-      const proposed = { model: p.model as string, effort: p.effort }
-
-      if (p.where === 'here') {
-        // A prompt typed over a running turn belongs to that work: its model and effort stay.
-        if (midTurn) return note('keep', 'applied', fromSide)
-        // Another model than the chat's: ask before anything is applied, the chat's model stays.
-        if (p.other) {
-          await note('subagent', 'asked', proposed)
-          return addNote(parts, (cfg.midChatModelDetection === 'auto' ? otherAutoNote : otherNote)(ctx, p, p.other.now, now))
-        }
-        const changes: string[] = []
-        let askModel: { from: Model } | null = null
-        let askEffort: { now: Level | '' } | null = null
-        // A new chat: the model it starts on may not fit the task.
-        const from = p.first?.now
-        if (from && p.model !== from && cfg.firstChatDetection !== 'off') {
-          if (cfg.firstChatDetection === 'ask') askModel = { from }
-          else {
-            applyModel(st, p.model)
-            changes.push(`Model: ${modelName(models, p.model)} (was ${modelName(models, from)})`)
-          }
-        }
-        if (p.effort !== now && cfg.effortDetection !== 'off') {
-          if (cfg.effortDetection === 'ask') askEffort = { now }
-          else {
-            applyLevel(st, p.effort)
-            changes.push(`Effort: ${NAMES[p.effort]}${now ? ` (was ${NAMES[now]})` : ''}`)
-          }
-        }
-        if (changes.length && cfg.notifications === 'on') await toast(`${changes.join(', ')}${p.why ? `, ${p.why}` : ''}`)
-        if (askModel || askEffort) addNote(parts, switchNote(ctx, p, askModel, askEffort))
-        // What took effect when something was applied; else what was asked.
-        if (changes.length || !(askModel || askEffort)) await note('here', 'applied', { model: routerModel(st.seenModel) || st.seenModel, effort: st.seen })
-        else await note('here', 'asked', proposed)
-        return
-      }
-      await note(p.where, 'asked', proposed)
-      addNote(parts, askNote(ctx, p, now, midTurn))
+      for (const t of step.toasts) await toast(t)
+      if (step.note) addNote(parts, step.note)
     }
 
     async function routerCommand(args: string, sid: string) {
@@ -613,15 +583,30 @@ export function routerPlugin(tool: ToolFn) {
       },
 
       'tool.execute.before': async (i: { tool: string; sessionID: string }, output: { args: any }) => {
+        if (isRouterQuestion(ctx, i.tool, output?.args)) {
+          const st = chats.get(i.sessionID)
+          if (st) st.routerAsked = true
+          return
+        }
         const agent = output?.args?.subagent_type
         if (i.tool !== 'task' || typeof agent !== 'string' || !agent.startsWith('router-')) return
-        await took(i.sessionID, 'subagent')
+        // The offer is taken by a subagent on the offered tier.
+        const st = chats.get(i.sessionID)
+        if (st && spawnAccepts(st.offer, tierModel(agent.slice('router-'.length)))) await took(i.sessionID, 'subagent')
         const level = chats.get(i.sessionID)?.last?.effort
         if (level) subEffort.set(agent, level)
       },
 
       // Finished replies, for the savings log.
       event: async ({ event }: { event: { type: string; properties?: any } }) => {
+        // The turn ended: the router asked and nothing took the offer, so the person declined it.
+        if (event?.type === 'session.idle' || (event?.type === 'session.status' && event.properties?.status?.type === 'idle')) {
+          const sid = event.properties?.sessionID
+          const st = typeof sid === 'string' ? chats.get(sid) : undefined
+          if (st && declinedAtEnd(st.offer, st.routerAsked)) await took(sid, st.offer!.where, true)
+          if (st) st.routerAsked = false
+          return
+        }
         if (event?.type !== 'message.updated') return
         try {
           await countTurn(event.properties?.info)

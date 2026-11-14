@@ -302,6 +302,25 @@ test('accept: none without an offer, or for a tool that does not take it', async
   assert.deepEqual([...accepts(sub.dir), ...accepts(none.dir)], [])
 })
 
+test('accept: the router asked and the turn ended with the offer open, so it was declined (as in Claude Code)', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) })
+  await send(hooks, S, 'run the tests')
+  const idle = () => hooks.event({ event: { type: 'session.idle', properties: { sessionID: S } } })
+  await idle()
+  assert.deepEqual(accepts(dir), [])
+  await hooks['tool.execute.before']({ tool: 'question', sessionID: S, callID: 'c1' }, { args: { questions: [{ header: 'Prompt Router', question: 'Where should this go?' }] } })
+  await idle()
+  await idle()
+  assert.deepEqual(accepts(dir).map(a => [a.decision, a.outcome]), [[decisions(dir)[0].ts, 'declined']])
+})
+
+test('accept: a subagent on another tier than offered does not take the offer (as in Claude Code)', async () => {
+  const { hooks, dir } = await setup({ reply: PICK.subagent, history: ongoing(S) })
+  await send(hooks, S, 'run the tests')
+  await hooks['tool.execute.before']({ tool: 'task', sessionID: S, callID: 'c1' }, { args: { subagent_type: 'router-strong', prompt: 'x', description: 'x' } })
+  assert.deepEqual(accepts(dir), [])
+})
+
 test('a plain reply ("yes, go on") has no classifier session and no decision', async () => {
   const { hooks, dir, calls } = await setup({ reply: PICK.subagent, history: ongoing(S) })
   await send(hooks, S, 'yes, go on')
