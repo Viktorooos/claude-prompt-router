@@ -178,8 +178,8 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 | Feature | Podkrok | Podvětev | Session | Základ | Model/effort | Stav | Úklid |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | golden | F1.1 | claude/shared-flow-golden-tests-53504d (ab0b7d9) | golden-tests | ed73284 | Opus/high | mergnuto (8fa9546), kritéria 3/3 | worktree smazán |
-| jadro | F2.1 | – | – | – | Sonnet/medium | čeká | – |
-| jadro | F2.2 | – | – | – | Opus/high | čeká | – |
+| jadro | F2.1 | (čeká na report) | jadro-host | 36c9c7d | Sonnet/medium | běží | – |
+| jadro | F2.2 | (čeká na report) | jadro-flow | 36c9c7d | Opus/high | běží | – |
 | jadro | F2.3 | – | – | – | Opus/high | čeká | – |
 | readme | F3.1 | – | – | – | Opus/medium | čeká | – |
 | readme | F3.2 | – | – | – | Opus/medium | čeká | – |
@@ -187,7 +187,7 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 | Feature | Větev | Konec SHA | Stav | Kritéria | Média | PR |
 | --- | --- | --- | --- | --- | --- | --- |
 | golden | shared-flow-golden | 36c9c7d | ověřeno (overeni-golden, claude/shared-flow-golden-overeni-f389f2, oprava f51c20f; worktree spark-hover-7cb7a4 ponechán: běží v něm sleep, uklidí závěrečný úklid) | 4/4 | ~/.claude/pr-media/shared-flow/golden/ | ne |
-| jadro | shared-flow-jadro | – | další (založí nový koordinátor z 36c9c7d) | – | – | ne |
+| jadro | shared-flow-jadro | 36c9c7d | probíhá (F2.1 a F2.2 běží) | – | – | ne |
 | readme | shared-flow-readme | – | čeká | – | – | ne |
 
 ## Podklady: proč ne další nástroje (průzkum 2026-11-13)
