@@ -215,4 +215,4 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 - Orchestrátory (Orca stablyai/orca, Claude Squad, Conductor, Crystal, Vibe Kanban) spouštějí skutečné CLI, není co portovat.
 - Duplicita CC ↔ OpenCode: `register.tsx` :370-406, :407-506, :579-616, :691-781, :1232-1290 vs. `adapters/opencode/prompt-router.ts` :412-505, `notes.ts`.
 
-Běží: `overeni-celku` (session overeni-celku, Sonnet/low) nad `shared-flow-readme` (e3bb2ee): jen plná sada. Pak `/recap` a závěrečný úklid `--prefix shared-flow`.
+Hotovo: `overeni-celku` (claude/shared-flow-overeni-celku-ad9b96, bez commitů) nad e3bb2ee: CC 453/453, test/node 13/13, validate OK, adaptéry 79/81 (2 tolerované z dluhu F2.3), diff-guard 0. Výstup `~/.claude/pr-media/shared-flow/celek/vysledek.txt`. Závěrečný úklid: smazáno 1 worktree, nechávám 0. PR: čeká na pokyn.
