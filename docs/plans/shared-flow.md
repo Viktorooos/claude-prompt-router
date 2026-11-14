@@ -143,6 +143,8 @@ Média do PR: seznam vygenerovaných obrázků, výstupy kontrol a `git diff --s
 
 ## Provedení
 
+Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu commituje koordinátor na `main` (jen tento soubor, bez Co-Authored-By).
+
 ### Ověřování
 - Režim: `feature`. Ověřovací session nepoužívá zařízení, video ani screenshoty: projekt není mobilní aplikace. Kritéria „Tok / UI ready / Komunikace s BE“ ze skillu neplatí, platí „Feature je hotová, když“ ověřená příkazy.
 - Hlavní větev: `main`.
@@ -166,6 +168,22 @@ Média do PR: seznam vygenerovaných obrázků, výstupy kontrol a `git diff --s
 ### Před spuštěním (uživatel)
 1. Hotovo: rozpracované změny commitnuté jako `5663ac3`, plán commitnutý.
 2. Novou session otevřít ve složce `~/.claude/mods-src/prompt-router` a spustit `/proved docs/plans/shared-flow.md`. Rozpis schválit (jediný dotaz) a nechat běžet. Povolit scratchpad, `~/.claude/pr-media/` a `~/.claude/scripts/cleanup-worktrees.sh`.
+
+### Tabulka stavu
+| Feature | Podkrok | Podvětev | Session | Základ | Model/effort | Stav | Úklid |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| golden | F1.1 | (z reportu) | golden-tests | ed73284 | Opus/high | běží | – |
+| jadro | F2.1 | – | – | – | Sonnet/medium | čeká | – |
+| jadro | F2.2 | – | – | – | Opus/high | čeká | – |
+| jadro | F2.3 | – | – | – | Opus/high | čeká | – |
+| readme | F3.1 | – | – | – | Opus/medium | čeká | – |
+| readme | F3.2 | – | – | – | Opus/medium | čeká | – |
+
+| Feature | Větev | Konec SHA | Stav | Kritéria | Média | PR |
+| --- | --- | --- | --- | --- | --- | --- |
+| golden | shared-flow-golden | ed73284 | probíhá | – | – | ne |
+| jadro | shared-flow-jadro | – | čeká | – | – | ne |
+| readme | shared-flow-readme | – | čeká | – | – | ne |
 
 ## Podklady: proč ne další nástroje (průzkum 2026-11-13)
 - Codex CLI a Factory: háček umí jen přidat kontext, model ani effort nepřepne. Router by jen radil „přepni `/model …`“ a za to přidal 1–3 s a tokeny klasifikátoru na každý prompt. Codex byl kvůli tomu pozastaven (`e743931`) a smazán (`ee191bd`), obnovit se dá z gitu.
