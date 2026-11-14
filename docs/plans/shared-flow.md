@@ -59,9 +59,9 @@ Média do PR: jen textové výstupy (testy, golden, `git diff --stat`), žádné
 
 ## Feature F2 `jadro`: sdílený tok a OpenCode na něm
 Feature je hotová, když:
-- `core/flow.ts` s CC jmény nástrojů vrací přesně texty a záznamy z `test/golden/*`,
-- OpenCode používá `core/flow.ts`, posílá klasifikátoru vlastní `host` a jeho testy včetně 2 dnes červených projdou (nebo jsou doložené v dluhu),
-- pojistka a golden platí.
+- [x] `core/flow.ts` s CC jmény nástrojů vrací přesně texty a záznamy z `test/golden/*`, (ověřeno `test/flow.test.ts`, CC 453/453)
+- [x] OpenCode používá `core/flow.ts`, posílá klasifikátoru vlastní `host` a jeho testy včetně 2 dnes červených projdou (nebo jsou doložené v dluhu), (ověřeno `adapters/opencode/test/prompt-router.test.ts:84`, adapters 79/81, 2 v dluhu: padají už na 36c9c7d kvůli 726f59f)
+- [x] pojistka a golden platí. (pojistka exit 0, golden nepřegenerován)
 
 Média do PR: jen textové výstupy.
 
@@ -176,8 +176,8 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 ### Dluh ověření
 - F1.1: golden nepokrývá vykreslený strom pane ani tiky `clock.every` (timer stubnutý, nikdy netiká).
 - F2.3: `adapters/opencode/test/stats.test.ts:162` a `:243` čekají `$3.90`, vychází `$3.50`: záměrný commit 726f59f (dražší Haiku sazba nad 100K tokenů), testy nezměněny.
-- F2.3: declined v OpenCode se zapisuje jen na `session.idle`/`session.status` idle, v živém OpenCode neověřeno.
-- F2.2: větve `declined`/`isRouterQuestion` golden nekryje, jen unit test.
+- F2.3: declined v OpenCode se zapisuje jen na `session.idle`/`session.status` idle, v živém OpenCode neověřeno; ověření jadra: `@opencode-ai/plugin` není v repu a dokumentace pluginů tyto eventy nezmiňuje (stále otevřené).
+- F2.2: větve `declined`/`isRouterQuestion` golden nekryje; pokryto unit testy ve `flow.test.ts` a `adapters/opencode/test/stats.test.ts` (uzavřeno ověřením jadra).
 - F1.1: `claude -p --plugin-dir plugins/prompt-router "/router"` = ano (exit 0), ale mohla se načíst nainstalovaná kopie stejného jména.
 
 ### Před spuštěním (uživatel)
@@ -197,8 +197,8 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 | Feature | Větev | Konec SHA | Stav | Kritéria | Média | PR |
 | --- | --- | --- | --- | --- | --- | --- |
 | golden | shared-flow-golden | 36c9c7d | ověřeno (overeni-golden, claude/shared-flow-golden-overeni-f389f2, oprava f51c20f; worktree spark-hover-7cb7a4 ponechán: běží v něm sleep, uklidí závěrečný úklid) | 4/4 | ~/.claude/pr-media/shared-flow/golden/ | ne |
-| jadro | shared-flow-jadro | 28d8564 | ověřuje se (overeni-jadro) | – | – | ne |
-| readme | shared-flow-readme | – | čeká | – | – | ne |
+| jadro | shared-flow-jadro | 141ca73 | ověřeno (overeni-jadro, claude/shared-flow-jadro-overeni-778ec6, simplify 0ecfcc8; worktree smazán) | 3/3 | ~/.claude/pr-media/shared-flow/jadro/ | ne |
+| readme | shared-flow-readme | – | další (založí nový koordinátor z 141ca73) | – | – | ne |
 
 ## Podklady: proč ne další nástroje (průzkum 2026-11-13)
 - Codex CLI a Factory: háček umí jen přidat kontext, model ani effort nepřepne. Router by jen radil „přepni `/model …`“ a za to přidal 1–3 s a tokeny klasifikátoru na každý prompt. Codex byl kvůli tomu pozastaven (`e743931`) a smazán (`ee191bd`), obnovit se dá z gitu.
