@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/hero.svg" alt="Claude Prompt Router: the right place, the right model and the right effort for every prompt" width="100%">
+<img src="docs/images/hero-dark.svg" alt="Claude Prompt Router: the right place, the right model and the right effort for every prompt" width="100%">
 
 <h1>🧭 Claude Prompt Router</h1>
 
@@ -70,7 +70,7 @@ Open it with `/router panel` (or let it open by itself with `openPane`). In the 
 
 ### You saved and Cache
 
-<img src="docs/images/pane-saved-cache.svg" alt="You saved and Continue here" width="440">
+<img src="docs/images/pane-saved-cache-dark.svg" alt="You saved and Continue here" width="440">
 
 - **You saved**: the headline number for **Today**, **7 days** or **Total**, with **Without router** against **With router** and how many percent less that is. The line says what it is compared with (here: *every prompt on your history*, with the mix of models and efforts you ran before).
 - **Saved per day**: a smooth line over the last 7 days. Point at a day for its numbers. A day in the minus turns **red** with a minus sign: there the router cost more than it saved. With too little data the card says so.
@@ -78,7 +78,7 @@ Open it with `/router panel` (or let it open by itself with `openPane`). In the 
 
 ### This chat and What you got
 
-<img src="docs/images/pane-this-chat.svg" alt="This chat and What you got" width="440">
+<img src="docs/images/pane-this-chat-dark.svg" alt="This chat and What you got" width="440">
 
 - **This chat**: the model and effort, how full the context is (`275k of 1M tokens`), and a tick on the bar where the router will ask for a new session. **Last reply** and **This session** are what they cost at list prices.
 - **What you got**, from the log, same period as the overview:
@@ -90,7 +90,7 @@ Open it with `/router panel` (or let it open by itself with `openPane`). In the 
 
 All of them are in the pane, each with one line on what it does and which value is recommended. Grouped:
 
-<img src="docs/images/pane-settings-a.svg" alt="Router, and Model and effort" width="400"> <img src="docs/images/pane-settings-b.svg" alt="Session and More settings" width="400">
+<img src="docs/images/pane-settings-a-dark.svg" alt="Router, and Model and effort" width="400"> <img src="docs/images/pane-settings-b-dark.svg" alt="Session and More settings" width="400">
 
 | Group | Settings |
 | --- | --- |
@@ -101,7 +101,7 @@ All of them are in the pane, each with one line on what it does and which value 
 
 ### Details
 
-<img src="docs/images/pane-details.svg" alt="Details: Router balance, accuracy and where tasks went" width="440">
+<img src="docs/images/pane-details-dark.svg" alt="Details: Router balance, accuracy and where tasks went" width="440">
 
 - **Router balance**: the strict per-task balance (negative in red), against your own picks, classifier included. See [how the balance is worked out](#balance).
 - **Decisions right**: the share of routed tasks without a failure, as a ring with its **95 % range** (Wilson interval) drawn as a lighter stretch of the track.
