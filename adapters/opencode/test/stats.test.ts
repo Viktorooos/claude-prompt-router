@@ -173,11 +173,11 @@ test('stats: the stats tool shows today, 7 days and total, with the net saving a
   assert.match(out, /Today/)
   assert.match(out, /7 days/)
   assert.match(out, /Total/)
-  // Haiku instead of Opus on 1M input: $3.90 saved; Fable instead of Opus: $6.00 extra, shown apart.
-  assert.match(out, /Saved .*\$3\.90/)
+  // Haiku instead of Opus on 1M input in one request (Haiku long-prompt rate, 726f59f): $3.50 saved; Fable instead of Opus: $6.00 extra, shown apart.
+  assert.match(out, /Saved .*\$3\.50/)
   assert.match(out, /Stronger model .*\$6\.00/)
   assert.match(out, /Classifier .*\$0\.0042/)
-  assert.match(out, /Net saving .*\$3\.90/)
+  assert.match(out, /Net saving .*\$3\.50/)
   assert.match(out, /Effort lowered .* 1 /)
   assert.match(out, /Unpriced turns .* 1/)
   assert.match(out, /estimate/i)
@@ -245,11 +245,11 @@ test('stats: the table compares with the compareWith option', async () => {
   const line = { kind: 'turn', ts: now - DAY, platform: 'opencode', chat: 'old', model: 'claude-haiku-5-5', baseline: 'claude-opus-5-5', usage: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 } }
   const first = await setup({}, { compareWith: 'first' })
   writeFileSync(join(first.dir, 'prompt-router-stats.jsonl'), JSON.stringify(line) + '\n')
-  assert.match(await first.hooks.tool.router_stats.execute({}, { sessionID: S }), /Saved .*\$3\.90/)
+  assert.match(await first.hooks.tool.router_stats.execute({}, { sessionID: S }), /Saved .*\$3\.50/)
   const haiku = await setup({}, { compareWith: 'haiku-low' })
   writeFileSync(join(haiku.dir, 'prompt-router-stats.jsonl'), JSON.stringify(line) + '\n')
   const out: string = await haiku.hooks.tool.router_stats.execute({}, { sessionID: S })
-  assert.doesNotMatch(out, /Saved .*\$3\.90/)
+  assert.doesNotMatch(out, /Saved .*\$3\.50/)
   assert.match(out, /Saved \(cheaper model\)\s+\$0\.00\s+\$0\.00\s+\$0\.00/)
 })
 

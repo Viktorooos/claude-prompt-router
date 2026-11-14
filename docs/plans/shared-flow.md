@@ -181,7 +181,7 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 
 ### Dluh ověření
 - F1.1: golden nepokrývá vykreslený strom pane ani tiky `clock.every` (timer stubnutý, nikdy netiká).
-- F2.3: `adapters/opencode/test/stats.test.ts:162` a `:243` čekají `$3.90`, vychází `$3.50`: záměrný commit 726f59f (dražší Haiku sazba nad 100K tokenů), testy nezměněny.
+- F2.3: testy `stats.test.ts` s `$3.90` opraveny na `$3.50` (sazba Haiku nad 100K, 726f59f), adaptéry 81/81 (uzavřeno 2026-11-14).
 - F2.3: declined v OpenCode se zapisuje jen na `session.idle`/`session.status` idle, v živém OpenCode neověřeno; ověření jadra: `@opencode-ai/plugin` není v repu a dokumentace pluginů tyto eventy nezmiňuje (stále otevřené).
 - F2.2: větve `declined`/`isRouterQuestion` golden nekryje; pokryto unit testy ve `flow.test.ts` a `adapters/opencode/test/stats.test.ts` (uzavřeno ověřením jadra).
 - F1.1: `claude -p --plugin-dir plugins/prompt-router "/router"` = ano (exit 0), ale mohla se načíst nainstalovaná kopie stejného jména.
