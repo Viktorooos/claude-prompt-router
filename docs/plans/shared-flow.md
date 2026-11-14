@@ -125,6 +125,9 @@ Média do PR: seznam vygenerovaných obrázků, výstupy kontrol a `git diff --s
   - `for f in docs/images/*.svg; do xmllint --noout "$f" || echo "vadné $f"; done` nic nevypíše;
   - každé SVG je pod 300 KB.
 
+### Výsledek F3.1
+- [x] Hotovo: 18 SVG `docs/images/<název>-{light,dark}.svg` (hero, how-it-works, features, platforms, pane-saved-cache, pane-this-chat, pane-details, pane-settings-a, pane-settings-b), staré smazány, CC 453/453, pojistka OK, kritéria 3/3. Ukázková úspora v obrázcích .85, skript chce Node ≥ 23.6.
+
 ### F3.2 Text README (po F3.1)
 - Struktura:
   1. hero + odznaky;
@@ -191,14 +194,14 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 | jadro | F2.1 | claude/shared-flow-jadro-host-5b5f73 (3e569d1) | jadro-host | 36c9c7d | Sonnet/medium | mergnuto (a130731), kritéria 3/3 | worktree smazán |
 | jadro | F2.2 | claude/shared-flow-jadro-flow-828c4f (d38a91a) | jadro-flow | 36c9c7d | Opus/high | mergnuto (066e129), kritéria 2/2 | worktree smazán |
 | jadro | F2.3 | claude/shared-flow-jadro-opencode-00a840 (32d6e03) | jadro-opencode | 066e129 | Opus/high | mergnuto (28d8564), kritéria 5/5 ano + 1 odloženo (dluh) | worktree smazán |
-| readme | F3.1 | (shared-flow-readme-grafika) | readme-grafika | 141ca73 | Opus/medium | běží | – |
-| readme | F3.2 | – | – | – | Opus/medium | čeká | – |
+| readme | F3.1 | claude/shared-flow-readme-grafika-498adb (6b58182) | readme-grafika | 141ca73 | Opus/medium | mergnuto (dbad4d1), kritéria 3/3 | worktree smazán |
+| readme | F3.2 | (shared-flow-readme-text) | readme-text | dbad4d1 | Opus/medium | běží | – |
 
 | Feature | Větev | Konec SHA | Stav | Kritéria | Média | PR |
 | --- | --- | --- | --- | --- | --- | --- |
 | golden | shared-flow-golden | 36c9c7d | ověřeno (overeni-golden, claude/shared-flow-golden-overeni-f389f2, oprava f51c20f; worktree spark-hover-7cb7a4 ponechán: běží v něm sleep, uklidí závěrečný úklid) | 4/4 | ~/.claude/pr-media/shared-flow/golden/ | ne |
 | jadro | shared-flow-jadro | 141ca73 | ověřeno (overeni-jadro, claude/shared-flow-jadro-overeni-778ec6, simplify 0ecfcc8; worktree smazán) | 3/3 | ~/.claude/pr-media/shared-flow/jadro/ | ne |
-| readme | shared-flow-readme | 141ca73 | probíhá | – | – | ne |
+| readme | shared-flow-readme | dbad4d1 | probíhá | – | – | ne |
 
 ## Podklady: proč ne další nástroje (průzkum 2026-11-13)
 - Codex CLI a Factory: háček umí jen přidat kontext, model ani effort nepřepne. Router by jen radil „přepni `/model …`“ a za to přidal 1–3 s a tokeny klasifikátoru na každý prompt. Codex byl kvůli tomu pozastaven (`e743931`) a smazán (`ee191bd`), obnovit se dá z gitu.
