@@ -1,7 +1,7 @@
 // The turn's routing flow with no engine: the pick made final, the notes appended to the prompt, what
 // to change, toast and record. Claude Code's semantics (hooks/register.tsx decide()) with time, tool
 // and model names passed in, so another host (OpenCode) can run the same flow.
-import type { LastDecision, Level } from '../types'
+import type { Level } from '../types'
 import { DECIDE_OTHER, MODEL_NAMES, MODELS, NAMES, RUN_SUBAGENT, TOLD_OTHER, allowed, knownModel, preferSession, userLang } from './router.ts'
 import type { Config, Model, Pick, Where } from './router.ts'
 import type { Accept, Decision } from './stats.ts'
@@ -201,11 +201,6 @@ export type Noted = { ts: number; platform: string; chat: string; from: string; 
 
 export function decisionRecord(c: Noted, d: NonNullable<Step['decision']>): Decision {
   return { kind: 'decision', ts: c.ts, platform: c.platform, chat: c.chat, where: d.where, from: { model: c.from, effort: c.now }, to: d.to, ...(c.follows ? { follows: c.follows } : {}), outcome: d.outcome, ...(c.key ? { key: c.key } : {}), ...(c.classifier ? { classifier: c.classifier } : {}), ...(c.session ? { session: c.session } : {}), ...(c.redo ? { redo: true as const } : {}) }
-}
-
-// The pane's last decision.
-export function lastDecision(c: Noted, d: NonNullable<Step['decision']>, ctx: { tokens: number | null; window: number | null }): LastDecision {
-  return { where: d.p?.other ? 'other' : d.where, outcome: d.outcome === 'asked' ? 'asked' : 'applied', model: d.to.model, effort: d.to.effort, why: d.p?.why ?? '', from: { model: c.from, effort: c.now }, ts: c.ts, ...ctx }
 }
 
 // The person took the offer (`decision`: the asked decision's ts), or the turn ended without it.
