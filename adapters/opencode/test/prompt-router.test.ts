@@ -81,6 +81,8 @@ test('blocks like <system-reminder> are stripped before the classifier', async (
   await send(hooks, S, '<system-reminder>SECRET CONTEXT</system-reminder>\nadd a test for login')
   const prompt = named(calls, 'session.prompt')[0].args.body.parts[0].text
   assert.match(prompt, /<prompt>\nadd a test for login\n<\/prompt>/)
+  assert.match(prompt, /in an OpenCode chat about/)
+  assert.doesNotMatch(prompt, /Claude Code chat/)
   assert.doesNotMatch(prompt, /SECRET CONTEXT/)
   // Only a reminder: nothing to route.
   const before = named(calls, 'session.prompt').length
@@ -286,7 +288,7 @@ test('here on a cheaper model (ask): offers a subagent or staying here, switches
   const { hooks, calls } = await setup({ reply: OTHER.lower, history: ongoing(S) }, { effortMode: 'ask', modelMode: 'ask' })
   const out = await send(hooks, S, 'rename the keys we just found')
   const t = said(out)
-  assert.ok(t.startsWith('rename the keys we just found\n\n[Prompt Router'))
+  assert.ok(t.startsWith('rename the keys we just found\n\n[ACTION FIRST'))
   assert.match(t, /fits claude-sonnet-5-5 · low better than this chat's claude-opus-5-5, because: a mechanical edit/)
   assert.match(t, /question tool/)
   assert.match(t, /"Subagent \(claude-sonnet-5-5 · low\)", "Stay here \(Low\)", "Stay here \(keep Medium\)"/)
