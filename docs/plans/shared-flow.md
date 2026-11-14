@@ -100,6 +100,9 @@ Média do PR: jen textové výstupy.
   - změny očekávání vypsané (seznam převezme F3 do README);
   - golden, pojistka a plná sada OK.
 
+### Výsledek F2.3
+- [x] Hotovo (CC 453, test/node 13/13, adapters 79/81 se 2 v dluhu). `Names` ve `flow.ts:21-26` má volitelné `switchCall`, `sessionThen`, `agentCall`. Pro README (F3) změny OpenCode: výzvy mají CC znění („ACTION FIRST… call the question tool“), zmizel dovětek „if the question tool is not available, ask in one short message“; zápis declined na konci tahu; auto subagent a auto návrh session; nabídka platí do dalšího promptu; subagent přijat jen na nabízeném tieru; klasifikátor dostává host „an OpenCode chat“.
+
 ## Feature F3 `readme`: nové prémiové README
 Feature je hotová, když:
 - `README.md` je přepsané celé a působí prémiově (jednotný vizuální styl, vlastní SVG grafika, žádné rozbité odkazy),
@@ -172,6 +175,9 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 
 ### Dluh ověření
 - F1.1: golden nepokrývá vykreslený strom pane ani tiky `clock.every` (timer stubnutý, nikdy netiká).
+- F2.3: `adapters/opencode/test/stats.test.ts:162` a `:243` čekají `$3.90`, vychází `$3.50`: záměrný commit 726f59f (dražší Haiku sazba nad 100K tokenů), testy nezměněny.
+- F2.3: declined v OpenCode se zapisuje jen na `session.idle`/`session.status` idle, v živém OpenCode neověřeno.
+- F2.2: větve `declined`/`isRouterQuestion` golden nekryje, jen unit test.
 - F1.1: `claude -p --plugin-dir plugins/prompt-router "/router"` = ano (exit 0), ale mohla se načíst nainstalovaná kopie stejného jména.
 
 ### Před spuštěním (uživatel)
@@ -184,14 +190,14 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 | golden | F1.1 | claude/shared-flow-golden-tests-53504d (ab0b7d9) | golden-tests | ed73284 | Opus/high | mergnuto (8fa9546), kritéria 3/3 | worktree smazán |
 | jadro | F2.1 | claude/shared-flow-jadro-host-5b5f73 (3e569d1) | jadro-host | 36c9c7d | Sonnet/medium | mergnuto (a130731), kritéria 3/3 | worktree smazán |
 | jadro | F2.2 | claude/shared-flow-jadro-flow-828c4f (d38a91a) | jadro-flow | 36c9c7d | Opus/high | mergnuto (066e129), kritéria 2/2 | worktree smazán |
-| jadro | F2.3 | (čeká na report) | jadro-opencode | 066e129 | Opus/high | běží | – |
+| jadro | F2.3 | claude/shared-flow-jadro-opencode-00a840 (32d6e03) | jadro-opencode | 066e129 | Opus/high | mergnuto (28d8564), kritéria 5/5 ano + 1 odloženo (dluh) | worktree smazán |
 | readme | F3.1 | – | – | – | Opus/medium | čeká | – |
 | readme | F3.2 | – | – | – | Opus/medium | čeká | – |
 
 | Feature | Větev | Konec SHA | Stav | Kritéria | Média | PR |
 | --- | --- | --- | --- | --- | --- | --- |
 | golden | shared-flow-golden | 36c9c7d | ověřeno (overeni-golden, claude/shared-flow-golden-overeni-f389f2, oprava f51c20f; worktree spark-hover-7cb7a4 ponechán: běží v něm sleep, uklidí závěrečný úklid) | 4/4 | ~/.claude/pr-media/shared-flow/golden/ | ne |
-| jadro | shared-flow-jadro | 066e129 | probíhá (F2.3 běží) | – | – | ne |
+| jadro | shared-flow-jadro | 28d8564 | ověřuje se (overeni-jadro) | – | – | ne |
 | readme | shared-flow-readme | – | čeká | – | – | ne |
 
 ## Podklady: proč ne další nástroje (průzkum 2026-11-13)
