@@ -69,7 +69,7 @@ ${body}
 </g>
 </svg>
 `
-  return { T, C, t, rect, card, soft, tile, bar, chip, check, cross, svg, dark }
+  return { T, C, t, rect, card, soft, tile, bar, chip, check, cross, svg }
 }
 
 // Smooth path through points (Catmull-Rom to Bezier).
@@ -178,7 +178,7 @@ function features(K) {
     ['cpu', C.amber, 'Picks model and effort', "On a new chat's first prompt, and the", 'effort on every later one.'],
     ['swap', C.green, 'Never breaks your cache', 'No model switch mid-chat. Another model', 'runs as a subagent instead.'],
     ['window', C.accent, 'Watches the context', 'Past the share you choose, new work', 'goes to a fresh session.'],
-    ['coin', C.green, 'Shows what it saved', 'In dollars, per day and month, against', 'what you ran before the router.'],
+    ['coin', C.green, 'Shows what it saved', 'In dollars, per day and month, against', "keeping each chat's first model."],
     ['clock', C.amber, 'Cache countdown', 'How long the cache stays warm, and what', 'the next message costs warm or cold.'],
     ['pane', C.violet, 'A pane beside the chat', 'Every number and every setting,', 'so you rarely open a config file.'],
     ['spark', C.accent, 'No call for plain replies', 'yes, ok, option 2, a number or a letter,', 'in five languages.'],
@@ -200,8 +200,7 @@ function savedCache(K) {
   const W = 480
   let o = card(8, 8, W - 16, 452)
   o += tile(28, 28, C.green, 'coin') + t(78, 42, 'You saved', { w: 600, size: 14 })
-  o += t(78, 60, 'compared with running every prompt on your history (71 % Opus', { size: 11, fill: T.mute })
-  o += t(78, 75, 'high, 16 % Opus extra high, 9 % Opus max, 4 % Sonnet high)', { size: 11, fill: T.mute })
+  o += t(78, 60, "compared with keeping each chat's first model", { size: 11, fill: T.mute })
   let x = 28
   for (const [k, label] of Object.entries(PERIOD_LABELS)) {
     const c = chip(x, 96, label, k === 'month')
@@ -294,7 +293,7 @@ function settings(K, which) {
   ])
   const more = y => group(K, W, y, C.accent, 'sliders', 'More settings', 'Classifier, savings baseline, auto-open', [
     ['cpu', 'Decided by', ['The model that reads your prompt and', 'decides. Haiku is cheaper, Sonnet more', 'accurate. Recommended: haiku.'], 'haiku'],
-    ['scale', 'Savings compared with', ['What "You saved" is measured against.', 'Recommended: history.'], 'history'],
+    ['scale', 'Savings compared with', ['What "You saved" is measured against.', 'Recommended: first.'], 'first model'],
     ['pane', 'Open this pane on start', ['Opens this pane by itself when a session', 'starts. Recommended: off.'], 'Off', 'switch'],
   ])
   let y = 8, body = ''
