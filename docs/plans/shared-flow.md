@@ -30,10 +30,10 @@ Rozsah byl zúžen 2026-11-13. Rozšíření na Codex, Gemini, Factory a MCP se 
 
 ## Feature F1 `golden`: zamknout chování Claude Code
 Feature je hotová, když:
-- golden testy jsou commitnuté a projdou na nezměněném produkčním kódu,
-- pojistka platí,
-- plná sada je zelená (kromě 2 známých testů, viz Provedení),
-- je zapsaný výsledek (ano/ne) kontroly `claude -p --plugin-dir`.
+- [x] golden testy jsou commitnuté a projdou na nezměněném produkčním kódu (CC 365/365),
+- [x] pojistka platí (exit 0),
+- [x] plná sada je zelená (kromě 2 známých testů, viz Provedení),
+- [x] je zapsaný výsledek (ano/ne) kontroly `claude -p --plugin-dir` (ano, exit 0).
 
 Média do PR: jen textové výstupy (testy, golden, `git diff --stat`), žádné video, fotky ani zařízení.
 
@@ -186,8 +186,8 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 
 | Feature | Větev | Konec SHA | Stav | Kritéria | Média | PR |
 | --- | --- | --- | --- | --- | --- | --- |
-| golden | shared-flow-golden | 8fa9546 | ověřuje se | – | – | ne |
-| jadro | shared-flow-jadro | – | čeká | – | – | ne |
+| golden | shared-flow-golden | 36c9c7d | ověřeno (overeni-golden, claude/shared-flow-golden-overeni-f389f2, oprava f51c20f; worktree spark-hover-7cb7a4 ponechán: běží v něm sleep, uklidí závěrečný úklid) | 4/4 | ~/.claude/pr-media/shared-flow/golden/ | ne |
+| jadro | shared-flow-jadro | – | další (založí nový koordinátor z 36c9c7d) | – | – | ne |
 | readme | shared-flow-readme | – | čeká | – | – | ne |
 
 ## Podklady: proč ne další nástroje (průzkum 2026-11-13)
