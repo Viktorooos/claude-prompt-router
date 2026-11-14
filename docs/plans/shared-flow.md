@@ -65,6 +65,10 @@ Feature je hotová, když:
 
 Média do PR: jen textové výstupy.
 
+### Výsledek F1.1
+- [x] Hotovo, ověřeno (CC 365/365, test/node 13/13, validate OK, adapters 77/79 známé). Kritéria 3/3.
+- Poznámky pro F2: sandbox `claude plugin test` nemá `node:fs`/`process`/JSON import, proto jsou snapshoty .ts moduly `plugins/prompt-router/test/golden/{config,log,notes,prompts,stats}.ts`, víceřádkové texty jako pole řádků (spojit `join('\n')`). Zápis jen `GOLDEN_WRITE=1 node test/golden/write.mjs`. Id chatu ve snapshotu = `<chat>`, cesta pluginu = `<plugin-root>`. Časy v poledne UTC. Mock engine `golden.test.tsx:52`. F2.2 importuje snapshoty relativně z `test/golden/*.ts`.
+
 ### F2.1 Parametr `host` (paralelně s F2.2, soubory se nepřekrývají)
 - `core/router.ts`: `pickPrompt` dostane volitelný `host`. Výchozí hodnota je dnešní text „a Claude Code chat“ / „Claude's last reply“, takže CC ho nepředává a nic se nemění.
 - Test v `router.test.ts`: bez `host` je výstup shodný s golden, s `host` se změní jen tyto dvě fráze.
@@ -163,7 +167,8 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 - Rozjezd: 3 featury, celý plán najednou.
 
 ### Dluh ověření
-- (vyplňuje koordinátor)
+- F1.1: golden nepokrývá vykreslený strom pane ani tiky `clock.every` (timer stubnutý, nikdy netiká).
+- F1.1: `claude -p --plugin-dir plugins/prompt-router "/router"` = ano (exit 0), ale mohla se načíst nainstalovaná kopie stejného jména.
 
 ### Před spuštěním (uživatel)
 1. Hotovo: rozpracované změny commitnuté jako `5663ac3`, plán commitnutý.
@@ -172,7 +177,7 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 ### Tabulka stavu
 | Feature | Podkrok | Podvětev | Session | Základ | Model/effort | Stav | Úklid |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| golden | F1.1 | (z reportu) | golden-tests | ed73284 | Opus/high | běží | – |
+| golden | F1.1 | claude/shared-flow-golden-tests-53504d (ab0b7d9) | golden-tests | ed73284 | Opus/high | mergnuto (8fa9546), kritéria 3/3 | worktree smazán |
 | jadro | F2.1 | – | – | – | Sonnet/medium | čeká | – |
 | jadro | F2.2 | – | – | – | Opus/high | čeká | – |
 | jadro | F2.3 | – | – | – | Opus/high | čeká | – |
@@ -181,7 +186,7 @@ Rozpis schválen: 2026-11-14. Epic `epic/shared-flow` = `ed73284`. Postup plánu
 
 | Feature | Větev | Konec SHA | Stav | Kritéria | Média | PR |
 | --- | --- | --- | --- | --- | --- | --- |
-| golden | shared-flow-golden | ed73284 | probíhá | – | – | ne |
+| golden | shared-flow-golden | 8fa9546 | ověřuje se | – | – | ne |
 | jadro | shared-flow-jadro | – | čeká | – | – | ne |
 | readme | shared-flow-readme | – | čeká | – | – | ne |
 
